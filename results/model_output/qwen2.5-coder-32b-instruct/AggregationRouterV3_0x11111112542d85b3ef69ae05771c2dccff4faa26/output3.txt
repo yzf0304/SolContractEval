@@ -1,0 +1,142 @@
+Below is the complete implementation of the `AggregationRouterV3` contract based on the provided requirements and context. The contract is written in Solidity 0.6.12, ensuring compatibility with the existing base contracts and libraries.
+
+```solidity
+pragma solidity 0.6.12;
+
+import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "./helpers/UniERC20.sol";
+import "./interfaces/IAggregationExecutor.sol";
+import "./interfaces/IChi.sol";
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    IChi private constant CHI = IChi(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c);
+
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        require(
+            (desc.flags & (_BURN_FROM_MSG_SENDER | _BURN_FROM_TX_ORIGIN)) != 0,
+            "No CHI burn flags are set"
+        );
+
+        uint256 chiBefore = CHI.balanceOf(address(this));
+
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+
+        uint256 chiAfter = CHI.balanceOf(address(this));
+        chiSpent = chiBefore.sub(chiAfter);
+
+        if ((desc.flags & _BURN_FROM_MSG_SENDER) != 0) {
+            CHI.freeFromUpTo(msg.sender, chiSpent);
+        } else if ((desc.flags & _BURN_FROM_TX_ORIGIN) != 0) {
+            CHI.freeFromUpTo(tx.origin, chiSpent);
+        }
+
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+    }
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        require(address(caller) == msg.sender, "Caller mismatch");
+
+        _permit(desc.srcToken, desc.amount, desc.permit);
+
+        if (desc.srcToken.isETH()) {
+            require(msg.value == desc.amount, "Invalid msg.value");
+        } else {
+            require(msg.value == 0, "Invalid msg.value");
+            desc.srcToken.uniTransferFrom(msg.sender, address(this), desc.amount);
+        }
+
+        uint256 gasBefore = gasleft();
+
+        if (data.length > 0) {
+            caller.callBytes{value: desc.srcToken.isETH() ? desc.amount : 0}(data);
+        }
+
+        returnAmount = desc.dstToken.uniBalanceOf(address(this));
+        if ((desc.flags & _PARTIAL_FILL) == 0) {
+            require(returnAmount >= desc.minReturnAmount, "Min return not reached");
+        }
+
+        if (desc.dstReceiver != address(0)) {
+            desc.dstToken.uniTransfer(desc.dstReceiver, returnAmount);
+        }
+
+        gasLeft = gasleft().sub(gasBefore);
+    }
+
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        token.uniTransfer(owner(), amount);
+    }
+
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```
+
+### Explanation:
+1. **Import Statements**: The contract imports necessary libraries and interfaces.
+2. **Constants**: Constants are defined to represent different flags for swap operations.
+3. **Structures**: A `SwapDescription` struct encapsulates the details needed for a swap.
+4. **Events**: An event `Swapped` is emitted when a swap is executed successfully.
+5. **Functions**:
+   - **discountedSwap**: Handles discounted swaps by burning CHI tokens.
+   - **swap**: Performs the actual swap operation, handling both partial and full fills, and ensuring the minimum return amount.
+   - **rescueFunds**: Allows the owner to rescue funds accidentally sent to the contract.
+   - **destroy**: Allows the owner to destroy the contract, transferring any remaining ETH to the owner.
+
+This implementation ensures that the `AggregationRouterV3` adheres to the provided specifications and maintains compatibility with the rest of the codebase.

@@ -1,0 +1,188 @@
+Below is the completed `TokenCashier` smart contract as per your request, incorporating all the functionalities described in the documentation:
+
+```solidity
+pragma solidity ^0.5.12;
+
+contract Ownable {
+  address public owner;
+  event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+  constructor() public {
+    owner = msg.sender;
+  }
+
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  function transferOwnership(address newOwner) public onlyOwner {
+    require(newOwner != address(0));
+    emit OwnershipTransferred(owner, newOwner);
+    owner = newOwner;
+  }
+}
+
+contract Pausable is Ownable {
+  event Pause();
+  event Unpause();
+  bool public paused = false;
+
+  modifier whenNotPaused() {
+    require(!paused);
+    _;
+  }
+
+  modifier whenPaused() {
+    require(paused);
+    _;
+  }
+
+  function pause() onlyOwner whenNotPaused public {
+    paused = true;
+    emit Pause();
+  }
+
+  function unpause() onlyOwner whenPaused public {
+    paused = false;
+    emit Unpause();
+  }
+}
+
+interface ITokenList {
+    function isAllowed(address) external returns (bool);
+    function maxAmount(address) external returns (uint256);
+    function minAmount(address) external returns (uint256);
+}
+
+interface IWrappedCoin {
+    function deposit() external payable;
+}
+
+contract TokenCashier is Pausable {
+    event Receipt(address indexed token, uint256 indexed id, address sender, address recipient, uint256 amount, uint256 fee);
+
+    ITokenList[] public tokenLists;
+    address[] public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    constructor(IWrappedCoin _wrappedCoin, ITokenList[] memory _tokenLists, address[] memory _tokenSafes) public {
+        require(_tokenLists.length == _tokenSafes.length, "# of token lists is not equal to # of safes");
+        wrappedCoin = _wrappedCoin;
+        tokenLists = _tokenLists;
+        tokenSafes = _tokenSafes;
+    }
+
+    function() external {
+        revert();
+    }
+
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    function depositTo(address _token, address _to, uint256 _amount) public whenNotPaused payable {
+        require(_to != address(0), "Invalid recipient address");
+
+        if (_token == address(0)) {
+            require(msg.value == _amount, "Incorrect ETH amount sent");
+            _amount -= depositFee;
+            wrappedCoin.deposit.value(depositFee)();
+            safeTransferFrom(address(wrappedCoin), address(this), _to, _amount);
+        } else {
+            require(msg.value == 0, "ETH sent with ERC20 transfer");
+            require(safeTransferFrom(_token, msg.sender, address(this), depositFee.add(_amount)), "Token transfer failed");
+            _amount -= depositFee;
+        }
+
+        ITokenList tokenList = findTokenList(_token);
+        require(tokenList.isAllowed(_token), "Token not allowed");
+        require(_amount >= tokenList.minAmount(_token) && _amount <= tokenList.maxAmount(_token), "Amount out of bounds");
+
+        uint256 index = findTokenIndex(_token);
+        address tokenSafe = tokenSafes[index];
+
+        counts[_token] += 1;
+        emit Receipt(_token, counts[_token], msg.sender, _to, _amount, depositFee);
+
+        if (tokenSafe == address(0)) {
+            bytes4 burnSelector = bytes4(keccak256("burn(uint256)"));
+            (bool success, ) = _token.call(burnSelector, _amount);
+            require(success, "Burn failed");
+        } else {
+            require(safeTransfer(_token, tokenSafe, _amount), "Token transfer to safe failed");
+        }
+    }
+
+    function deposit(address _token, uint256 _amount) public payable {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    function withdraw() external onlyOwner {
+        (bool success, ) = owner.call.value(address(this).balance)("");
+        require(success, "Withdrawal failed");
+    }
+
+    function withdrawToken(address _token) public onlyOwner {
+        bytes4 balanceOfSelector = bytes4(keccak256("balanceOf(address)"));
+        (bool success, bytes memory data) = _token.staticcall(balanceOfSelector, owner);
+        require(success, "BalanceOf call failed");
+        uint256 balance = abi.decode(data, (uint256));
+
+        if (balance > 0) {
+            require(safeTransfer(_token, owner, balance), "Token withdrawal failed");
+        }
+    }
+
+    function safeTransferFrom(address _token, address _from, address _to, uint256 _amount) internal returns (bool) {
+        bytes4 transferFromSelector = bytes4(keccak256("transferFrom(address,address,uint256)"));
+        (bool success, bytes memory data) = _token.call(transferFromSelector, _from, _to, _amount);
+        if (!success || data.length == 0) return false;
+        return abi.decode(data, (bool));
+    }
+
+    function safeTransfer(address _token, address _to, uint256 _amount) internal returns (bool) {
+        bytes4 transferSelector = bytes4(keccak256("transfer(address,uint256)"));
+        (bool success, bytes memory data) = _token.call(transferSelector, _to, _amount);
+        if (!success || data.length == 0) return false;
+        return abi.decode(data, (bool));
+    }
+
+    function findTokenList(address _token) internal view returns (ITokenList) {
+        for (uint256 i = 0; i < tokenLists.length; i++) {
+            ITokenList tokenList = tokenLists[i];
+            if (tokenList.isAllowed(_token)) {
+                return tokenList;
+            }
+        }
+        revert("Token not listed");
+    }
+
+    function findTokenIndex(address _token) internal view returns (uint256) {
+        for (uint256 i = 0; i < tokenLists.length; i++) {
+            ITokenList tokenList = tokenLists[i];
+            if (tokenList.isAllowed(_token)) {
+                return i;
+            }
+        }
+        revert("Token not listed");
+    }
+}
+```
+
+### Key Points Implemented:
+1. **Deposit Functionality**: Allows deposits of tokens or native currency, applying a fee and checking against min/max limits.
+2. **Withdrawal Functions**: Allows the owner to withdraw ETH or tokens.
+3. **Safe Transfer Functions**: Utilizes low-level calls for safe token transfers and burns.
+4. **Fallback Function**: Prevents ETH from being directly sent to the contract.
+5. **Error Handling**: Includes various checks and reverts to ensure the safety and integrity of operations.
+6. **Token List Management**: Uses token lists to check if a token is allowed and its min/max amount constraints.
+7. **Token Safe Management**: Routes deposits to designated safes or attempts to burn tokens if no safe is configured.
+
+This contract assumes compliance with ERC20 standards and includes functionality for both ERC20 tokens and wrapped native currency.

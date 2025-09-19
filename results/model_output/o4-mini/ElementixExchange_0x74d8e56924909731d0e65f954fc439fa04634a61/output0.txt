@@ -1,0 +1,141 @@
+pragma solidity 0.8.4;
+
+import "dependencies/openzeppelin/contracts/access/Ownable.sol";
+
+interface OwnableDelegateProxy {
+    // This is a minimal interface. The actual implementation
+    // is assumed to exist at delegateProxyImplementation.
+}
+
+contract ProxyRegistry is Ownable {
+    /// @notice The implementation for all delegate proxies.
+    address public delegateProxyImplementation;
+
+    /// @notice Mapping from user address to their proxy.
+    mapping(address => OwnableDelegateProxy) public proxies;
+
+    /// @notice Tracks when an address was marked pending for authentication.
+    mapping(address => uint256) public pending;
+
+    /// @notice Which contracts are approved to call user proxies.
+    mapping(address => bool) public contracts;
+
+    /// @notice Delay before an address may be fully authorized.
+    uint256 public DELAY_PERIOD = 7 days;
+
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool authorized);
+
+    /// @param _delegateProxyImplementation The address of the proxy implementation.
+    constructor(address _delegateProxyImplementation) {
+        require(
+            _delegateProxyImplementation != address(0),
+            "Delegate proxy implementation cannot be zero address"
+        );
+        delegateProxyImplementation = _delegateProxyImplementation;
+    }
+
+    /**
+     * @notice Begin the timelocked process to authorize a contract.
+     * @dev Marks the contract as pending; after DELAY_PERIOD it can be enabled.
+     * @param addr The contract to authorize.
+     */
+    function startGrantAuthentication(address addr) external onlyOwner {
+        require(addr != address(0), "Cannot authorize zero address");
+        require(pending[addr] == 0, "Already pending");
+        pending[addr] = block.timestamp;
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice Finalize authorization of a contract, after the delay.
+     * @param addr The contract to authorize.
+     */
+    function endGrantAuthentication(address addr) external onlyOwner {
+        uint256 startTime = pending[addr];
+        require(startTime != 0, "Not pending");
+        require(block.timestamp >= startTime + DELAY_PERIOD, "Delay period not yet passed");
+        // Clear pending and mark as authorized
+        delete pending[addr];
+        contracts[addr] = true;
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice Revoke authorization immediately.
+     * @param addr The contract to revoke.
+     */
+    function revokeAuthentication(address addr) external onlyOwner {
+        require(contracts[addr], "Contract not authorized");
+        contracts[addr] = false;
+        emit AuthenticationOperation(addr, false);
+    }
+
+    /**
+     * @notice Deploys and registers a proxy for the caller.
+     * @dev Each caller may only have one proxy.
+     * @return proxy The new proxy instance.
+     */
+    function registerProxy()
+        external
+        returns (OwnableDelegateProxy proxy)
+    {
+        require(address(proxies[msg.sender]) == address(0), "Proxy already registered");
+
+        // Deploy a new proxy pointing at the shared implementation.
+        proxy = OwnableDelegateProxy(
+            payable(
+                address(
+                    new ProxyCreateHelper{
+                        salt: keccak256(abi.encodePacked(msg.sender, block.timestamp))
+                    }(delegateProxyImplementation, msg.sender, address(this))
+                )
+            )
+        );
+
+        proxies[msg.sender] = proxy;
+        emit RegisterProxy(msg.sender, address(proxy));
+        return proxy;
+    }
+}
+
+/// @dev Helper contract to deploy a delegate proxy with minimal boilerplate.
+contract ProxyCreateHelper {
+    constructor(
+        address implementation_,
+        address owner_,
+        address registry_
+    ) {
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address)",
+            owner_,
+            registry_
+        );
+        assembly {
+            let ptr := mload(0x40)
+            mstore(ptr, 0x363d3d373d3d3d363d73)         // Creation opcodes
+            mstore(add(ptr, 0x10), shl(0x60, implementation_))
+            mstore(add(ptr, 0x1a), 0x5af43d82803e903d91602b57fd5bf3)
+            let proxy := create(0, ptr, 0x2d)           // Deploy
+            if iszero(extcodesize(proxy)) {
+                revert(0, 0)
+            }
+            // Initialize the proxy
+            let success := call(
+                gas(),
+                proxy,
+                0,
+                add(initData, 0x20),
+                mload(initData),
+                0,
+                0
+            )
+            if iszero(success) {
+                revert(0, 0)
+            }
+            // Return proxy address
+            mstore(0x00, proxy)
+            return(0x00, 0x20)
+        }
+    }
+}

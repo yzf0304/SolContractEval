@@ -1,0 +1,158 @@
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    // ERC-20 style storage
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowances;
+
+    // Stake structure
+    struct Stake {
+        uint40 stakeId;
+        uint40 startDay;
+        uint40 stakedDays;
+        uint256 stakedHearts;
+        bool ended;
+    }
+
+    // Stakes per staker
+    mapping(address => Stake[]) private stakes;
+    // Monotonic stake ID generator
+    uint40 private nextStakeId;
+
+    // ERC-20 events (optional but conventional)
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    /// @notice Returns the current day number since Unix epoch (floor)
+    function currentDay() public view returns (uint256) {
+        return block.timestamp / 1 days;
+    }
+
+    /**
+     * @notice Starts a new stake with a specified amount of HEX and duration.
+     * @param newStakedHearts The amount of HEX to be staked.
+     * @param newStakedDays The number of days for which the HEX will be staked.
+     */
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "Stake amount must be > 0");
+        require(newStakedDays > 0, "Stake days must be > 0");
+        require(balances[msg.sender] >= newStakedHearts, "Insufficient balance to stake");
+
+        // Debit user's balance
+        balances[msg.sender] -= newStakedHearts;
+        emit Transfer(msg.sender, address(this), newStakedHearts);
+
+        // Record the stake
+        uint40 dayNow = uint40(currentDay());
+        stakes[msg.sender].push(
+            Stake({
+                stakeId: nextStakeId,
+                startDay: dayNow,
+                stakedDays: uint40(newStakedDays),
+                stakedHearts: newStakedHearts,
+                ended: false
+            })
+        );
+        nextStakeId++;
+    }
+
+    /**
+     * @notice Ends a stake by specifying the stake index and stake ID.
+     * @param stakeIndex The index of the stake to be ended.
+     * @param stakeIdParam The ID of the stake to be ended.
+     */
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < stakes[msg.sender].length, "Invalid stake index");
+
+        Stake storage s = stakes[msg.sender][stakeIndex];
+        require(!s.ended, "Stake already ended");
+        require(s.stakeId == stakeIdParam, "Stake ID mismatch");
+
+        // Cannot end before maturity
+        uint256 maturityDay = uint256(s.startDay) + uint256(s.stakedDays);
+        require(currentDay() >= maturityDay, "Stake not yet matured");
+
+        // Mark ended and return staked hearts
+        s.ended = true;
+        balances[msg.sender] += s.stakedHearts;
+        emit Transfer(address(this), msg.sender, s.stakedHearts);
+    }
+
+    /**
+     * @notice Returns the number of stakes for a given address.
+     * @param stakerAddr The address for which to count the stakes.
+     * @return uint256 The number of stakes for the given address.
+     */
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return stakes[stakerAddr].length;
+    }
+
+    /**
+     * @notice Approves a spender to transfer a specified amount of HEX on behalf of the message sender.
+     * @param spender The address that will be allowed to spend the HEX.
+     * @param amount The amount of HEX that the spender is allowed to transfer.
+     * @return bool True if the approval was successful, otherwise false.
+     */
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfers a specified amount of HEX to a recipient.
+     * @param recipient The address to which the HEX will be transferred.
+     * @param amount The amount of HEX to be transferred.
+     * @return bool True if the transfer was successful, otherwise false.
+     */
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(balances[msg.sender] >= amount, "Insufficient balance");
+        balances[msg.sender] -= amount;
+        balances[recipient] += amount;
+        emit Transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfers a specified amount of HEX from a sender to a recipient, using an allowance.
+     * @param sender The address from which the HEX will be taken.
+     * @param recipient The address to which the HEX will be transferred.
+     * @param amount The amount of HEX to be transferred.
+     * @return bool True if the transfer was successful, otherwise false.
+     */
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external returns (bool) {
+        uint256 allowed = allowances[sender][msg.sender];
+        require(allowed >= amount, "Allowance exceeded");
+        require(balances[sender] >= amount, "Balance exceeded");
+
+        allowances[sender][msg.sender] = allowed - amount;
+        balances[sender] -= amount;
+        balances[recipient] += amount;
+
+        emit Transfer(sender, recipient, amount);
+        return true;
+    }
+
+    /**
+     * @notice Returns the balance of a given address.
+     * @param account The address to query.
+     * @return uint256 The token balance.
+     */
+    function balanceOf(address account) external view returns (uint256) {
+        return balances[account];
+    }
+
+    /**
+     * @notice Returns the remaining number of tokens that spender is allowed to spend on behalf of owner.
+     * @param owner The token owner.
+     * @param spender The approved spender.
+     * @return uint256 Remaining allowance.
+     */
+    function allowance(address owner, address spender) external view returns (uint256) {
+        return allowances[owner][spender];
+    }
+}

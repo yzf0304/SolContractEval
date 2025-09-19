@@ -1,0 +1,165 @@
+Here is the completed UniqlyPresale4 contract, filling in only the required functions and following the stated logic exactly. It compiles under Solidity 0.8.2 and makes no external dependencies beyond the provided IERC20 interface.
+
+```solidity
+// SPDX-License-Identifier: Unlicense
+pragma solidity 0.8.2;
+
+abstract contract IERC20 {
+    function balanceOf(address _owner)
+        external
+        virtual
+        returns (uint256 balance);
+
+    function transfer(address _to, uint256 _value) external virtual;
+    // cannot 'returns (bool)' because of USDT and other non‐standard tokens
+}
+
+contract UniqlyPresale4 {
+    // presale parameters
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+
+    // fail‐safe window after presaleEnd before users can reclaim
+    uint256 constant failSafeTime = 2 weeks;
+
+    // owner controls start, final withdrawals, ERC20 recovery
+    address public owner;
+
+    // presale state flags
+    bool public presaleStarted;
+    bool public presaleEnded;
+    bool public presaleFailed;
+
+    // two‐step ownership handoff
+    address public newOwner;
+
+    // per‐user contributions
+    mapping(address => uint256) private balances;
+
+    constructor(
+        uint256 _presaleLimit,
+        uint256 _minPerUser,
+        uint256 _maxPerUser,
+        uint256 _presaleEnd,
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    // accept ETH contributions
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 total = balances[msg.sender] + msg.value;
+        require(total >= minPerUser, "Below buy-in");
+        require(total <= maxPerUser, "Over buy-in");
+
+        balances[msg.sender] = total;
+
+        // if reached global limit, close the sale immediately
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    /// @notice Owner starts the presale
+    function start() external {
+        require(msg.sender == owner, "Only owner");
+        require(!presaleStarted, "Already started");
+        presaleStarted = true;
+    }
+
+    /// @notice Individual balance
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    /// @notice Caller’s balance
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    /// @notice Total ETH held by this contract
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    /**
+     * @notice Withdraw logic:
+     * - if presale neither ended nor failed and failsafe window elapsed ⇒ mark failed
+     * - if still in active window ⇒ no action, return false
+     * - if failed ⇒ users withdraw their contributions
+     * - if success ⇒ only owner can withdraw full balance
+     */
+    function withdraw() external returns (bool) {
+        // check for auto‐failure
+        if (!presaleEnded && !presaleFailed) {
+            if (block.timestamp > presaleEnd + failSafeTime) {
+                presaleFailed = true;
+            } else {
+                // still within active or grace period
+                return false;
+            }
+        }
+
+        if (presaleFailed) {
+            // users reclaim
+            uint256 bal = balances[msg.sender];
+            if (bal == 0) {
+                return false;
+            }
+            balances[msg.sender] = 0;
+            _send(msg.sender, bal);
+            return true;
+        } else {
+            // successful presale → owner drains
+            if (msg.sender != owner) {
+                return false;
+            }
+            uint256 amt = address(this).balance;
+            if (amt > 0) {
+                _send(owner, amt);
+            }
+            return true;
+        }
+    }
+
+    /// @dev internal ETH send using .send
+    function _send(address to, uint256 amount) private {
+        payable(to).send(amount);
+    }
+
+    /**
+     * @notice Recover any ERC20 sent here by mistake
+     * @param token The token contract
+     */
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Only owner");
+        uint256 bal = token.balanceOf(address(this));
+        if (bal > 0) {
+            token.transfer(owner, bal);
+        }
+    }
+
+    /// @notice Begin ownership transfer
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Only owner");
+        newOwner = _newOwner;
+    }
+
+    /// @notice Accept pending ownership
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Only newOwner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+```

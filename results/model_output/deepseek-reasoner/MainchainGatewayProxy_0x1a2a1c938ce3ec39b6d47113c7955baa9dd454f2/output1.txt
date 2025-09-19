@@ -1,0 +1,164 @@
+```solidity
+pragma solidity 0.5.17;
+
+contract Registry is HasAdmin {
+
+  event ContractAddressUpdated(
+    string indexed _name,
+    bytes32 indexed _code,
+    address indexed _newAddress
+  );
+
+  event TokenMapped(
+    address indexed _mainchainToken,
+    address indexed _sidechainToken,
+    uint32 _standard
+  );
+
+  string public constant GATEWAY = "GATEWAY";
+  string public constant WETH_TOKEN = "WETH_TOKEN";
+  string public constant VALIDATOR = "VALIDATOR";
+  string public constant ACKNOWLEDGEMENT = "ACKNOWLEDGEMENT";
+
+  struct TokenMapping {
+    address mainchainToken;
+    address sidechainToken;
+    uint32 standard;
+  }
+
+  mapping(bytes32 => address) public contractAddresses;
+  mapping(address => TokenMapping) public mainchainMap;
+  mapping(address => TokenMapping) public sidechainMap;
+
+  function getContract(string calldata _name)
+    external
+    view
+    returns (address _address)
+  {
+    bytes32 code = getCode(_name);
+    _address = contractAddresses[code];
+    require(_address != address(0));
+  }
+
+  function isTokenMapped(address _token, uint32 _standard, bool _isMainchain)
+    external
+    view
+    returns (bool)
+  {
+    if (_isMainchain) {
+      TokenMapping memory mappingData = mainchainMap[_token];
+      return (mappingData.mainchainToken != address(0) && mappingData.standard == _standard);
+    } else {
+      TokenMapping memory mappingData = sidechainMap[_token];
+      return (mappingData.sidechainToken != address(0) && mappingData.standard == _standard);
+    }
+  }
+
+  function updateContract(string calldata _name, address _newAddress)
+    external
+    onlyAdmin
+  {
+    bytes32 code = getCode(_name);
+    contractAddresses[code] = _newAddress;
+    emit ContractAddressUpdated(_name, code, _newAddress);
+  }
+
+  function mapToken(address _mainchainToken, address _sidechainToken, uint32 _standard)
+    external
+    onlyAdmin
+  {
+    require(_mainchainToken != address(0) && _sidechainToken != address(0), "Invalid token address");
+
+    TokenMapping storage mainchainEntry = mainchainMap[_mainchainToken];
+    if (mainchainEntry.mainchainToken != address(0)) {
+      address oldSidechain = mainchainEntry.sidechainToken;
+      if (oldSidechain != address(0)) {
+        _clearMapEntry(sidechainMap[oldSidechain]);
+      }
+      _clearMapEntry(mainchainEntry);
+    }
+
+    TokenMapping storage sidechainEntry = sidechainMap[_sidechainToken];
+    if (sidechainEntry.sidechainToken != address(0)) {
+      address oldMainchain = sidechainEntry.mainchainToken;
+      if (oldMainchain != address(0)) {
+        _clearMapEntry(mainchainMap[oldMainchain]);
+      }
+      _clearMapEntry(sidechainEntry);
+    }
+
+    mainchainEntry.mainchainToken = _mainchainToken;
+    mainchainEntry.sidechainToken = _sidechainToken;
+    mainchainEntry.standard = _standard;
+
+    sidechainEntry.mainchainToken = _mainchainToken;
+    sidechainEntry.sidechainToken = _sidechainToken;
+    sidechainEntry.standard = _standard;
+
+    emit TokenMapped(_mainchainToken, _sidechainToken, _standard);
+  }
+
+  function clearMapToken(address _mainchainToken, address _sidechainToken)
+    external
+    onlyAdmin
+  {
+    TokenMapping storage mainchainEntry = mainchainMap[_mainchainToken];
+    require(mainchainEntry.sidechainToken == _sidechainToken, "Mismatched sidechain token");
+
+    TokenMapping storage sidechainEntry = sidechainMap[_sidechainToken];
+    require(sidechainEntry.mainchainToken == _mainchainToken, "Mismatched mainchain token");
+
+    _clearMapEntry(mainchainEntry);
+    _clearMapEntry(sidechainEntry);
+  }
+
+  function getMappedToken(
+    address _token,
+    bool _isMainchain
+  )
+    external
+    view
+    returns (
+      address _mainchainToken,
+      address _sidechainToken,
+      uint32 _standard
+    )
+  {
+    TokenMapping memory mappingData = _getTokenMapping(_token, _isMainchain);
+    _mainchainToken = mappingData.mainchainToken;
+    _sidechainToken = mappingData.sidechainToken;
+    _standard = mappingData.standard;
+  }
+
+  function getCode(string memory _name)
+    public
+    pure
+    returns (bytes32)
+  {
+    return keccak256(abi.encodePacked(_name));
+  }
+
+  function _getTokenMapping(
+    address _token,
+    bool isMainchain
+  )
+    internal
+    view
+    returns (TokenMapping memory _mapping)
+  {
+    if (isMainchain) {
+      _mapping = mainchainMap[_token];
+    } else {
+      _mapping = sidechainMap[_token];
+    }
+  }
+
+  function _clearMapEntry(TokenMapping storage _entry)
+    internal
+  {
+    _entry.mainchainToken = address(0);
+    _entry.sidechainToken = address(0);
+    _entry.standard = 0;
+  }
+}
+```

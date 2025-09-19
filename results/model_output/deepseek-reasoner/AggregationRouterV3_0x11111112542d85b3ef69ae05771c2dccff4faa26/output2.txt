@@ -1,0 +1,144 @@
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.6.12;
+pragma experimental ABIEncoderV2;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol";
+import "./helpers/UniERC20.sol";
+import "./interfaces/IChi.sol";
+import "./interfaces/IAggregationExecutor.sol";
+import "./UnoswapRouter.sol";
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    IChi private constant CHI = IChi(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c);
+
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 initialGas = gasleft();
+
+        (returnAmount, ) = swap(caller, desc, data);
+
+        gasLeft = initialGas - gasleft();
+
+        (uint256 gasNumerator, uint256 gasDenominator) = caller.gasDiscount();
+        if (gasNumerator > 0 && gasDenominator > 0) {
+            uint256 chiAmount = (gasLeft * gasNumerator) / gasDenominator;
+            if (chiAmount > 0) {
+                if (desc.flags & _BURN_FROM_MSG_SENDER != 0) {
+                    CHI.freeFromUpTo(msg.sender, chiAmount);
+                } else if (desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+                    CHI.freeFromUpTo(tx.origin, chiAmount);
+                } else {
+                    CHI.freeFromUpTo(msg.sender, chiAmount);
+                }
+                chiSpent = chiAmount;
+            }
+        }
+    }
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        require(desc.minReturnAmount > 0, "Min return must be >0");
+        require(desc.dstReceiver != address(0), "Invalid dstReceiver");
+
+        uint256 initialGas = gasleft();
+
+        if (desc.srcToken.isETH()) {
+            if (desc.flags & _REQUIRES_EXTRA_ETH != 0) {
+                require(msg.value >= desc.amount, "Insufficient ETH");
+            } else {
+                require(msg.value == desc.amount, "ETH amount mismatch");
+            }
+
+            if (desc.srcReceiver != address(this)) {
+                UniERC20.uniTransfer(desc.srcToken, desc.srcReceiver, desc.amount);
+            }
+        } else {
+            if (desc.flags & _SHOULD_CLAIM != 0) {
+                _permit(desc.srcToken, desc.amount, desc.permit);
+                desc.srcToken.safeTransferFrom(msg.sender, desc.srcReceiver, desc.amount);
+            } else {
+                desc.srcToken.safeTransfer(desc.srcReceiver, desc.amount);
+            }
+        }
+
+        caller.callBytes{value: msg.value}(data);
+
+        uint256 initialDstBalance = desc.dstToken.uniBalanceOf(address(this));
+        returnAmount = desc.dstToken.uniBalanceOf(address(this)).sub(initialDstBalance);
+
+        if (desc.flags & _PARTIAL_FILL == 0) {
+            require(returnAmount >= desc.minReturnAmount, "Return amount is less than minReturn");
+        }
+
+        desc.dstToken.uniTransfer(payable(desc.dstReceiver), returnAmount);
+
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+
+        gasLeft = initialGas - gasleft();
+    }
+
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        token.uniTransfer(payable(owner()), amount);
+    }
+
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```

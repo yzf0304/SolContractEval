@@ -1,0 +1,96 @@
+pragma solidity 0.5.10;
+
+contract MintHelper is Ownable {
+    using SafeMath for uint;
+
+    string public name;
+    address public mintableToken;
+    mapping(bytes32 => bool) private successfulPayments;
+
+    constructor(address mToken, string memory mName) public {
+        mintableToken = mToken;
+        name = mName;
+    }
+
+    /**
+     * @notice Allows the owner to set the mintable token address.
+     */
+    function setMintableToken(address mToken)
+        public
+        onlyOwner
+        returns (bool)
+    {
+        mintableToken = mToken;
+        return true;
+    }
+
+    /**
+     * @notice Checks if a payment with a given ID was successful.
+     */
+    function paymentSuccessful(bytes32 paymentId)
+        public
+        view
+        returns (bool)
+    {
+        return successfulPayments[paymentId];
+    }
+
+    /**
+     * @notice Proxies the minting of a token using the provided nonce and challenge digest.
+     */
+    function proxyMint(uint256 nonce, bytes32 challenge_digest)
+        public
+        returns (bool)
+    {
+        bool minted = ERC918Interface(mintableToken).mint(nonce, challenge_digest);
+        require(minted, "MintHelper: mint failed");
+        return true;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw any ETH held by the contract.
+     */
+    function withdraw() public onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    /**
+     * @notice Sends a specified amount of tokens to a destination address.
+     */
+    function send(address _tokenAddr, address dest, uint value)
+        public
+        onlyOwner
+        returns (bool)
+    {
+        bool sent = ERC20Interface(_tokenAddr).transfer(dest, value);
+        require(sent, "MintHelper: ERC20 transfer failed");
+        return true;
+    }
+
+    /**
+     * @notice Sends tokens to multiple destination addresses in a single transaction.
+     */
+    function multisend(
+        address _tokenAddr,
+        bytes32 paymentId,
+        address[] memory dests,
+        uint256[] memory values
+    )
+        public
+        onlyOwner
+        returns (uint256)
+    {
+        require(!successfulPayments[paymentId], "MintHelper: payment already processed");
+        require(dests.length == values.length, "MintHelper: length mismatch");
+
+        uint256 count = 0;
+        for (uint256 i = 0; i < dests.length; i++) {
+            bool ok = ERC20Interface(_tokenAddr).transfer(dests[i], values[i]);
+            require(ok, "MintHelper: ERC20 transfer failed");
+            count = count.add(1);
+        }
+
+        successfulPayments[paymentId] = true;
+        return count;
+    }
+}

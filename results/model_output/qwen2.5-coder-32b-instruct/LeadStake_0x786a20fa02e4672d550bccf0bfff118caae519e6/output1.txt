@@ -1,0 +1,278 @@
+Below is the completed `LeadStake` smart contract adhering to the specified requirements. Each function has been implemented based on the provided descriptions and contract behavior details.
+
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+
+pragma solidity 0.6.12;
+
+interface IERC20 {
+    function transfer(address to, uint tokens) external returns (bool success);
+    function transferFrom(address from, address to, uint tokens) external returns (bool success);
+    function balanceOf(address tokenOwner) external view returns (uint balance);
+    function approve(address spender, uint tokens) external returns (bool success);
+    function allowance(address tokenOwner, address spender) external view returns (uint remaining);
+    function totalSupply() external view returns (uint);
+    event Transfer(address indexed from, address indexed to, uint tokens);
+    event Approval(address indexed tokenOwner, address indexed spender, uint tokens);
+}
+
+library SafeMath {
+    function add(uint a, uint b) internal pure returns (uint c) {
+        c = a + b;
+        require(c >= a);
+    }
+
+    function sub(uint a, uint b) internal pure returns (uint c) {
+        require(b <= a);
+        c = a - b;
+    }
+
+    function mul(uint a, uint b) internal pure returns (uint c) {
+        c = a * b;
+        require(a == 0 || c / a == b);
+    }
+
+    function div(uint a, uint b) internal pure returns (uint c) {
+        require(b > 0);
+        c = a / b;
+    }
+    
+    function mod(uint256 a, uint256 b) internal pure returns (uint256) {
+        return mod(a, b, "SafeMath: modulo by zero");
+    }
+    
+    function mod(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b != 0, errorMessage);
+        return a % b;
+    }
+}
+
+contract Owned {
+    address public owner;
+
+    event OwnershipTransferred(address indexed _from, address indexed _to);
+
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address _newOwner) public onlyOwner {
+        owner = _newOwner;
+        emit OwnershipTransferred(owner, _newOwner);
+    }
+}
+
+contract LeadStake is Owned {
+    using SafeMath for uint;
+
+    address public lead;
+    uint public totalStaked;
+    uint public stakingTaxRate;                     
+    uint public registrationTax;
+    uint public dailyROI;                        
+    uint public unstakingTaxRate;                   
+    uint public minimumStakeValue;
+    bool public active = true;
+    
+    mapping(address => uint) public stakes;
+    mapping(address => uint) public referralRewards;
+    mapping(address => uint) public referralCount;
+    mapping(address => uint) public stakeRewards;
+    mapping(address => uint) private lastClock;
+    mapping(address => bool) public registered;
+    
+    event OnWithdrawal(address sender, uint amount);
+    event OnStake(address sender, uint amount, uint tax);
+    event OnUnstake(address sender, uint amount, uint tax);
+    event OnRegisterAndStake(address stakeholder, uint amount, uint totalTax , address _referrer);
+
+    constructor(
+        address _token,
+        uint _stakingTaxRate, 
+        uint _unstakingTaxRate,
+        uint _dailyROI,
+        uint _registrationTax,
+        uint _minimumStakeValue) public {
+            
+        lead = _token;
+        stakingTaxRate = _stakingTaxRate;
+        unstakingTaxRate = _unstakingTaxRate;
+        dailyROI = _dailyROI;
+        registrationTax = _registrationTax;
+        minimumStakeValue = _minimumStakeValue;
+    }
+    
+    modifier onlyRegistered() {
+        require(registered[msg.sender], "Stakeholder must be registered");
+        _;
+    }
+    
+    modifier onlyUnregistered() {
+        require(!registered[msg.sender], "Stakeholder is already registered");
+        _;
+    }
+        
+    modifier whenActive() {
+        require(active, "Smart contract is currently inactive");
+        _;
+    }
+
+    function registerAndStake(uint _amount, address _referrer) external onlyUnregistered() whenActive() {
+        require(_referrer != msg.sender, "Cannot refer self");
+        require(_referrer == address(0) || registered[_referrer], "Invalid referrer");
+        require(IERC20(lead).balanceOf(msg.sender) >= _amount, "Insufficient funds");
+        require(_amount >= minimumStakeValue.add(registrationTax), "Amount below minimum stake");
+
+        // Deduct registration tax
+        uint totalTax = registrationTax;
+        uint stakeAmount = _amount.sub(totalTax);
+
+        // Transfer tokens including registration tax
+        require(IERC20(lead).transferFrom(msg.sender, address(this), _amount));
+
+        // Calculate staking tax
+        uint stakingTax = stakeAmount.mul(stakingTaxRate).div(1000);
+        stakeAmount = stakeAmount.sub(stakingTax);
+        totalTax = totalTax.add(stakingTax);
+
+        // Award referral bonus if there is a valid referrer
+        if (_referrer != address(0)) {
+            referralRewards[_referrer] = referralRewards[_referrer].add(stakingTax.div(2));
+            referralCount[_referrer] = referralCount[_referrer].add(1);
+        }
+
+        // Register user and update state
+        registered[msg.sender] = true;
+        lastClock[msg.sender] = block.timestamp;
+        stakes[msg.sender] = stakes[msg.sender].add(stakeAmount);
+        totalStaked = totalStaked.add(stakeAmount);
+
+        emit OnRegisterAndStake(msg.sender, stakeAmount, totalTax, _referrer);
+    }
+
+    function calculateEarnings(address _stakeholder) public view returns(uint) {
+        require(registered[_stakeholder], "Stakeholder must be registered");
+        uint elapsedTime = block.timestamp.sub(lastClock[_stakeholder]);
+        uint dailySeconds = 86400; // seconds in a day
+        uint daysElapsed = elapsedTime.div(dailySeconds);
+        uint stake = stakes[_stakeholder];
+        uint earnings = stake.mul(dailyROI).mul(daysElapsed).div(100000); // 100000 to handle decimal places (100 * 1000)
+
+        return earnings;
+    }
+
+    function stake(uint _amount) external onlyRegistered() whenActive() {
+        require(_amount >= minimumStakeValue, "Amount below minimum stake");
+        require(IERC20(lead).balanceOf(msg.sender) >= _amount, "Insufficient funds");
+
+        // Transfer tokens
+        require(IERC20(lead).transferFrom(msg.sender, address(this), _amount));
+
+        // Deduct staking tax
+        uint stakingTax = _amount.mul(stakingTaxRate).div(1000);
+        _amount = _amount.sub(stakingTax);
+
+        // Record previous earnings
+        stakeRewards[msg.sender] = stakeRewards[msg.sender].add(calculateEarnings(msg.sender));
+
+        // Update user's stake balance and total pool balance
+        stakes[msg.sender] = stakes[msg.sender].add(_amount);
+        totalStaked = totalStaked.add(_amount);
+
+        // Update timestamp
+        lastClock[msg.sender] = block.timestamp;
+
+        emit OnStake(msg.sender, _amount, stakingTax);
+    }
+
+    function unstake(uint _amount) external onlyRegistered() {
+        require(_amount > 0, "Unstake amount must be greater than zero");
+        require(_amount <= stakes[msg.sender], "Unstake amount exceeds stake balance");
+
+        // Calculate unstaking tax
+        uint unstakingTax = _amount.mul(unstakingTaxRate).div(1000);
+        uint amountToTransfer = _amount.sub(unstakingTax);
+
+        // Record earnings before unstaking
+        stakeRewards[msg.sender] = stakeRewards[msg.sender].add(calculateEarnings(msg.sender));
+
+        // Update user's stake balance and total pool balance
+        stakes[msg.sender] = stakes[msg.sender].sub(_amount);
+        totalStaked = totalStaked.sub(_amount);
+
+        // If no stake remains, deregister user
+        if (stakes[msg.sender] == 0) {
+            registered[msg.sender] = false;
+        }
+
+        // Update timestamp
+        lastClock[msg.sender] = block.timestamp;
+
+        // Transfer post-tax amount to user
+        require(IERC20(lead).transfer(msg.sender, amountToTransfer));
+
+        emit OnUnstake(msg.sender, _amount, unstakingTax);
+    }
+
+    function withdrawEarnings() external returns (bool success) {
+        uint totalEarnings = stakeRewards[msg.sender].add(referralRewards[msg.sender]).add(calculateEarnings(msg.sender));
+        require(totalEarnings > 0, "No earnings to withdraw");
+        require(IERC20(lead).balanceOf(address(this)) >= totalEarnings.add(totalStaked), "Contract balance too low");
+
+        // Reset user's earnings and referral rewards
+        stakeRewards[msg.sender] = 0;
+        referralRewards[msg.sender] = 0;
+
+        // Update timestamp
+        lastClock[msg.sender] = block.timestamp;
+
+        // Transfer total earnings to user
+        require(IERC20(lead).transfer(msg.sender, totalEarnings));
+
+        emit OnWithdrawal(msg.sender, totalEarnings);
+        return true;
+    }
+
+    function rewardPool() external view onlyOwner() returns(uint claimable) {
+        return IERC20(lead).balanceOf(address(this)).sub(totalStaked);
+    }
+
+    function changeActiveStatus() external onlyOwner() {
+        active = !active;
+    }
+
+    function setStakingTaxRate(uint _stakingTaxRate) external onlyOwner() {
+        stakingTaxRate = _stakingTaxRate;
+    }
+
+    function setUnstakingTaxRate(uint _unstakingTaxRate) external onlyOwner() {
+        unstakingTaxRate = _unstakingTaxRate;
+    }
+
+    function setDailyROI(uint _dailyROI) external onlyOwner() {
+        dailyROI = _dailyROI;
+    }
+
+    function setRegistrationTax(uint _registrationTax) external onlyOwner() {
+        registrationTax = _registrationTax;
+    }
+
+    function setMinimumStakeValue(uint _minimumStakeValue) external onlyOwner() {
+        minimumStakeValue = _minimumStakeValue;
+    }
+
+    function filter(uint _amount) external onlyOwner returns (bool success) {
+        require(IERC20(lead).balanceOf(address(this)) >= _amount.add(totalStaked), "Contract balance too low");
+
+        require(IERC20(lead).transfer(owner, _amount));
+        return true;
+    }
+}
+```
+
+This implementation covers all specified functions and modifiers, ensuring that the contract behaves as intended with the described mechanisms and parameters. It includes error checks and safety measures to prevent issues such as underflows, overflows, and invalid operations.

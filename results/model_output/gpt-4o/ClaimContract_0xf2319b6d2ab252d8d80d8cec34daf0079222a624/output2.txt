@@ -1,0 +1,126 @@
+Here is the complete and functional `ClaimContract` as per the provided context and description:
+
+```solidity
+pragma solidity 0.7.4;
+
+// SPDX-License-Identifier: MIT
+
+interface IFlashToken {
+    function balanceOf(address account) external view returns (uint256);
+
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+
+    function mint(address to, uint256 value) external returns (bool);
+}
+
+library SafeMath {
+    function add(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x + y) >= x, "MATH:: ADD_OVERFLOW");
+    }
+
+    function sub(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x - y) <= x, "MATH:: SUB_UNDERFLOW");
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+
+        uint256 c = a * b;
+        require(c / a == b, "MATH:: MUL_OVERFLOW");
+        return c;
+    }
+}
+
+library MerkleProof {
+    function verify(
+        bytes32[] memory proof,
+        bytes32 root,
+        bytes32 leaf
+    ) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+
+            if (computedHash <= proofElement) {
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+
+        return computedHash == root;
+    }
+}
+
+contract ClaimContract {
+    using SafeMath for uint256;
+
+    enum MigrationType { V1_UNCLAIMED, HOLDER, STAKER }
+
+    address public constant FLASH_TOKEN_V1 = 0xB4467E8D621105312a914F1D42f10770C0Ffe3c8;
+    address public constant FLASH_TOKEN_V2 = 0x20398aD62bb2D930646d45a6D4292baa0b860C1f;
+    bytes32 public constant MERKLE_ROOT = 0x56dc616cf485d230be34e774839fc4b1b11b0ab99b92d594f7f16f4065f7e814;
+    uint256 public constant V1_UNCLAIMED_DEADLINE = 1617235140;
+
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    event Claimed(uint256 index, address sender, uint256 amount);
+
+    function isClaimed(uint256 index) public view returns (bool) {
+        uint256 claimedWordIndex = index / 256;
+        uint256 claimedBitIndex = index % 256;
+        uint256 claimedWord = claimedBitMap[claimedWordIndex];
+        uint256 mask = (1 << claimedBitIndex);
+        return claimedWord & mask == mask;
+    }
+
+    function _setClaimed(uint256 index) private {
+        uint256 claimedWordIndex = index / 256;
+        uint256 claimedBitIndex = index % 256;
+        claimedBitMap[claimedWordIndex] |= (1 << claimedBitIndex);
+    }
+
+    function _getMigratableAmountAndTransferV1(address _user, uint256 _balance) private returns (uint256 flashV2Mint) {
+        require(IFlashToken(FLASH_TOKEN_V1).transferFrom(_user, address(this), _balance), "TRANSFER_FAILED");
+        return _balance;
+    }
+
+    function claim(
+        uint256 index,
+        uint256 balance,
+        uint256 bonusAmount,
+        uint256 expiry,
+        uint256 expireAfter,
+        MigrationType migrationType,
+        bytes32[] calldata merkleProof
+    ) external {
+        require(!isClaimed(index), "CLAIM_ALREADY_MADE");
+
+        bytes32 node = keccak256(abi.encodePacked(index, msg.sender, balance, bonusAmount, expiry, expireAfter, migrationType));
+        require(MerkleProof.verify(merkleProof, MERKLE_ROOT, node), "INVALID_MERKLE_PROOF");
+
+        uint256 claimAmount;
+        if (migrationType == MigrationType.V1_UNCLAIMED) {
+            require(block.timestamp <= V1_UNCLAIMED_DEADLINE, "V1_UNCLAIMED_EXPIRED");
+            claimAmount = _getMigratableAmountAndTransferV1(msg.sender, balance);
+        } else if (migrationType == MigrationType.HOLDER) {
+            claimAmount = balance.add(bonusAmount);
+        } else if (migrationType == MigrationType.STAKER) {
+            require(block.timestamp < expiry, "STAKER_CLAIM_EXPIRED");
+            uint256 timeRemaining = expiry.sub(block.timestamp);
+            uint256 effectiveClaimAmount = timeRemaining >= expireAfter ? balance : balance.mul(timeRemaining).div(expireAfter);
+            claimAmount = effectiveClaimAmount.add(bonusAmount);
+        } else {
+            revert("INVALID_MIGRATION_TYPE");
+        }
+
+        _setClaimed(index);
+        require(IFlashToken(FLASH_TOKEN_V2).mint(msg.sender, claimAmount), "MINT_FAILED");
+
+        emit Claimed(index, msg.sender, claimAmount);
+    }
+}
+```

@@ -1,0 +1,300 @@
+```solidity
+/**
+ * @title Wagmipet
+ * @notice A simple pet simulation contract where the pet's needs (hunger, uncleanliness, boredom, sleepiness) must be managed.
+ * @dev The pet's conditions deteriorate over time and must be maintained by calling specific functions. If any condition exceeds 100, the pet is no longer alive.
+ */
+contract Wagmipet {
+    address _owner;
+    bool _birthed;
+    
+    event CaretakerLoved(address indexed caretaker, uint256 indexed amount);
+    
+    uint256 lastFeedBlock;
+    uint256 lastCleanBlock;
+    uint256 lastPlayBlock;
+    uint256 lastSleepBlock;
+    
+    uint8 internal hunger;
+    uint8 internal uncleanliness;
+    uint8 internal boredom;
+    uint8 internal sleepiness;
+    
+    mapping (address => uint256) public love;
+    
+    /**
+     * @dev Modifier to restrict function calls to the owner of the contract.
+     */
+    modifier onlyOwner() {
+        require(msg.sender == _owner);
+        _;
+    }
+    
+    /**
+     * @notice Initializes the contract, setting the owner and initial state of the pet.
+     * @dev Sets the initial values for the pet's needs and the owner of the contract.
+     */
+    constructor() {
+        _owner = msg.sender;
+        lastFeedBlock = block.number;
+        lastCleanBlock = block.number;
+        lastPlayBlock = block.number;
+        lastSleepBlock = block.number;
+        
+        hunger = 0;
+        uncleanliness = 0;
+        boredom = 0;
+        sleepiness = 0;
+    }
+    
+    /**
+     * @notice Internal function to add love points to a caretaker.
+     * @dev Emits an event when a caretaker is given love points.
+     * @param caretaker The address of the caretaker.
+     * @param amount The amount of love points to add.
+     */
+    function addLove(address caretaker, uint256 amount) internal {
+        love[caretaker] += amount;
+        emit CaretakerLoved(caretaker, amount);
+    }
+    
+    /**
+     * @notice Feeds the entity, resetting hunger and increasing other stats.
+     * @dev Reverts if entity is dead, too bored, or too dirty to eat.
+     * @dev Increases boredom by 10 and uncleanliness by 3 after feeding.
+     * @dev Adds 1 love point to the caller.
+     */
+    function feed() public {
+        require(getAlive(), "Pet is no longer alive");
+        require(boredom < 80, "Pet is too bored to eat");
+        require(uncleanliness < 80, "Pet is too dirty to eat");
+        
+        // Update hunger based on blocks passed
+        uint256 blocksPassed = block.number - lastFeedBlock;
+        hunger = uint8(blocksPassed) + hunger > 100 ? 100 : uint8(blocksPassed) + hunger;
+        
+        // Reset hunger and increase other stats
+        hunger = 0;
+        boredom += 10;
+        uncleanliness += 3;
+        
+        // Update last feed block
+        lastFeedBlock = block.number;
+        
+        // Add love point
+        addLove(msg.sender, 1);
+    }
+    
+    /**
+     * @notice Cleans the entity, resetting uncleanliness.
+     * @dev Reverts if entity is dead or already clean.
+     * @dev Adds 1 love point to the caller.
+     */
+    function clean() public {
+        require(getAlive(), "Pet is no longer alive");
+        
+        // Update uncleanliness based on blocks passed
+        uint256 blocksPassed = block.number - lastCleanBlock;
+        uncleanliness = uint8(blocksPassed) + uncleanliness > 100 ? 100 : uint8(blocksPassed) + uncleanliness;
+        
+        require(uncleanliness > 0, "Pet is already clean");
+        
+        // Reset uncleanliness
+        uncleanliness = 0;
+        
+        // Update last clean block
+        lastCleanBlock = block.number;
+        
+        // Add love point
+        addLove(msg.sender, 1);
+    }
+    
+    /**
+     * @notice Lets the entity play, resetting boredom but increasing other stats.
+     * @dev Reverts if entity is dead, too hungry, sleepy, or dirty to play.
+     * @dev Increases hunger by 10, sleepiness by 10, and uncleanliness by 5 after playing.
+     * @dev Adds 1 love point to the caller.
+     */
+    function play() public {
+        require(getAlive(), "Pet is no longer alive");
+        require(hunger < 80, "Pet is too hungry to play");
+        require(sleepiness < 80, "Pet is too sleepy to play");
+        require(uncleanliness < 80, "Pet is too dirty to play");
+        
+        // Update boredom based on blocks passed
+        uint256 blocksPassed = block.number - lastPlayBlock;
+        boredom = uint8(blocksPassed) + boredom > 100 ? 100 : uint8(blocksPassed) + boredom;
+        
+        // Reset boredom and increase other stats
+        boredom = 0;
+        hunger += 10;
+        sleepiness += 10;
+        uncleanliness += 5;
+        
+        // Update last play block
+        lastPlayBlock = block.number;
+        
+        // Add love point
+        addLove(msg.sender, 1);
+    }
+    
+    /**
+     * @notice Puts the entity to sleep, resetting sleepiness and increasing uncleanliness.
+     * @dev
+     * - Reverts if the entity is not alive
+     * - Reverts if the entity is too dirty (uncleanliness >= 80)
+     * - Reverts if the entity isn't sleepy (sleepiness <= 0)
+     * - Updates last sleep block timestamp
+     * - Resets sleepiness to 0
+     * - Increases uncleanliness by 5
+     * - Adds 1 love point to the caller
+     * @notice This function represents the entity taking a restful sleep
+     * @dev The function includes basic health checks before allowing sleep
+     */
+    function sleep() public {
+        require(getAlive(), "Pet is no longer alive");
+        require(uncleanliness < 80, "Pet is too dirty to sleep");
+        
+        // Update sleepiness based on blocks passed
+        uint256 blocksPassed = block.number - lastSleepBlock;
+        sleepiness = uint8(blocksPassed) + sleepiness > 100 ? 100 : uint8(blocksPassed) + sleepiness;
+        
+        require(sleepiness > 0, "Pet isn't sleepy");
+        
+        // Reset sleepiness and increase uncleanliness
+        sleepiness = 0;
+        uncleanliness += 5;
+        
+        // Update last sleep block
+        lastSleepBlock = block.number;
+        
+        // Add love point
+        addLove(msg.sender, 1);
+    }
+    
+    /**
+     * @notice Retrieves the current status of the entity.
+     * @return string The status message reflecting the entity's condition.
+     * @dev
+     * - Returns a random "good" status from a predefined list if all needs are below threshold
+     * - Checks the entity's vital stats (hunger, cleanliness, boredom, sleepiness)
+     * - Returns the most critical need if any stat exceeds 50
+     * - Returns "no longer with us" if the entity is not alive
+     * - Uses block number modulo 4 to select a random good status
+     * @dev The good status messages are: "gm", "im feeling great", "all good", "i love u"
+     * @dev Status priority (from highest to lowest):
+     *      1. Sleepiness > 50
+     *      2. Boredom > 50
+     *      3. Uncleanliness > 50
+     *      4. Hunger > 50
+     * @dev If multiple stats exceed 50, the one with the highest value takes priority
+     */
+    function getStatus() public view returns (string memory) {
+        if (!getAlive()) {
+            return "no longer with us";
+        }
+        
+        // Calculate current stats based on blocks passed
+        uint256 currentHunger = hunger + (block.number - lastFeedBlock);
+        uint256 currentUncleanliness = uncleanliness + (block.number - lastCleanBlock);
+        uint256 currentBoredom = boredom + (block.number - lastPlayBlock);
+        uint256 currentSleepiness = sleepiness + (block.number - lastSleepBlock);
+        
+        // Cap stats at 100
+        if (currentHunger > 100) currentHunger = 100;
+        if (currentUncleanliness > 100) currentUncleanliness = 100;
+        if (currentBoredom > 100) currentBoredom = 100;
+        if (currentSleepiness > 100) currentSleepiness = 100;
+        
+        // Find the highest priority need
+        uint256 maxValue = 0;
+        string memory status = "";
+        
+        if (currentSleepiness > 50 && currentSleepiness > maxValue) {
+            maxValue = currentSleepiness;
+            status = "sleepy";
+        }
+        
+        if (currentBoredom > 50 && currentBoredom > maxValue) {
+            maxValue = currentBoredom;
+            status = "bored";
+        }
+        
+        if (currentUncleanliness > 50 && currentUncleanliness > maxValue) {
+            maxValue = currentUncleanliness;
+            status = "dirty";
+        }
+        
+        if (currentHunger > 50 && currentHunger > maxValue) {
+            maxValue = currentHunger;
+            status = "hungry";
+        }
+        
+        // If no critical needs, return a good status message
+        if (maxValue == 0) {
+            uint256 randomIndex = block.number % 4;
+            if (randomIndex == 0) return "gm";
+            if (randomIndex == 1) return "im feeling great";
+            if (randomIndex == 2) return "all good";
+            return "i love u";
+        }
+        
+        return status;
+    }
+    
+    /**
+     * @notice Checks if the pet is still alive.
+     * @dev The pet is considered alive if all its needs are below 101.
+     * @return A boolean indicating whether the pet is alive.
+     */
+    function getAlive() public view returns (bool) {
+        uint256 currentHunger = hunger + (block.number - lastFeedBlock);
+        uint256 currentUncleanliness = uncleanliness + (block.number - lastCleanBlock);
+        uint256 currentBoredom = boredom + (block.number - lastPlayBlock);
+        uint256 currentSleepiness = sleepiness + (block.number - lastSleepBlock);
+        
+        return (currentHunger <= 100 && currentUncleanliness <= 100 && 
+                currentBoredom <= 100 && currentSleepiness <= 100);
+    }
+    
+    /**
+     * @notice Gets the current hunger level of the pet.
+     * @dev Hunger increases over time and is reset by feeding the pet.
+     * @return The current hunger level as a uint256.
+     */
+    function getHunger() public view returns (uint256) {
+        uint256 currentHunger = hunger + (block.number - lastFeedBlock);
+        return currentHunger > 100 ? 100 : currentHunger;
+    }
+    
+    /**
+     * @notice Gets the current uncleanliness level of the pet.
+     * @dev Uncleanliness increases over time and is reset by cleaning the pet.
+     * @return The current uncleanliness level as a uint256.
+     */
+    function getUncleanliness() public view returns (uint256) {
+        uint256 currentUncleanliness = uncleanliness + (block.number - lastCleanBlock);
+        return currentUncleanliness > 100 ? 100 : currentUncleanliness;
+    }
+    
+    /**
+     * @notice Gets the current boredom level of the pet.
+     * @dev Boredom increases over time and is reset by playing with the pet.
+     * @return The current boredom level as a uint256.
+     */
+    function getBoredom() public view returns (uint256) {
+        uint256 currentBoredom = boredom + (block.number - lastPlayBlock);
+        return currentBoredom > 100 ? 100 : currentBoredom;
+    }
+    
+    /**
+     * @notice Gets the current sleepiness level of the pet.
+     * @dev Sleepiness increases over time and is reset by putting the pet to sleep.
+     * @return The current sleepiness level as a uint256.
+     */
+    function getSleepiness() public view returns (uint256) {
+        uint256 currentSleepiness = sleepiness + (block.number - lastSleepBlock);
+        return currentSleepiness > 100 ? 100 : currentSleepiness;
+    }
+}
+```

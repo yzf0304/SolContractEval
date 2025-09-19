@@ -1,0 +1,97 @@
+Below is the complete implementation of the `OlympusERC20Token` contract according to the provided context and description. This contract inherits from the `Divine` contract, includes minting and burning functionalities, and adheres to the ERC20 standard with additional features like TWAP (Time-Weighted Average Price) Oracle updating.
+
+```solidity
+/**
+ * @title OlympusERC20Token
+ * @notice This contract implements a custom ERC20 token with minting and burning functionalities.
+ * @dev Inherits from the Divine contract, which is assumed to be a base contract for token functionality.
+ */
+contract OlympusERC20Token is Divine {
+
+  using SafeMath for uint256;
+
+    /**
+     * @notice Initializes the OlympusERC20Token contract with the name "Olympus", symbol "OHM", and 9 decimal places.
+     * @dev Constructor function that sets up the token's initial properties.
+     */
+    constructor() Divine("Olympus", "OHM", 9) {
+        //empty
+    }
+
+    /**
+     * @notice Mints a specified amount of tokens and assigns them to a given account.
+     * @dev Can only be called by the Vault. The `_mint` function is used to create new tokens.
+     * @param account_ The address to which the tokens will be minted.
+     * @param amount_ The amount of tokens to mint.
+     */
+    function mint(address account_, uint256 amount_) external onlyVault() {
+        _mint(account_, amount_);
+    }
+
+    /**
+     * @notice Destroys a specified amount of tokens from the caller's balance.
+     * @dev Calls the internal `_burn` function to remove tokens from the caller's balance.
+     * @param amount The amount of tokens to burn.
+     */
+    function burn(uint256 amount) public virtual {
+        _burn(msg.sender, amount);
+    }
+
+    /**
+     * @notice Destroys a specified amount of tokens from a given account, deducting from the caller's allowance.
+     * @dev Calls the internal `_burnFrom` function to remove tokens from the account's balance and updates the allowance.
+     * @param account_ The address from which the tokens will be burned.
+     * @param amount_ The amount of tokens to burn.
+     */
+    function burnFrom(address account_, uint256 amount_) public virtual {
+        uint256 decreasedAllowance = _allowances[account_][msg.sender].sub(amount_, "ERC20: burn amount exceeds allowance");
+        _approve(account_, msg.sender, decreasedAllowance);
+        _burn(account_, amount_);
+    }
+
+    /**
+     * @notice Internal function to burn tokens from a given account and update the allowance.
+     * @dev Ensures that the caller has sufficient allowance to burn the tokens. Uses the `_burn` function to destroy tokens.
+     * @param account_ The address from which the tokens will be burned.
+     * @param amount_ The amount of tokens to burn.
+     */
+    function _burnFrom(address account_, uint256 amount_) public virtual {
+        _burn(account_, amount_);
+        _approve(account_, msg.sender, _allowances[account_][msg.sender].sub(amount_, "ERC20: burn amount exceeds allowance"));
+    }
+
+    /**
+     * @dev Hook that is called before any transfer of tokens. This includes
+     * minting and burning.
+     *
+     * Calling conditions:
+     *
+     * - when `from` and `to` are both non-zero, `amount` of ``from``'s tokens
+     * will be to transferred to `to`.
+     * - when `from` is zero, `amount` tokens will be minted for `to`.
+     * - when `to` is zero, `amount` of ``from``'s tokens will be burned.
+     * - `from` and `to` are never both zero.
+     *
+     * To learn more about hooks, head to xref:ROOT:extending-contracts.adoc#using-hooks[Using Hooks].
+     */
+    function _beforeTokenTransfer( address from_, address to_, uint256 amount_ ) internal override virtual {
+        super._beforeTokenTransfer(from_, to_, amount_);
+
+        if( _dexPoolsTWAPSources.contains( from_ ) ) {
+            _uodateTWAPOracle( from_, twapEpochPeriod );
+        } else {
+            if ( _dexPoolsTWAPSources.contains( to_ ) ) {
+                _uodateTWAPOracle( to_, twapEpochPeriod );
+            }
+        }
+    }
+}
+```
+
+### Key Points Implemented:
+- **Constructor**: Initializes the token with the name "Olympus", symbol "OHM", and 9 decimals.
+- **Mint Functionality**: Allows minting of tokens only by the Vault, using the internal `_mint` function.
+- **Burn Functionality**: Allows burning of tokens by the token owner, using the internal `_burn` function. Also provides a function to burn tokens from a specific account on behalf of a spender, ensuring the spender has enough allowance.
+- **TWAP Oracle Updates**: Overrides `_beforeTokenTransfer` to ensure TWAP is updated when tokens are transferred to or from registered TWAP sources.
+- **Safety Checks**: Utilizes SafeMath for arithmetic operations to prevent overflow and underflow.
+- **Compliance**: Inherits from `Divine`, which provides additional functionalities such as TWAP oracle management and source registration.

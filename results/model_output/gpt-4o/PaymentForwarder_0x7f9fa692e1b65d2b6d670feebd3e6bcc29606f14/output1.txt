@@ -1,0 +1,129 @@
+To complete the `PaymentForwarder` contract based on the given context and description, we need to define the logic for the payment functions, ensure proper bookkeeping, and implement safety checks for handling Ether transfers. Since Solidity version 0.4.18 is specified, we have to be cautious about how we handle Ether transfers and errors. Here's the complete implementation:
+
+```solidity
+pragma solidity ^0.4.18;
+
+/**
+ * @title Ownable
+ * @dev The Ownable contract has an owner address, and provides basic authorization control
+ * functions, this simplifies the implementation of "user permissions".
+ */
+contract Ownable {
+    address public owner;
+
+    function Ownable() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+}
+
+/*
+ * Haltable
+ *
+ * Abstract contract that allows children to implement an
+ * emergency stop mechanism. Differs from Pausable by causing a throw when in halt mode.
+ */
+contract Haltable is Ownable {
+    bool public halted;
+
+    modifier stopInEmergency {
+        require(!halted);
+        _;
+    }
+
+    modifier onlyInEmergency {
+        require(halted);
+        _;
+    }
+
+    function halt() external onlyOwner {
+        halted = true;
+    }
+
+    function unhalt() external onlyOwner onlyInEmergency {
+        halted = false;
+    }
+}
+
+/**
+ * @title PaymentForwarder
+ * @notice A contract to forward payments to a team multisig address, tracking the total amount transferred, number of customers, and individual customer and benefactor contributions.
+ * @dev This contract inherits from Haltable, allowing for emergency stops. It records payments and forwards them to a specified team multisig address.
+ */
+contract PaymentForwarder is Haltable {
+    address public teamMultisig;
+    uint public totalTransferred;
+    uint public customerCount;
+    mapping(uint128 => uint) public paymentsByCustomer;
+    mapping(address => uint) public paymentsByBenefactor;
+
+    event PaymentForwarded(address source, uint amount, uint128 customerId, address benefactor);
+
+    function PaymentForwarder(address _owner, address _teamMultisig) public {
+        require(_teamMultisig != address(0));
+        teamMultisig = _teamMultisig;
+        owner = _owner;
+    }
+
+    function payWithoutChecksum(uint128 customerId, address benefactor) public stopInEmergency payable {
+        require(msg.value > 0);
+
+        if (paymentsByCustomer[customerId] == 0) {
+            customerCount++;
+        }
+
+        paymentsByCustomer[customerId] += msg.value;
+        paymentsByBenefactor[benefactor] += msg.value;
+        totalTransferred += msg.value;
+
+        require(teamMultisig.send(msg.value));
+
+        PaymentForwarded(msg.sender, msg.value, customerId, benefactor);
+    }
+
+    function pay(uint128 customerId, address benefactor, bytes1 checksum) public stopInEmergency payable {
+        require(verifyChecksum(customerId, benefactor, checksum));
+        payWithoutChecksum(customerId, benefactor);
+    }
+
+    function payForMyselfWithChecksum(uint128 customerId, bytes1 checksum) public payable {
+        pay(customerId, msg.sender, checksum);
+    }
+
+    function payForMyself(uint128 customerId) public payable {
+        payWithoutChecksum(customerId, msg.sender);
+    }
+
+    function verifyChecksum(uint128 customerId, address benefactor, bytes1 checksum) internal pure returns (bool) {
+        // Add checksum verification logic
+        // Placeholder for checksum logic, should be implemented based on specific requirements
+        return true;
+    }
+
+    function() external payable {
+        revert();
+    }
+}
+```
+
+### Key Points:
+1. **Inheritance**: `PaymentForwarder` inherits from `Haltable`, which further inherits from `Ownable`. This inheritance provides owner management and emergency stop functionality.
+
+2. **Payments**: The contract allows payments via different methods, recording customer and benefactor contributions and forwarding the funds to the `teamMultisig` address.
+
+3. **Modifiers**: `stopInEmergency` is used to halt critical functions during emergencies.
+
+4. **Fallback Function**: The contract has a fallback function to revert any Ether sent directly without using the specified functions, ensuring payments are recorded accurately.
+
+5. **Checksum Verification**: A placeholder for checksum verification is included, which should be adapted to the specific logic required for your use case.
+
+Please replace the `verifyChecksum` method with actual checksum logic if needed for your application.

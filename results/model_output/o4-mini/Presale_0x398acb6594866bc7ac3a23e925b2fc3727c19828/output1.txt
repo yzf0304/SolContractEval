@@ -1,0 +1,209 @@
+```solidity
+pragma solidity 0.4.18;
+
+contract Presale is Claimable, Pausable {
+  using SafeMath for uint256;
+  using Discounts for Discounts.Collection;
+  using Limits for Limits.Window;
+
+  struct Participant {
+    bool    authorized;
+    uint256 minimumTier;
+  }
+
+  SeeToken            public token;
+  Discounts.Collection internal discounts;
+  Limits.Window        internal cap;
+  mapping(address => Participant) internal participants;
+
+  event Tier(uint256 discount, uint256 available);
+
+  function Presale(address _token) public {
+    require(_token != address(0));
+    token = SeeToken(_token);
+    // start paused until properly configured
+    paused = true;
+  }
+
+  /// @notice takeover ownership of the token contract
+  function claimToken() public {
+    token.claimOwnership();
+  }
+
+  /// @notice unpause only once rate, cap and token‐ownership are set
+  function unpause()
+    onlyOwner
+    whenPaused
+    whenRateSet
+    whenCapped
+    whenOwnsToken
+    public
+  {
+    super.unpause();
+  }
+
+  /// @notice set the base purchase rate (tokens per wei)
+  function setRate(uint256 _purchaseRate)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_purchaseRate > 0);
+    discounts.baseRate = _purchaseRate;
+  }
+
+  /// @notice set a per‐address cap (amount of tokens over window of blocks)
+  function limitPurchasing(uint256 _amount, uint256 _duration)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_amount > 0 && _duration > 0);
+    cap.amount   = _amount;
+    cap.duration = _duration;
+  }
+
+  /// @notice add a new discount tier
+  function addTier(uint256 _discount, uint256 _available)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_discount <= Discounts.MAX_DISCOUNT);
+    discounts.addTier(_discount, _available);
+    Tier(_discount, _available);
+  }
+
+  /// @notice authorize a list of addresses to participate at a given minimum tier
+  function authorizeForTier(uint256 _minimumTier, address[] _authorized)
+    onlyOwner
+    public
+  {
+    // must reference an existing tier
+    require(_minimumTier < discounts.tiers.length);
+    for (uint i = 0; i < _authorized.length; i++) {
+      address who = _authorized[i];
+      require(who != address(0));
+      participants[who].authorized   = true;
+      participants[who].minimumTier  = _minimumTier;
+    }
+  }
+
+  /// @notice withdraw all collected ETH to owner
+  function withdraw()
+    onlyOwner
+    public
+  {
+    owner.transfer(this.balance);
+  }
+
+  /// @notice fallback buys tokens
+  function ()
+    public
+    payable
+  {
+    purchaseTokens();
+  }
+
+  /// @notice purchase entrypoint for whitelisted participants
+  function purchaseTokens()
+    onlyAuthorized
+    whenNotPaused
+    public
+    payable
+  {
+    // determine how many tokens this address may still buy
+    uint256 remainingCap = cap.getLimit(msg.sender);
+    require(remainingCap > 0);
+
+    // do tiered purchase
+    uint256 funds = msg.value;
+    uint256 minTier = participants[msg.sender].minimumTier;
+    uint256 bought;
+    uint256 refund;
+    (bought, refund) = discounts.purchaseTokens(
+      remainingCap,
+      funds,
+      minTier
+    );
+
+    require(bought > 0);
+
+    // record and mint
+    cap.recordPurchase(msg.sender, bought);
+    token.issue(msg.sender, bought);
+
+    // refund any unused ETH
+    if (refund > 0) {
+      msg.sender.transfer(refund);
+    }
+  }
+
+  /// @notice view the cap parameters
+  function getPurchaseLimit()
+    public
+    view
+    returns (uint256 _amount, uint256 _duration)
+  {
+    _amount   = cap.amount;
+    _duration = cap.duration;
+  }
+
+  /// @notice view all tiers as pairs [discount, available]
+  function getTiers()
+    public
+    view
+    returns (uint256[2][] tiersInfo)
+  {
+    uint256 len = discounts.tiers.length;
+    tiersInfo = new uint256[2][](len);
+    for (uint i = 0; i < len; i++) {
+      Discounts.Tier storage t = discounts.tiers[i];
+      tiersInfo[i][0] = t.discount;
+      tiersInfo[i][1] = t.available;
+    }
+  }
+
+  /// @notice view availability per tier for a given participant
+  function getAvailability(address _participant)
+    public
+    view
+    returns (uint256[] availability)
+  {
+    uint256 len = discounts.tiers.length;
+    availability = new uint256[](len);
+
+    // if not authorized, all zeros
+    if (!participants[_participant].authorized) {
+      return availability;
+    }
+
+    uint256 minTier = participants[_participant].minimumTier;
+    for (uint i = minTier; i < len; i++) {
+      availability[i] = discounts.tiers[i].available;
+    }
+  }
+
+  // ============ MODIFIERS ============
+
+  modifier onlyAuthorized() {
+    require(participants[msg.sender].authorized);
+    _;
+  }
+
+  modifier whenRateSet() {
+    require(discounts.baseRate != 0);
+    _;
+  }
+
+  modifier whenCapped() {
+    require(cap.amount != 0);
+    _;
+  }
+
+  modifier whenOwnsToken() {
+    require(token.owner() == address(this));
+    _;
+  }
+}
+```

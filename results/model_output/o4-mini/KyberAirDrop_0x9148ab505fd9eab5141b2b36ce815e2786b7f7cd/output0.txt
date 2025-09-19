@@ -1,0 +1,91 @@
+contract KyberGenesisToken is Ownable {
+  string  public  constant name     = "Kyber Genesis Token";
+  string  public  constant symbol   = "KGT";
+  uint    public  constant decimals = 0;
+
+  uint                   public totalSupply = 0;
+  mapping(address=>uint) public balanceOf;
+
+  /**
+   * @notice Initializes the contract and sets the minter as the owner.
+   * @param minter The address of the minter who will own the contract.
+   */
+  function KyberGenesisToken(address minter) {
+    transferOwnership(minter);
+  }
+
+  /**
+   * @notice Event emitted when tokens are transferred.
+   * @param _from The address from which the tokens are sent.
+   * @param _to The address to which the tokens are sent.
+   * @param _value The amount of tokens transferred.
+   */
+  event Transfer(address indexed _from, address indexed _to, uint _value);
+
+  /**
+   * @notice Event emitted when the minting process is ended.
+   * @param timestamp The block timestamp when the minting was ended.
+   */
+  event EndMinting(uint timestamp);
+
+  /**
+   * @notice Mints new tokens for the specified recipients.
+   * @dev Only the owner (minter) can call this function. Each recipient can only receive one token.
+   * @param recipients Array of addresses to receive the new tokens.
+   */
+  function mint(address[] recipients) onlyOwner {
+    for (uint i = 0; i < recipients.length; i++) {
+      address to = recipients[i];
+      require(balanceOf[to] == 0);
+      balanceOf[to] = 1;
+      totalSupply += 1;
+      Transfer(0x0, to, 1);
+    }
+  }
+
+  /**
+   * @notice Ends the minting process and transfers ownership to a dead address.
+   * @dev Only the owner (minter) can call this function. After calling this function, no more tokens can be minted.
+   */
+  function endMinting() onlyOwner {
+    EndMinting(now);
+    owner = address(0);
+  }
+
+  /**
+   * @notice Burns the token held by the sender.
+   * @dev The sender must hold exactly one token to burn it.
+   */
+  function burn() {
+    require(balanceOf[msg.sender] == 1);
+    balanceOf[msg.sender] = 0;
+    totalSupply -= 1;
+    Transfer(msg.sender, 0x0, 1);
+  }
+
+  /**
+   * @notice Drains ERC20 tokens from the contract to the owner (assumed multisig) address.
+   * @dev This function can be called by anyone to drain any accidentally sent ERC20 tokens.
+   * @param token The ERC20 token contract to drain.
+   * @param amount The amount of tokens to drain.
+   */
+  function emergencyERC20Drain(ERC20Interface token, uint amount) {
+    // send all tokens to the owner (multisig)
+    require(token.transfer(owner, amount));
+  }
+
+  // ERC20 stubs: not supported in this token
+  function transfer(address /*_to*/, uint /*_value*/) returns (bool) {
+    revert();
+  }
+  function transferFrom(address /*_from*/, address /*_to*/, uint /*_value*/) returns (bool) {
+    revert();
+  }
+  function approve(address /*_spender*/, uint /*_value*/) returns (bool) {
+    revert();
+  }
+  function allowance(address /*_owner*/, address /*_spender*/) constant returns (uint) {
+    return 0;
+  }
+  event Approval(address indexed _owner, address indexed _spender, uint _value);
+}

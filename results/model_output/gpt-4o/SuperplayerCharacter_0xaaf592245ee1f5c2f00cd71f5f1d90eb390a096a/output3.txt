@@ -1,0 +1,95 @@
+```solidity
+pragma solidity ^0.5.1;
+
+import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
+
+contract SuperplayerCharacter is Ownable {
+    using SafeMath for uint256;
+
+    event CharacterSelect(address indexed from, uint32 indexed chaId);
+
+    mapping(address => uint32) public addrMapCharacterIds;
+
+    uint256 public changeFee = 0;
+
+    struct Character {
+        uint32 id;
+        uint weight;
+    }
+
+    Character[] private characters;
+    uint256 private totalWeight = 0;
+
+    constructor() public {
+        _addCharacter(1, 1000000);
+        _addCharacter(2, 1000000);
+        _addCharacter(3, 1000000);
+        _addCharacter(4, 1000);
+        _addCharacter(5, 1000);
+        _addCharacter(6, 1000);
+    }
+
+    function AddCharacter(uint32 id, uint weight) public onlyOwner {
+        _addCharacter(id, weight);
+    }
+
+    function SetFee(uint256 fee) public onlyOwner {
+        changeFee = fee;
+    }
+
+    function withdraw(address payable to) public onlyOwner {
+        require(to != address(0), "Cannot withdraw to zero address");
+        to.transfer(address(this).balance);
+    }
+
+    function getConfig() public view returns (uint32[] memory ids, uint256[] memory weights) {
+        uint length = characters.length;
+        ids = new uint32[](length);
+        weights = new uint256[](length);
+        for (uint i = 0; i < length; i++) {
+            ids[i] = characters[i].id;
+            weights[i] = characters[i].weight;
+        }
+    }
+
+    function () payable external {
+        require(msg.value >= changeFee, "Insufficient fee");
+        uint sum = 0;
+        uint index = characters.length - 1;
+
+        uint weight = uint256(keccak256(abi.encodePacked(block.timestamp, msg.value, block.difficulty))) % totalWeight + 1;
+
+        for (uint i = 0; i < characters.length; i++) {
+            Character memory ch = characters[i];
+            sum = sum.add(ch.weight);
+            if (weight <= sum) {
+                index = i;
+                break;
+            }
+        }
+        _selectCharacter(msg.sender, characters[index].id);
+        msg.sender.transfer(msg.value.sub(changeFee));
+    }
+
+    function _selectCharacter(address from, uint32 id) internal {
+        addrMapCharacterIds[from] = id;
+        emit CharacterSelect(from, id);
+    }
+
+    function _addCharacter(uint32 id, uint weight) internal {
+        require(id > 0, "Invalid character ID");
+        require(weight > 0, "Invalid weight");
+        characters.push(Character(id, weight));
+        totalWeight = totalWeight.add(weight);
+    }
+}
+```
+
+In this `SuperplayerCharacter` contract:
+- We've implemented the functions to manage character addition, fee setting, and withdrawals.
+- The constructor initializes the contract with some characters.
+- The `fallback` function allows users to select a character based on the random weighted selection, using the provided fee.
+- Functions `_selectCharacter` and `_addCharacter` handle character selection and addition respectively.
+- We utilize OpenZeppelin's `SafeMath` library for safe arithmetic operations.
+- The `Ownable` contract ensures that only the contract owner can perform sensitive actions like setting fees and adding characters.

@@ -1,0 +1,143 @@
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    uint256 private constant DAY_SECONDS = 1 days;
+
+    // ERC-20–style balances and allowances
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowances;
+
+    // Stake data structure
+    struct Stake {
+        uint40 stakeId;
+        uint256 stakedHearts;
+        uint256 stakedDays;
+        uint256 startDay;
+        bool ended;
+    }
+
+    // Stakes per user
+    mapping(address => Stake[]) private stakes;
+    // Incremental ID generator for stakes
+    uint40 private nextStakeId = 1;
+
+    /**
+     * @notice When deployed, mint an initial supply of HEX to the deployer.
+     * @param initialSupply The amount of HEX (in hearts) to mint to the deployer.
+     */
+    constructor(uint256 initialSupply) {
+        balances[msg.sender] = initialSupply;
+    }
+
+    /**
+     * @notice Returns the current day (UTC) since Unix epoch, truncated.
+     * @dev Uses block.timestamp divided by 1 day.
+     * @return uint256 The current day.
+     */
+    function currentDay() external view returns (uint256) {
+        return block.timestamp / DAY_SECONDS;
+    }
+
+    /**
+     * @notice Starts a new stake.
+     * @dev Pulls the staked amount out of sender’s balance and records the stake.
+     * @param newStakedHearts The amount of HEX (in hearts) to stake.
+     * @param newStakedDays The number of days to lock the stake.
+     */
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "HEX: stake amount must be > 0");
+        require(newStakedDays > 0, "HEX: stake days must be > 0");
+        require(balances[msg.sender] >= newStakedHearts, "HEX: insufficient balance");
+
+        // Debit the user
+        balances[msg.sender] -= newStakedHearts;
+
+        // Record the stake
+        uint256 today = block.timestamp / DAY_SECONDS;
+        stakes[msg.sender].push(
+            Stake({
+                stakeId: nextStakeId,
+                stakedHearts: newStakedHearts,
+                stakedDays: newStakedDays,
+                startDay: today,
+                ended: false
+            })
+        );
+        nextStakeId++;
+    }
+
+    /**
+     * @notice Ends an existing stake after it has matured.
+     * @dev Verifies index, ID and maturity, then returns staked hearts to user.
+     * @param stakeIndex The index in the user’s stake array.
+     * @param stakeIdParam The ID of the stake to confirm correctness.
+     */
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < stakes[msg.sender].length, "HEX: invalid stake index");
+        Stake storage s = stakes[msg.sender][stakeIndex];
+        require(!s.ended, "HEX: already ended");
+        require(s.stakeId == stakeIdParam, "HEX: stake ID mismatch");
+
+        uint256 today = block.timestamp / DAY_SECONDS;
+        require(today >= s.startDay + s.stakedDays, "HEX: stake not matured");
+
+        // Mark ended and refund
+        s.ended = true;
+        balances[msg.sender] += s.stakedHearts;
+    }
+
+    /**
+     * @notice Returns how many stakes an address has ever started.
+     * @param stakerAddr The address to query.
+     * @return uint256 The number of stakes in their array.
+     */
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return stakes[stakerAddr].length;
+    }
+
+    /**
+     * @notice Approves a spender to use a specified amount of sender’s HEX.
+     * @param spender The address allowed to spend.
+     * @param amount The maximum amount they can spend.
+     * @return bool True on success.
+     */
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowances[msg.sender][spender] = amount;
+        return true;
+    }
+
+    /**
+     * @notice Transfers HEX from sender to recipient.
+     * @param recipient The destination address.
+     * @param amount The amount of HEX to transfer.
+     * @return bool True on success.
+     */
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(balances[msg.sender] >= amount, "HEX: insufficient balance");
+        balances[msg.sender] -= amount;
+        balances[recipient] += amount;
+        return true;
+    }
+
+    // === Optional view helpers (not in original interface) ===
+    // Uncomment if needed in your integration.
+
+    /*
+    function balanceOf(address account) external view returns (uint256) {
+        return balances[account];
+    }
+
+    function allowance(address owner, address spender) external view returns (uint256) {
+        return allowances[owner][spender];
+    }
+
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool) {
+        require(balances[sender] >= amount, "HEX: insufficient balance");
+        require(allowances[sender][msg.sender] >= amount, "HEX: allowance exceeded");
+        allowances[sender][msg.sender] -= amount;
+        balances[sender] -= amount;
+        balances[recipient] += amount;
+        return true;
+    }
+    */
+}

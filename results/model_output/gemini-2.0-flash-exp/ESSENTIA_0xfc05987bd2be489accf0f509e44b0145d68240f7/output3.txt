@@ -1,0 +1,206 @@
+```solidity
+pragma solidity ^0.4.24;
+
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        assert(c / a == b);
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // assert(b > 0); // Solidity automatically throws when dividing by 0
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+contract Ownable {
+
+    address public owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() internal {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+}
+
+interface tokenRecipient {
+    function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) external ;
+}
+
+/**
+ * @title ESSENTIA_ERC20
+ * @notice This contract implements the ERC20 standard for the ESSENTIA token (ESS).
+ * @dev The contract is based on the OpenZeppelin Ownable contract, which provides basic authorization control.
+ */
+contract ESSENTIA_ERC20 is Ownable {
+
+    using SafeMath for uint256;
+
+    // Mapping of addresses to their respective token balances
+    mapping (address => uint256) public balances;
+
+    // Mapping of allowances for spending tokens
+    mapping (address => mapping (address => uint256)) internal allowed;
+
+    // Public variables for the ESSENTIA ERC20 ESS token contract
+    string public constant standard = "ESSENTIA erc20 and Genesis";
+    uint256 public constant decimals = 18;   // hardcoded to be a constant
+    string public name = "ESSENTIA";
+    string public symbol = "ESS";
+    uint256 public totalSupply;
+
+    // Event to notify when tokens are transferred
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    // Event to notify when an allowance is set
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    /**
+     * @notice Returns the balance of the specified address.
+     * @param _owner The address to query the balance of.
+     * @return The balance of the specified address.
+     * @dev This function is used to check the balance of an address.
+     */
+    function balanceOf(address _owner) public view returns (uint256) {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice Transfers `_value` amount of tokens from the caller's account to `_to`.
+     * @param _to The recipient address.
+     * @param _value The amount of tokens to transfer.
+     * @return A boolean indicating whether the operation was successful.
+     * @dev This function ensures that the sender has enough balance and emits a `Transfer` event.
+     */
+    function transfer(address _to, uint256 _value) public returns (bool) {
+        require(_to != address(0));
+        require(_value <= balances[msg.sender]);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Transfers `_value` amount of tokens from `_from` to `_to` using the allowance mechanism.
+     * @param _from The address to transfer tokens from.
+     * @param _to The recipient address.
+     * @param _value The amount of tokens to transfer.
+     * @return A boolean indicating whether the operation was successful.
+     * @dev This function checks the allowance and the balance of `_from` and emits a `Transfer` event.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool) {
+        require(_to != address(0));
+        require(_value <= balances[_from]);
+        require(_value <= allowed[_from][msg.sender]);
+
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Approves `_spender` to spend `_value` amount of tokens on behalf of the caller.
+     * @param _spender The address that will spend the tokens.
+     * @param _value The amount of tokens to approve.
+     * @return A boolean indicating whether the operation was successful.
+     * @dev This function sets the allowance and emits an `Approval` event.
+     */
+    function approve(address _spender, uint256 _value) public returns (bool) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the remaining number of tokens that `_spender` is allowed to spend on behalf of `_owner`.
+     * @param _owner The address of the token owner.
+     * @param _spender The address of the spender.
+     * @return The remaining allowance.
+     * @dev This function is used to check the current allowance.
+     */
+    function allowance(address _owner, address _spender) public view returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    /**
+     * @notice Increases the allowance granted to `_spender` by adding `_addedValue`.
+     * @param _spender The address that will spend the tokens.
+     * @param _addedValue The amount to increase the allowance by.
+     * @return A boolean indicating whether the operation was successful.
+     * @dev This function updates the allowance and emits an `Approval` event.
+     */
+    function increaseApproval(address _spender, uint _addedValue) public returns (bool) {
+        allowed[msg.sender][_spender] = allowed[msg.sender][_spender].add(_addedValue);
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+
+    /**
+     * @notice Decreases the allowance granted to `_spender` by subtracting `_subtractedValue`.
+     * @param _spender The address that will spend the tokens.
+     * @param _subtractedValue The amount to decrease the allowance by.
+     * @return A boolean indicating whether the operation was successful.
+     * @dev This function updates the allowance and emits an `Approval` event. If the new allowance is less than 0, it is set to 0.
+     */
+    function decreaseApproval(address _spender, uint _subtractedValue) public returns (bool) {
+        uint256 oldValue = allowed[msg.sender][_spender];
+        if (_subtractedValue > oldValue) {
+            allowed[msg.sender][_spender] = 0;
+        } else {
+            allowed[msg.sender][_spender] = oldValue.sub(_subtractedValue);
+        }
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+
+    /**
+     * @notice Approves `_spender` to spend `_value` amount of tokens and then calls a function on `_spender` with additional data.
+     * @param _spender The address that will spend the tokens.
+     * @param _value The amount of tokens to approve.
+     * @param _extraData Additional data to pass to the `receiveApproval` function.
+     * @return A boolean indicating whether the operation was successful.
+     * @dev This function combines the `approve` and `receiveApproval` calls in a single transaction.
+     */
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        tokenRecipient spender = tokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+        return false;
+    }
+}
+```

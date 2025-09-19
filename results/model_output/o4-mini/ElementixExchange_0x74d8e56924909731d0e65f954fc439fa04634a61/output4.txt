@@ -1,0 +1,88 @@
+pragma solidity 0.8.4;
+
+abstract contract OwnableDelegateProxy;
+
+contract ProxyRegistry is Ownable {
+    /// @notice The implementation for delegate proxies. Must be set by the owner before registering proxies.
+    address public delegateProxyImplementation;
+
+    /// @notice The proxy owned by each user.
+    mapping(address => OwnableDelegateProxy) public proxies;
+
+    /// @notice Timestamp at which a given contract address began its grant‐authentication process.
+    mapping(address => uint256) public pending;
+
+    /// @notice Contracts that have completed the delay and are allowed to call users' proxies.
+    mapping(address => bool) public contracts;
+
+    /// @notice Delay after `startGrantAuthentication` before which `endGrantAuthentication` can be called.
+    uint256 public DELAY_PERIOD = 7 days;
+
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool enabled);
+
+    /**
+     * @notice Begin the process of allowing `addr` to call all registered proxies.
+     * @dev Only the owner may call.  Must not already be pending or enabled.
+     */
+    function startGrantAuthentication(address addr) external onlyOwner {
+        require(!contracts[addr], "ProxyRegistry: already authorized");
+        require(pending[addr] == 0, "ProxyRegistry: already pending");
+        pending[addr] = block.timestamp;
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice Complete the process after the delay to allow `addr` to call all proxies.
+     * @dev Only the owner may call.  Must have called `startGrantAuthentication` at least `DELAY_PERIOD` ago.
+     */
+    function endGrantAuthentication(address addr) external onlyOwner {
+        uint256 start = pending[addr];
+        require(start != 0, "ProxyRegistry: not pending");
+        require(block.timestamp >= start + DELAY_PERIOD, "ProxyRegistry: still in delay");
+        pending[addr] = 0;
+        contracts[addr] = true;
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice Revoke an address’s permission to call users’ proxies immediately.
+     * @dev Only the owner may call.
+     */
+    function revokeAuthentication(address addr) external onlyOwner {
+        require(contracts[addr], "ProxyRegistry: not authorized");
+        contracts[addr] = false;
+        if (pending[addr] != 0) {
+            pending[addr] = 0;
+        }
+        emit AuthenticationOperation(addr, false);
+    }
+
+    /**
+     * @notice Deploys and registers a new delegate proxy for the caller.
+     * @dev The caller must not already have a proxy registered.
+     * @return proxy The freshly deployed OwnableDelegateProxy.
+     */
+    function registerProxy()
+        external
+        returns (OwnableDelegateProxy proxy)
+    {
+        require(
+            address(proxies[msg.sender]) == address(0),
+            "ProxyRegistry: proxy already registered"
+        );
+
+        // Deploy a new delegate proxy pointing at `delegateProxyImplementation`.
+        // Initialize it by calling `initialize(address,address)` on the logic contract,
+        // passing in this registry and the proxy owner.
+        proxy = new OwnableDelegateProxy(
+            delegateProxyImplementation,
+            msg.sender,
+            abi.encodeWithSignature("initialize(address,address)", address(this), msg.sender)
+        );
+
+        proxies[msg.sender] = proxy;
+        emit RegisterProxy(msg.sender, address(proxy));
+        return proxy;
+    }
+}

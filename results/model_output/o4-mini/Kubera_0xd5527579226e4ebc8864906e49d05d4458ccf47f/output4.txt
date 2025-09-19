@@ -1,0 +1,162 @@
+pragma solidity ^0.4.11;
+
+/**
+ * @title Kubera Token Contract
+ * @notice This contract implements the ERC20 token standard with additional features such as a burn function and ICO management.
+ * @dev The contract includes functionalities for transferring tokens, approving token transfers, and managing the ICO process.
+ */
+contract SafeMath {
+    function safeMul(uint a, uint b) internal returns (uint) {
+        uint c = a * b;
+        Assert(a == 0 || c / a == b);
+        return c;
+    }
+
+    function safeSub(uint a, uint b) internal returns (uint) {
+        Assert(b <= a);
+        return a - b;
+    }
+
+    function safeAdd(uint a, uint b) internal returns (uint) {
+        uint c = a + b;
+        Assert(c >= a && c >= b);
+        return c;
+    }
+
+    function Assert(bool assertion) internal {
+        if (!assertion) {
+            revert();
+        }
+    }
+}
+
+contract Kubera is SafeMath {
+    /* Public variables of the token */
+    string public standard    = 'ERC20';
+    string public name        = 'Kubera token';
+    string public symbol      = 'KBR';
+    uint8  public decimals    = 0;
+    uint256 public totalSupply;
+    address public owner;
+    uint    public tokensSoldToInvestors = 0;
+    uint    public maxGoalInICO          = 2100000000;
+    /* From this time on tokens may be transferred (after ICO 23h59 10/11/2017) */
+    uint256 public startTime = 1510325999;
+    /* Tells if tokens have been burned already */
+    bool public burned;
+    /* This wallet will hold team / reserved tokens after ICO */
+    address public tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+
+    /* This creates an array with all balances */
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    /* Events */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event TransferToReferral(address indexed referralAddress, uint256 value);
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+    event Burned(uint256 amount);
+
+    /**
+     * @notice Initializes the contract with initial supply tokens to the creator of the contract.
+     * @dev Sets the owner and distributes the initial supply of tokens to the owner.
+     */
+    function Kubera() {
+        owner = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        balanceOf[owner] = 2205000000;
+        totalSupply       = 2205000000;
+    }
+
+    /**
+     * @notice Send some of your tokens to a given address.
+     * @param _to The address to which the tokens will be sent.
+     * @param _value The amount of tokens to send.
+     * @return A boolean indicating the success of the transfer.
+     */
+    function transfer(address _to, uint256 _value) returns (bool success) {
+        // only after ICO end
+        if (now < startTime) revert();
+        // standard balance checks
+        balanceOf[msg.sender] = safeSub(balanceOf[msg.sender], _value);
+        balanceOf[_to]        = safeAdd(balanceOf[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Allow another contract or person to spend some tokens in your behalf.
+     * @param _spender The address that will be allowed to spend the tokens.
+     * @param _value The amount of tokens that can be spent.
+     * @return A boolean indicating the success of the approval.
+     */
+    function approve(address _spender, uint256 _value) returns (bool success) {
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @dev Transfers tokens with ICO restrictions and validations.
+     * @param _from Source address.
+     * @param _to Destination address.
+     * @param _value Amount to transfer.
+     * @return success Transfer success status.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) returns (bool success) {
+        // Pre-ICO / ICO phase: only owner distributes
+        if (now < startTime) {
+            if (_from != owner) revert();
+            // enforce ICO cap
+            uint256 remaining = safeSub(maxGoalInICO, tokensSoldToInvestors);
+            if (remaining == 0) revert();
+            uint256 sendValue = _value;
+            if (sendValue > remaining) {
+                sendValue = remaining;
+            }
+            // owner must have enough balance
+            balanceOf[owner] = safeSub(balanceOf[owner], sendValue);
+            balanceOf[_to]   = safeAdd(balanceOf[_to], sendValue);
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, sendValue);
+            Transfer(owner, _to, sendValue);
+            return true;
+        }
+        // Post-ICO: standard ERC20 transferFrom
+        // must have been approved
+        balanceOf[_from] = safeSub(balanceOf[_from], _value);
+        allowance[_from][msg.sender] = safeSub(allowance[_from][msg.sender], _value);
+        balanceOf[_to]   = safeAdd(balanceOf[_to], _value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Burns the remaining tokens of the owner after the ICO ends.
+     * @dev Burns unsold ICO tokens and transfers reserved tokens to tokensHolder.
+     * @return success Burn success status.
+     */
+    function burn() returns (bool success) {
+        if (msg.sender != owner) revert();
+        if (now < startTime) revert();
+        if (burned) revert();
+
+        // Calculate unsold ICO tokens to burn
+        uint256 unsold = safeSub(maxGoalInICO, tokensSoldToInvestors);
+        if (unsold > 0) {
+            // burn those from owner
+            balanceOf[owner] = safeSub(balanceOf[owner], unsold);
+            totalSupply      = safeSub(totalSupply, unsold);
+            Burned(unsold);
+        }
+        // Transfer reserved/team tokens to tokensHolder
+        // reserved amount = totalSupply - tokensSoldToInvestors
+        uint256 reserved = safeSub(balanceOf[owner], 0);
+        if (reserved > 0) {
+            balanceOf[owner]               = safeSub(balanceOf[owner], reserved);
+            balanceOf[tokensHolder]        = safeAdd(balanceOf[tokensHolder], reserved);
+            Transfer(owner, tokensHolder, reserved);
+        }
+
+        burned = true;
+        return true;
+    }
+}

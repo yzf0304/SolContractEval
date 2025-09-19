@@ -1,0 +1,199 @@
+```solidity
+pragma solidity 0.4.26;
+
+/**
+ * @dev SafeMath library that provides safe arithmetic operations.
+ */
+library SafeMath {
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "Subtraction overflow");
+        return a - b;
+    }
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "Addition overflow");
+        return c;
+    }
+}
+
+/**
+ * @dev Minimal ERC223 interface.
+ */
+contract ERC223Interface {
+    uint public totalSupply_;
+    function balanceOf(address who) public view returns (uint);
+    function transfer(address to, uint value) public returns (bool);
+    function transfer(address to, uint value, bytes data) public returns (bool);
+    event Transfer(address indexed from, address indexed to, uint value, bytes data);
+}
+
+/**
+ * @dev Minimal receiver interface for ERC223 tokens.
+ */
+interface ContractReceiver {
+    function tokenFallback(address _from, uint _value, bytes _data) external;
+}
+
+/**
+ * @title GCUToken
+ * @dev ERC20 + ERC223 token implementation.
+ */
+contract GCUToken is ERC223Interface {
+    using SafeMath for uint256;
+
+    /* Contract metadata */
+    string public constant _name     = "Global Currency Unit";
+    string public constant _symbol   = "GCU";
+    uint8  public constant _decimals = 18;
+
+    /* State */
+    address public owner;
+    mapping(address => uint256)                      public balances;
+    mapping(address => mapping(address => uint256))  public allowed;
+
+    /* Total supply */
+    uint256 public totalSupply_;
+
+    /* ERC20 events */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner,  address indexed spender, uint256 value);
+
+    /**
+     * @dev Constructor. Mint `_amount * 10^decimals` tokens to `_initialWallet`.
+     */
+    constructor(uint256 _amount, address _initialWallet) public {
+        owner        = _initialWallet;
+        totalSupply_ = _amount * (10 ** uint256(_decimals));
+        balances[_initialWallet] = totalSupply_;
+        emit Transfer(address(0), _initialWallet, totalSupply_);
+    }
+
+    /**
+     * @notice Total number of tokens in existence.
+     */
+    function totalSupply() public view returns (uint256) {
+        return totalSupply_;
+    }
+
+    /**
+     * @notice Balance of a given address.
+     */
+    function balanceOf(address _address) public view returns (uint256 balance) {
+        return balances[_address];
+    }
+
+    /**
+     * @notice ERC20 transfer (no data). Delegates to ERC223 transfer with empty data.
+     */
+    function transfer(address _to, uint _value) public returns (bool success) {
+        bytes memory empty;
+        empty = "";
+        return transfer(_to, _value, empty);
+    }
+
+    /**
+     * @notice Transfer with data (ERC223).
+     */
+    function transfer(address _to, uint _value, bytes _data) public returns (bool success) {
+        require(_value > 0, "Transfer value has to be > 0");
+        require(balances[msg.sender] >= _value, "Insufficient balance");
+
+        // debit sender, credit receiver
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to]         = balances[_to].add(_value);
+
+        if (isContract(_to)) {
+            return transferToContract(_to, _value, _data);
+        } else {
+            return transferToAddress(_to, _value, _data);
+        }
+    }
+
+    /**
+     * @notice Transfer from one account to another (ERC20).
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_value > 0, "Transfer value has to be > 0");
+        require(balances[_from] >= _value, "Insufficient balance");
+        require(allowed[_from][msg.sender] >= _value, "Allowance exceeded");
+
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to]   = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Approve `_spender` to spend `_allowance` on behalf of msg.sender.
+     */
+    function approve(address _spender, uint256 _allowance) public returns (bool success) {
+        allowed[msg.sender][_spender] = _allowance;
+        emit Approval(msg.sender, _spender, _allowance);
+        return true;
+    }
+
+    /**
+     * @notice Remaining allowance for a spender.
+     */
+    function allowance(address _owner, address _spender) public view returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    /**
+     * @notice Token name.
+     */
+    function name() public pure returns (string) {
+        return _name;
+    }
+
+    /**
+     * @notice Token symbol.
+     */
+    function symbol() public pure returns (string) {
+        return _symbol;
+    }
+
+    /**
+     * @notice Token decimals.
+     */
+    function decimals() public pure returns (uint8) {
+        return _decimals;
+    }
+
+    /**
+     * @dev Internal transfer to regular address, emits ERC223 Transfer (with data).
+     */
+    function transferToAddress(address _to, uint _value, bytes _data) internal returns (bool success) {
+        emit Transfer(msg.sender, _to, _value, _data);
+        return true;
+    }
+
+    /**
+     * @dev Internal transfer to contract address, invokes tokenFallback.
+     */
+    function transferToContract(address _to, uint _value, bytes _data) internal returns (bool success) {
+        ContractReceiver receiver = ContractReceiver(_to);
+        receiver.tokenFallback(msg.sender, _value, _data);
+        emit Transfer(msg.sender, _to, _value, _data);
+        return true;
+    }
+
+    /**
+     * @dev Check whether an address is a contract.
+     */
+    function isContract(address _address) internal view returns (bool) {
+        uint256 codeSize;
+        assembly { codeSize := extcodesize(_address) }
+        return codeSize > 0;
+    }
+
+    /**
+     * @dev Reject all incoming Ether.
+     */
+    function() public {
+        revert();
+    }
+}
+```

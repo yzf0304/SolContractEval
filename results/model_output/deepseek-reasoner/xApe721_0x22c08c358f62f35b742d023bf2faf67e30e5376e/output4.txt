@@ -1,0 +1,409 @@
+To solve this problem, we need to create an ERC721 token contract that allows users to mint new tokens, claim tokens from an old contract, and manage the collection efficiently. The contract should ensure that minting is controlled, tokens are correctly claimed from the old contract, and metadata is handled properly.
+
+### Approach
+1. **Minting New Tokens**: Users can mint new tokens by paying a fixed price per token. The contract ensures that the number of tokens minted in a single transaction does not exceed a specified limit and that the total supply does not exceed the maximum allowed.
+2. **Claiming Tokens from Old Contract**: Users can claim tokens they own from an old ERC721 contract. This involves checking ownership in the old contract and ensuring the token hasn't already been claimed or minted in the new contract.
+3. **Token Metadata**: The contract uses a base URI to construct token metadata URLs, which can be updated by the owner.
+4. **Administrative Functions**: The owner can pause and start the minting process, update the base URI, and withdraw collected funds to a team wallet.
+
+### Solution Code
+```solidity
+// SPDX-License-Identifier: AGPL-3.0-only
+pragma solidity 0.8.10;
+
+/// @notice Modern, minimalist, and gas efficient ERC-721 implementation.
+/// @author Solmate (https://github.com/Rari-Capital/solmate/blob/main/src/tokens/ERC721.sol)
+abstract contract ERC721 {
+    /*///////////////////////////////////////////////////////////////
+                                 EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event Transfer(address indexed from, address indexed to, uint256 indexed id);
+
+    event Approval(address indexed owner, address indexed spender, uint256 indexed id);
+
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+    /*///////////////////////////////////////////////////////////////
+                          METADATA STORAGE/LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    string public name;
+
+    string public symbol;
+
+    function tokenURI(uint256 id) public view virtual returns (string memory);
+
+    /*///////////////////////////////////////////////////////////////
+                            ERC721 STORAGE                        
+    //////////////////////////////////////////////////////////////*/
+
+    mapping(address => uint256) public balanceOf;
+
+    mapping(uint256 => address) public ownerOf;
+
+    mapping(uint256 => address) public getApproved;
+
+    mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    /*///////////////////////////////////////////////////////////////
+                              CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                              ERC721 LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function approve(address spender, uint256 id) public virtual {
+        address owner = ownerOf[id];
+
+        require(msg.sender == owner || isApprovedForAll[owner][msg.sender], "NOT_AUTHORIZED");
+
+        getApproved[id] = spender;
+
+        emit Approval(owner, spender, id);
+    }
+
+    function setApprovalForAll(address operator, bool approved) public virtual {
+        isApprovedForAll[msg.sender][operator] = approved;
+
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 id
+    ) public virtual {
+        require(from == ownerOf[id], "WRONG_FROM");
+
+        require(to != address(0), "INVALID_RECIPIENT");
+
+        require(
+            msg.sender == from || msg.sender == getApproved[id] || isApprovedForAll[from][msg.sender],
+            "NOT_AUTHORIZED"
+        );
+
+        // Underflow of the sender's balance is impossible because we check for
+        // ownership above and the recipient's balance can't realistically overflow.
+        unchecked {
+            balanceOf[from]--;
+
+            balanceOf[to]++;
+        }
+
+        ownerOf[id] = to;
+
+        delete getApproved[id];
+
+        emit Transfer(from, to, id);
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id
+    ) public virtual {
+        transferFrom(from, to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, from, id, "") ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id,
+        bytes memory data
+    ) public virtual {
+        transferFrom(from, to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, from, id, data) ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                              ERC165 LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function supportsInterface(bytes4 interfaceId) public pure virtual returns (bool) {
+        return
+            interfaceId == 0x01ffc9a7 || // ERC165 Interface ID for ERC165
+            interfaceId == 0x80ac58cd || // ERC165 Interface ID for ERC721
+            interfaceId == 0x5b5e139f; // ERC165 Interface ID for ERC721Metadata
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                       INTERNAL MINT/BURN LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function _mint(address to, uint256 id) internal virtual {
+        require(to != address(0), "INVALID_RECIPIENT");
+
+        require(ownerOf[id] == address(0), "ALREADY_MINTED");
+
+        // Counter overflow is incredibly unrealistic.
+        unchecked {
+            balanceOf[to]++;
+        }
+
+        ownerOf[id] = to;
+
+        emit Transfer(address(0), to, id);
+    }
+
+    function _burn(uint256 id) internal virtual {
+        address owner = ownerOf[id];
+
+        require(ownerOf[id] != address(0), "NOT_MINTED");
+
+        // Ownership check above ensures no underflow.
+        unchecked {
+            balanceOf[owner]--;
+        }
+
+        delete ownerOf[id];
+
+        delete getApproved[id];
+
+        emit Transfer(owner, address(0), id);
+    }
+}
+
+interface ERC721TokenReceiver {
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 id,
+        bytes calldata data
+    ) external returns (bytes4);
+}
+
+library SafeTransferLib {
+    function safeTransferETH(address to, uint256 amount) internal {
+        bool callStatus;
+
+        assembly {
+            // Transfer the ETH and store if it succeeded or not.
+            callStatus := call(gas(), to, amount, 0, 0, 0, 0)
+        }
+
+        require(callStatus, "ETH_TRANSFER_FAILED");
+    }
+}
+
+abstract contract Ownable {
+    address internal _owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() {
+        _owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "Not owner");
+        _;
+    }
+
+    function transferOwnership(address _newOwner) external onlyOwner {
+        _owner = _newOwner;
+        emit OwnershipTransferred(_owner, _newOwner);
+    }
+
+    function renounceOwnership() public onlyOwner {
+        _owner = address(0);
+        emit OwnershipTransferred(_owner, address(0));
+    }
+}
+
+interface IERC721 {
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function getPhunksBelongingToOwner(address _owner) external view returns (uint256[] memory);
+}
+
+library Strings {
+    function toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) return "0";
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+}
+
+contract xApe721 is Ownable, ERC721 {
+    using Strings for uint256;
+
+    uint256 public constant TOTAL_SUPPLY = 10_000;
+    uint256 public constant PRICE_PER_MINT = 0.05 ether;
+    uint256 public constant MAX_MINT_PER_TX = 20;
+
+    bool public mintActive;
+    uint256 public totalSupply;
+    uint256 internal nextMintableId = 10038;
+    string public baseURI;
+    IERC721 public oldContract;
+    address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+    constructor(
+        string memory name,
+        string memory symbol,
+        string memory _baseURI,
+        address _oldContract,
+        address[] memory recipients,
+        uint256[] memory tokens
+    ) ERC721(name, symbol) {
+        require(recipients.length == tokens.length, "Airdrop lengths");
+        baseURI = _baseURI;
+
+        if (_oldContract != address(0)) {
+            oldContract = IERC721(_oldContract);
+        }
+
+        uint256 length = tokens.length;
+        for (uint256 i; i < length; ) {
+            _mint(recipients[i], tokens[i]);
+            totalSupply++;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    modifier onlyTeamWallet() {
+        require(msg.sender == teamWallet, "Not team wallet");
+        _;
+    }
+
+    function mint(uint16 amount) external payable {
+        require(mintActive, "Mint inactive");
+        require(amount > 0 && amount <= MAX_MINT_PER_TX, "Invalid amount");
+        require(msg.value == PRICE_PER_MINT * amount, "Incorrect ETH");
+        require(totalSupply + amount <= TOTAL_SUPPLY, "Exceeds supply");
+
+        for (uint256 i; i < amount; ) {
+            uint256 id = _getNextUnusedID();
+            _mint(msg.sender, id);
+            totalSupply++;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function claim(uint256 tokenId) external payable {
+        require(_ownsOldToken(msg.sender, tokenId), "Not owner");
+        require(ownerOf[tokenId] == address(0), "Already minted");
+        require(totalSupply + 1 <= TOTAL_SUPPLY, "Exceeds supply");
+
+        _mint(msg.sender, tokenId);
+        totalSupply++;
+    }
+
+    function claimAll() external payable {
+        uint256[] memory tokens = oldContract.getPhunksBelongingToOwner(msg.sender);
+        uint256 length = tokens.length;
+        require(totalSupply + length <= TOTAL_SUPPLY, "Exceeds supply");
+
+        for (uint256 i; i < length; ) {
+            uint256 tokenId = tokens[i];
+            if (ownerOf[tokenId] == address(0) && _ownsOldToken(msg.sender, tokenId)) {
+                _mint(msg.sender, tokenId);
+                totalSupply++;
+            }
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _ownsOldToken(address account, uint256 tokenId) internal view returns (bool) {
+        (bool success, bytes memory data) = address(oldContract).staticcall(
+            abi.encodeWithSelector(IERC721.ownerOf.selector, tokenId)
+        );
+        if (!success) return false;
+        return abi.decode(data, (address)) == account;
+    }
+
+    function _getNextUnusedID() internal returns (uint256) {
+        while (true) {
+            if (ownerOf[nextMintableId] == address(0)) {
+                (bool success, ) = address(oldContract).staticcall(
+                    abi.encodeWithSelector(IERC721.ownerOf.selector, nextMintableId)
+                );
+                if (!success) {
+                    uint256 id = nextMintableId;
+                    nextMintableId++;
+                    return id;
+                }
+            }
+            nextMintableId++;
+        }
+    }
+
+    function tokenURI(uint256 id) public view override returns (string memory) {
+        require(ownerOf[id] != address(0), "Nonexistent token");
+        return string(abi.encodePacked(baseURI, id.toString()));
+    }
+
+    function withdraw() external onlyTeamWallet {
+        SafeTransferLib.safeTransferETH(teamWallet, address(this).balance);
+    }
+
+    function pauseMint() external onlyOwner {
+        mintActive = false;
+    }
+
+    function startMint() external onlyOwner {
+        mintActive = true;
+    }
+
+    function setBaseURI(string memory _baseURI) external onlyOwner {
+        baseURI = _baseURI;
+    }
+
+    function supportsInterface(bytes4 interfaceId) public pure override(ERC721) returns (bool) {
+        return super.supportsInterface(interfaceId);
+    }
+
+    function onERC721Received(
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external pure returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+    }
+}
+```
+
+### Explanation
+1. **Minting**: Users can mint tokens by paying 0.05 ETH per token, up to 20 tokens per transaction. The contract ensures the total supply does not exceed 10,000.
+2. **Claiming**: Users can claim tokens they own from the old contract. The contract checks ownership in the old contract and ensures the token is not already claimed or minted.
+3. **Token URI**: Each token's metadata URI is constructed using a base URI and the token ID.
+4. **Administrative Functions**: The owner can pause/start minting, update the base URI, and withdraw funds. The team wallet can withdraw collected ETH.
+
+This solution efficiently handles token minting, claiming, and metadata management while ensuring compliance with ERC721 standards and administrative controls.

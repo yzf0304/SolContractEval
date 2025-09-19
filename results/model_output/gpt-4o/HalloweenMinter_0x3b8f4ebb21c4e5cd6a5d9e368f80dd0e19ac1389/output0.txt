@@ -1,0 +1,121 @@
+Here's the completed implementation of the `HalloweenMinter` contract based on the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface iNFTCollection {
+    function externalMint(address _address, uint256 _amount) external payable;
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address address_) external view returns (uint256);
+    function ownerOf(uint256 tokenId_) external view returns (address);
+    function tokensOfOwner(address _address) external view returns (uint256[] memory);
+}
+
+contract HalloweenMinter is Ownable {
+    address public constant withdrawAddress = 0xdEcf4B112d4120B6998e5020a6B4819E490F7db6;
+    iNFTCollection public NFTCollection = iNFTCollection(0x2d3C8D1A84cA778A3bba0F4fC389330AB96AF3Be);
+
+    constructor() {
+        pause(false);
+        setMintCount(false);
+    }
+
+    uint256 public cost = 0;
+    uint256 public maxSupply = 5000;
+    uint256 public maxMintAmountPerTransaction = 3;
+    uint256 public publicSaleMaxMintAmountPerAddress = 300;
+    bool public paused = true;
+    bool public onlyWhitelisted = true;
+    bool public mintCount = true;
+    mapping(address => uint256) public whitelistMintedAmount;
+    mapping(address => uint256) public publicSaleMintedAmount;
+    bytes32 public merkleRoot;
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract.");
+        _;
+    }
+
+    function mint(uint256 _mintAmount, uint256 _maxMintAmount, bytes32[] calldata _merkleProof) public payable callerIsUser {
+        require(!paused, "Minting is paused");
+        require(_mintAmount > 0, "Mint amount must be greater than zero");
+        require(_mintAmount <= maxMintAmountPerTransaction, "Exceeds maximum mint amount per transaction");
+        require(NFTCollection.totalSupply() + _mintAmount <= maxSupply, "Exceeds maximum supply");
+        require(msg.value >= cost * _mintAmount, "Insufficient funds");
+
+        if (onlyWhitelisted) {
+            bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _maxMintAmount));
+            require(MerkleProof.verify(_merkleProof, merkleRoot, leaf), "Invalid merkle proof");
+            require(whitelistMintedAmount[msg.sender] + _mintAmount <= _maxMintAmount, "Exceeds whitelist limit");
+            whitelistMintedAmount[msg.sender] += _mintAmount;
+        } else {
+            if (mintCount) {
+                require(publicSaleMintedAmount[msg.sender] + _mintAmount <= publicSaleMaxMintAmountPerAddress, "Exceeds public sale limit");
+                publicSaleMintedAmount[msg.sender] += _mintAmount;
+            }
+        }
+
+        NFTCollection.externalMint(msg.sender, _mintAmount);
+    }
+
+    function setMaxSupply(uint256 _maxSupply) public onlyOwner {
+        maxSupply = _maxSupply;
+    }
+
+    function totalSupply() public view returns (uint256) {
+        return NFTCollection.totalSupply();
+    }
+
+    function setMerkleRoot(bytes32 _merkleRoot) public onlyOwner {
+        merkleRoot = _merkleRoot;
+    }
+
+    function setPublicSaleMaxMintAmountPerAddress(uint256 _publicSaleMaxMintAmountPerAddress) public onlyOwner {
+        publicSaleMaxMintAmountPerAddress = _publicSaleMaxMintAmountPerAddress;
+    }
+
+    function setCost(uint256 _newCost) public onlyOwner {
+        cost = _newCost;
+    }
+
+    function setOnlyWhitelisted(bool _state) public onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    function setMaxMintAmountPerTransaction(uint256 _maxMintAmountPerTransaction) public onlyOwner {
+        maxMintAmountPerTransaction = _maxMintAmountPerTransaction;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function setMintCount(bool _state) public onlyOwner {
+        mintCount = _state;
+    }
+
+    function setNFTCollection(address _address) public onlyOwner {
+        NFTCollection = iNFTCollection(_address);
+    }
+
+    function withdraw() public onlyOwner {
+        (bool success, ) = payable(withdrawAddress).call{value: address(this).balance}("");
+        require(success, "Withdraw failed");
+    }
+}
+```
+
+### Explanation of Key Functions
+1. **`mint`**: Handles minting functionality for both whitelisted and public users. It validates user input, checks whitelist proofs if needed, ensures mint limits are respected, and interacts with the NFT collection contract to mint the NFTs.
+2. **`setMaxSupply`**: Updates the max supply of NFTs; only callable by the owner.
+3. **`totalSupply`**: Queries and returns the current supply of NFTs from the collection contract.
+4. **`setMerkleRoot`**: Sets the Merkle root for whitelist verification; only callable by the owner.
+5. **`setPublicSaleMaxMintAmountPerAddress`**: Updates the public sale per-address limit; only callable by the owner.
+6. **`pause` and `setMintCount`**: Allows the owner to toggle contract functionality. 
+7. **`withdraw`**: Transfers contract funds to the specified withdrawal address.
+
+This contract strictly adheres to the design and constraints outlined in the problem.

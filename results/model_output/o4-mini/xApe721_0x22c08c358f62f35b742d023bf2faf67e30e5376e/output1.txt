@@ -1,0 +1,131 @@
+pragma solidity ^0.8.10;
+
+contract xApe721 is Ownable, ERC721 {
+    using Strings for uint256;
+
+    uint256 public constant TOTAL_SUPPLY = 10_000;
+    uint256 public constant PRICE_PER_MINT = 0.05 ether;
+    uint256 public constant MAX_MINT_PER_TX = 20;
+
+    bool public mintActive;
+    uint256 public totalSupply;
+    uint256 internal nextMintableId = 10038;
+
+    string public baseURI;
+    IERC721 public oldContract;
+    address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+    constructor(
+        string memory name_,
+        string memory symbol_,
+        string memory _baseURI,
+        address _oldContract,
+        address[] memory recipients,
+        uint256[] memory tokens
+    ) payable ERC721(name_, symbol_) {
+        require(recipients.length == tokens.length, "Airdrop lengths");
+        baseURI = _baseURI;
+        if (_oldContract != address(0)) {
+            oldContract = IERC721(_oldContract);
+        } else {
+            oldContract = IERC721(address(oldContract));
+        }
+
+        for (uint256 i = 0; i < tokens.length; ++i) {
+            _mint(recipients[i], tokens[i]);
+            totalSupply++;
+        }
+    }
+
+    modifier onlyTeamWallet() {
+        require(msg.sender == teamWallet, "Not callable except by team wallet");
+        _;
+    }
+
+    function mint(uint16 amount) external payable {
+        require(mintActive, "Minting is not active");
+        require(amount > 0 && amount <= MAX_MINT_PER_TX, "Invalid mint amount");
+        require(totalSupply + amount <= TOTAL_SUPPLY, "Exceeds total supply");
+        require(msg.value == PRICE_PER_MINT * amount, "Incorrect ETH amount");
+
+        for (uint16 i = 0; i < amount; i++) {
+            uint256 id = _getNextUnusedID();
+            _mint(msg.sender, id);
+            totalSupply++;
+        }
+    }
+
+    function claim(uint256 tokenId) external payable {
+        require(_ownsOldToken(msg.sender, tokenId), "Not owner of old token");
+        require(ownerOf[tokenId] == address(0), "Already claimed");
+        require(totalSupply + 1 <= TOTAL_SUPPLY, "Exceeds total supply");
+
+        _mint(msg.sender, tokenId);
+        totalSupply++;
+    }
+
+    function claimAll() external payable {
+        uint256[] memory owned = oldContract.getPhunksBelongingToOwner(msg.sender);
+        require(owned.length > 0, "No tokens to claim");
+
+        for (uint256 i = 0; i < owned.length; i++) {
+            uint256 tid = owned[i];
+            if (ownerOf[tid] == address(0)) {
+                _mint(msg.sender, tid);
+                totalSupply++;
+            }
+        }
+    }
+
+    function _ownsOldToken(address account, uint256 tokenId) internal view returns (bool) {
+        return oldContract.ownerOf(tokenId) == account;
+    }
+
+    function _getNextUnusedID() internal returns (uint256) {
+        return nextMintableId++;
+    }
+
+    function tokenURI(uint256 id) public view override returns (string memory) {
+        require(ownerOf[id] != address(0), "Token does not exist");
+        return string(abi.encodePacked(baseURI, id.toString(), ".json"));
+    }
+
+    function withdraw() external onlyTeamWallet {
+        uint256 balance = address(this).balance;
+        (bool success, ) = teamWallet.call{value: balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function pauseMint() external {
+        require(msg.sender == owner(), "Not owner");
+        mintActive = false;
+    }
+
+    function startMint() external {
+        require(msg.sender == owner(), "Not owner");
+        mintActive = true;
+    }
+
+    function setBaseURI(string memory _baseURI) external {
+        require(msg.sender == owner(), "Not owner");
+        baseURI = _baseURI;
+    }
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        pure
+        override
+        returns (bool)
+    {
+        return ERC721.supportsInterface(interfaceId);
+    }
+
+    function onERC721Received(
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external pure returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+    }
+}

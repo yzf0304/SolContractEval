@@ -1,0 +1,128 @@
+Here is the completed Bonus contract (Solidity 0.4.18) with all of the requested methods filled in. You can drop this into the same file below your existing SafeMath, Ownable and IcoPhase definitions.
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract Bonus is IcoPhase, Ownable {
+    using SafeMath for uint256;
+
+    // decimals of tokens (not used directly here but left for completeness)
+    uint256 public constant decimals = 18;
+
+    // enable / disable bonus system
+    bool public isBonus;
+
+    // bonus bookkeeping
+    mapping(address => uint256) public bonusAccountBalances;
+    mapping(uint256 => address) public bonusAccountIndex;
+    uint256 public bonusAccountCount;
+
+    /**
+     * @notice Initializes the contract with bonuses enabled.
+     */
+    function Bonus() public {
+        isBonus = true;
+    }
+
+    /**
+     * @notice Enables the bonus system.
+     * @dev Can only be called by the owner when bonuses are currently disabled.
+     */
+    function enableBonus() public onlyOwner returns (bool) {
+        require(!isBonus);
+        isBonus = true;
+        return true;
+    }
+
+    /**
+     * @notice Disables the bonus system.
+     * @dev Can only be called by the owner when bonuses are currently enabled.
+     */
+    function disableBonus() public onlyOwner returns (bool) {
+        require(isBonus);
+        isBonus = false;
+        return true;
+    }
+
+    /**
+     * @notice Gets the bonus percentage based on the current block timestamp.
+     * @dev Compares now() to the phases defined in IcoPhase.
+     * @return bonus percentage (an integer, e.g. 25 == 25%).
+     */
+    function getBonusByTime() public constant returns (uint256) {
+        if (now >= phasePresale_From && now < phasePresale_To) {
+            // presale bonus: 25%
+            return 25;
+        } else if (now >= phasePublicSale1_From && now < phasePublicSale1_To) {
+            // public sale 1 bonus: 15%
+            return 15;
+        } else if (now >= phasePublicSale2_From && now < phasePublicSale2_To) {
+            // public sale 2 bonus: 10%
+            return 10;
+        } else if (now >= phasePublicSale3_From && now < phasePublicSale3_To) {
+            // public sale 3 bonus: 5%
+            return 5;
+        }
+        // outside any bonus phase
+        return 0;
+    }
+
+    /**
+     * @notice Calculates the bonus amount based on the provided ETH value.
+     * @dev If bonuses are disabled, returns 0. Otherwise applies the percentage.
+     * @param _value The amount of Wei (ETH) to base the bonus on.
+     * @return The bonus amount in Wei.
+     */
+    function getBonusByETH(uint256 _value) public constant returns (uint256) {
+        if (!isBonus) {
+            return 0;
+        }
+        uint256 pct = getBonusByTime();
+        if (pct == 0) {
+            return 0;
+        }
+        return _value.mul(pct).div(100);
+    }
+
+    /**
+     * @notice Returns the bonus balance of a specific account.
+     * @param _owner The address whose bonus balance to query.
+     */
+    function balanceBonusOf(address _owner) public constant returns (uint256) {
+        return bonusAccountBalances[_owner];
+    }
+
+    /**
+     * @notice Pays out the stored bonus to the given address.
+     * @dev Transfers the owed Wei to `_address` and zeroes out its stored balance.
+     *      Only the owner may call this.
+     * @param _address The beneficiary of the bonus payout.
+     */
+    function payBonusToAddress(address _address) public onlyOwner returns (bool) {
+        uint256 amount = bonusAccountBalances[_address];
+        require(amount > 0);
+        // zero before transfer to prevent re‐entrancy
+        bonusAccountBalances[_address] = 0;
+        _address.transfer(amount);
+        return true;
+    }
+
+    /**
+     * @notice Fallback function to allow the contract to receive ETH.
+     */
+    function () public payable {
+        // contract can hold ETH for future bonus payouts
+    }
+}
+```
+
+Explanation of key choices:
+1. We chose a 4‐tier bonus schedule:  
+   • Presale: 25%  
+   • PublicSale1: 15%  
+   • PublicSale2: 10%  
+   • PublicSale3: 5%  
+   Outside those windows the bonus is zero.  
+2. `getBonusByETH` simply computes `_value * pct / 100` in Wei.  
+3. `payBonusToAddress` zeroes the stored balance and transfers the ETH to the recipient.  
+4. The bare fallback (`function () public payable`) lets the contract accumulate ETH to cover bonus payouts.

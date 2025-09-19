@@ -1,0 +1,143 @@
+Below is the complete implementation of the `ClaimContract` according to the provided specifications:
+
+```solidity
+pragma solidity 0.7.4;
+
+interface IFlashToken {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function mint(address to, uint256 value) external returns (bool);
+    function burn(uint256 value) external returns (bool);
+}
+
+library SafeMath {
+    function add(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x + y) >= x, "MATH:: ADD_OVERFLOW");
+    }
+    function sub(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x - y) <= x, "MATH:: SUB_UNDERFLOW");
+    }
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        require(c / a == b, "MATH:: MUL_OVERFLOW");
+        return c;
+    }
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "MATH:: DIVISION_BY_ZERO");
+        uint256 c = a / b;
+        return c;
+    }
+}
+
+library MerkleProof {
+    function verify(
+        bytes32[] memory proof,
+        bytes32 root,
+        bytes32 leaf
+    ) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+
+            if (computedHash <= proofElement) {
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+
+        return computedHash == root;
+    }
+}
+
+contract ClaimContract {
+    using MerkleProof for bytes32[];
+    using SafeMath for uint256;
+
+    enum MigrationType { V1_UNCLAIMED, HOLDER, STAKER }
+
+    address public constant FLASH_TOKEN_V1 = 0xB4467E8D621105312a914F1D42f10770C0Ffe3c8;
+    address public constant FLASH_TOKEN_V2 = 0x20398aD62bb2D930646d45a6D4292baa0b860C1f;
+    bytes32 public constant MERKLE_ROOT = 0x56dc616cf485d230be34e774839fc4b1b11b0ab99b92d594f7f16f4065f7e814;
+    uint256 public constant V1_UNCLAIMED_DEADLINE = 1617235140;
+
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    event Claimed(uint256 index, address sender, uint256 amount);
+
+    function isClaimed(uint256 index) public view returns (bool) {
+        uint256 claimedWordIndex = index / 256;
+        uint256 claimedBitIndex = index % 256;
+        uint256 claimedWord = claimedBitMap[claimedWordIndex];
+        uint256 mask = (1 << claimedBitIndex);
+        return claimedWord & mask == mask;
+    }
+
+    function _setClaimed(uint256 index) private {
+        uint256 claimedWordIndex = index / 256;
+        uint256 claimedBitIndex = index % 256;
+        claimedBitMap[claimedWordIndex] = claimedBitMap[claimedWordIndex] | (1 << claimedBitIndex);
+    }
+
+    function _getMigratableAmountAndTransferV1(address _user, uint256 _balance) private returns (uint256 flashV2Mint) {
+        require(IFlashToken(FLASH_TOKEN_V1).transferFrom(_user, address(this), _balance), "TOKEN_TRANSFER_FAILED");
+        return _balance;
+    }
+
+    function claim(
+        uint256 index,
+        uint256 balance,
+        uint256 bonusAmount,
+        uint256 expiry,
+        uint256 expireAfter,
+        MigrationType migrationType,
+        bytes32[] calldata merkleProof
+    ) external {
+        require(!isClaimed(index), "ALREADY_CLAIMED");
+
+        bytes32 node = keccak256(abi.encodePacked(index, msg.sender, balance, bonusAmount, expiry, expireAfter, uint256(migrationType)));
+
+        require(node.verify(merkleProof, MERKLE_ROOT), "INVALID_MERKLE_PROOF");
+
+        if (migrationType == MigrationType.V1_UNCLAIMED) {
+            require(block.timestamp < V1_UNCLAIMED_DEADLINE, "DEADLINE_EXPIRED");
+        } else if (migrationType == MigrationType.STAKER) {
+            if (block.timestamp > expiry) {
+                require(IFlashToken(FLASH_TOKEN_V2).burn(balance.add(bonusAmount)), "BURN_FAILED");
+                emit Claimed(index, msg.sender, 0);
+                _setClaimed(index);
+                return;
+            } else if (block.timestamp > expireAfter) {
+                uint256 burnAmount = balance.mul(block.timestamp.sub(expireAfter)).div(expiry.sub(expireAfter));
+                if (burnAmount > 0) {
+                    require(IFlashToken(FLASH_TOKEN_V2).burn(burnAmount), "BURN_FAILED");
+                }
+                balance = balance.sub(burnAmount);
+            }
+        }
+
+        uint256 flashV2Mint = _getMigratableAmountAndTransferV1(msg.sender, balance);
+        require(IFlashToken(FLASH_TOKEN_V2).mint(msg.sender, flashV2Mint.add(bonusAmount)), "MINT_FAILED");
+
+        emit Claimed(index, msg.sender, flashV2Mint.add(bonusAmount));
+        _setClaimed(index);
+    }
+}
+```
+
+### Key Points:
+- **Claim Verification**: The `claim` function verifies the user's claim using Merkle proof and checks the migration type conditions.
+- **Migration Types**:
+  - `V1_UNCLAIMED`: Checks if the claim is within the V1 unclaimed deadline.
+  - `HOLDER`: No specific conditions aside from Merkle proof validation.
+  - `STAKER`: Handles token burning based on the time elapsed compared to the expiry and expireAfter timestamps.
+- **Token Transfer and Minting**: Transfers V1 tokens and mints V2 tokens for eligible claims.
+- **Event Logging**: Emits an event every time a claim is successfully processed.

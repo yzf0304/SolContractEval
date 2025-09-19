@@ -1,0 +1,137 @@
+Here's the complete implementation of the SaudiPotatoz contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract SaudiPotatoz is ERC721A, Ownable, ReentrancyGuard {
+    string public baseURI;
+    uint public price = 0 ether;
+    uint public maxPerTx = 1;
+    uint public maxPerWallet = 1;
+    uint public totalFree = 0;
+    uint public maxSupply = 5000;
+    uint public nextOwnerToExplicitlySet;
+    bool public mintEnabled;
+
+    constructor() ERC721A("SaudiPotatoz", "SaudiPotatoz") {}
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function freeMint(uint256 amt) external callerIsUser {
+        require(mintEnabled, "Minting not enabled");
+        require(amt <= maxPerTx, "Exceeds max per tx");
+        require(totalSupply() + amt <= totalFree, "Exceeds free supply");
+        require(_numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max per wallet");
+
+        _safeMint(msg.sender, amt);
+    }
+
+    function mint(uint256 amt) external payable {
+        require(mintEnabled, "Minting not enabled");
+        require(amt <= maxPerTx, "Exceeds max per tx");
+        require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+        require(_numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max per wallet");
+        require(msg.value >= price * amt, "Insufficient funds");
+
+        _safeMint(msg.sender, amt);
+    }
+
+    function ownerBatchMint(uint256 amt) external onlyOwner {
+        require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+        _safeMint(msg.sender, amt);
+    }
+
+    function toggleMinting() external onlyOwner {
+        mintEnabled = !mintEnabled;
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function setBaseURI(string calldata baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setPrice(uint256 price_) external onlyOwner {
+        price = price_;
+    }
+
+    function setTotalFree(uint256 totalFree_) external onlyOwner {
+        totalFree = totalFree_;
+    }
+
+    function setMaxPerTx(uint256 maxPerTx_) external onlyOwner {
+        maxPerTx = maxPerTx_;
+    }
+
+    function setMaxPerWallet(uint256 maxPerWallet_) external onlyOwner {
+        maxPerWallet = maxPerWallet_;
+    }
+
+    function setmaxSupply(uint256 maxSupply_) external onlyOwner {
+        maxSupply = maxSupply_;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        (bool success, ) = msg.sender.call{value: address(this).balance}("");
+        require(success, "Transfer failed");
+    }
+
+    function setOwnersExplicit(uint256 quantity) external onlyOwner nonReentrant {
+        _setOwnersExplicit(quantity);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return ownershipOf(tokenId);
+    }
+
+    function _setOwnersExplicit(uint256 quantity) internal {
+        require(quantity > 0, "quantity must be nonzero");
+        require(currentIndex > 0, "no tokens minted yet");
+        
+        uint256 start = nextOwnerToExplicitlySet;
+        uint256 end = start + quantity - 1;
+        
+        if (end >= currentIndex) {
+            end = currentIndex - 1;
+        }
+
+        for (uint256 i = start; i <= end; i++) {
+            if (_ownerships[i].addr == address(0)) {
+                TokenOwnership memory ownership = ownershipOf(i);
+                _ownerships[i].addr = ownership.addr;
+                _ownerships[i].startTimestamp = ownership.startTimestamp;
+            }
+        }
+        nextOwnerToExplicitlySet = end + 1;
+    }
+}
+```
+
+### Key Features:
+1. **ERC721A Implementation**: Utilizes the ERC721A standard for efficient batch minting
+2. **Dual Minting System**: Supports both free and paid minting phases with separate limits
+3. **Security Measures**:
+   - Reentrancy protection
+   - EOA-only minting through `callerIsUser` modifier
+   - Ownership controls for sensitive functions
+4. **Flexible Configuration**:
+   - Adjustable price, supply limits, and minting rules
+   - Owner-controlled metadata URI
+   - Explicit ownership tracking for optimization
+5. **Withdrawal Safety**: Protected withdrawal function with non-reentrant guard
+
+### Usage Notes:
+- Owner should configure initial parameters (baseURI, price, limits) after deployment
+- Free mint phase can be controlled through `totalFree` setting
+- Paid minting becomes available after free allocation is exhausted
+- Ownership tracking optimization helps maintain contract efficiency as collection grows

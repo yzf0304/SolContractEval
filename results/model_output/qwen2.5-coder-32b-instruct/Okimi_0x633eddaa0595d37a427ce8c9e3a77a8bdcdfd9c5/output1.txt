@@ -1,0 +1,233 @@
+Below is the completed implementation of the `Okimi` NFT contract based on the provided description and context. The contract inherits from `Ownable`, `ERC721A`, and `ReentrancyGuard` to provide the necessary functionalities.
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity 0.8.7;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "erc721a/contracts/ERC721A.sol";
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+  uint256 public immutable maxPerAddressDuringMint;
+  uint256 public immutable amountForDevs;
+  uint256 public immutable amountForSaleAndDev;
+  uint256 internal immutable collectionSize;
+  uint256 internal immutable maxBatchSize;
+
+  struct SaleConfig {
+    uint32 publicSaleStartTime;
+    uint64 publicPriceWei;
+  }
+
+  SaleConfig public saleConfig;
+  string private baseURI;
+
+  /**
+   * @notice Initializes the contract with default values for the NFT collection.
+   * @dev Sets the maximum per address during mint, batch size, collection size, and initial sale configuration.
+   */
+  constructor()
+  ERC721A("Okimi", "OKM")
+  {
+    maxPerAddressDuringMint = 5;
+    maxBatchSize = 5;
+    collectionSize = 1500;
+    amountForDevs = 150;
+    amountForSaleAndDev = 1350;
+    saleConfig.publicPriceWei = 5 ether / 1000;  // 0.005 ETH
+    saleConfig.publicSaleStartTime = uint32(block.timestamp);
+  }
+
+  /**
+   * @notice Modifier to ensure that the caller is not another contract.
+   * @dev Prevents contracts from calling the function, allowing only EOA (Externally Owned Accounts).
+   */
+  modifier callerIsUser() {
+    require(tx.origin == msg.sender, "The caller is another contract");
+    _;
+  }
+
+  /**
+   * @notice Allows users to mint a specified quantity of NFTs.
+   * @dev Checks if the sale is active, ensures the mint does not exceed the max supply or per-address limit, and mints the NFTs.
+   * @param quantity The number of NFTs to mint.
+   */
+  function mint(uint256 quantity)
+    external
+    payable
+    callerIsUser
+    nonReentrant
+  {
+    require(quantity > 0 && quantity <= maxBatchSize, "Invalid mint amount");
+    require(totalMinted() + quantity <= amountForSaleAndDev, "Mint exceeds available supply");
+    require(numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint, "Mint exceeds per address limit");
+    require(isSaleOn(saleConfig.publicPriceWei, saleConfig.publicSaleStartTime), "Sale is not active");
+    require(msg.value >= saleConfig.publicPriceWei * quantity, "Insufficient funds");
+
+    _safeMint(msg.sender, quantity);
+
+    refundIfOver(saleConfig.publicPriceWei * quantity);
+  }
+
+  /**
+   * @notice Refunds the user if they sent more ETH than the required price.
+   * @dev Ensures the user has sent at least the required amount and refunds any excess.
+   * @param price The total price for the minted NFTs.
+   */
+  function refundIfOver(uint256 price)
+    private
+  {
+    require(msg.value >= price, "Insufficient funds sent");
+    if (msg.value > price) {
+      Address.sendValue(payable(msg.sender), msg.value - price);
+    }
+  }
+
+  /**
+   * @notice Checks if the sale is currently active.
+   * @dev Returns true if the sale has started and the price is non-zero.
+   * @param _price The public price of the NFT.
+   * @param _startTime The start time of the public sale.
+   * @return bool True if the sale is active, false otherwise.
+   */
+  function isSaleOn(uint256 _price, uint256 _startTime)
+    public
+    view
+    returns (bool) 
+  {
+    return block.timestamp >= _startTime && _price > 0;
+  }
+
+  /**
+   * @notice Gets the current public price of the NFT.
+   * @dev Converts the stored public price to a uint256 and returns it.
+   * @return uint256 The current public price of the NFT.
+   */
+  function getPrice()
+    public
+    view
+    returns (uint256)
+  {
+    return saleConfig.publicPriceWei;
+  }
+
+  /**
+   * @notice Sets the public sale configuration.
+   * @dev Allows the owner to set the public sale start time and price.
+   * @param timestamp The new start time for the public sale.
+   * @param price The new public price for the NFT.
+   */
+  function setPublicSaleConfig(uint32 timestamp, uint64 price)
+    external
+    onlyOwner 
+  {
+    saleConfig.publicSaleStartTime = timestamp;
+    saleConfig.publicPriceWei = price;
+  }
+
+  /**
+   * @notice Reserves a specified quantity of NFTs for the owner.
+   * @dev Ensures the total supply does not exceed the dev mint limit and mints in batches.
+   * @param quantity The number of NFTs to reserve.
+   */
+  function reserve(uint256 quantity)
+    external
+    onlyOwner
+  {
+    require(totalMinted() + quantity <= amountForDevs, "Reserve exceeds available dev supply");
+    _safeMint(msg.sender, quantity);
+  }
+
+  /**
+   * @notice Sets the base URI for the NFT metadata.
+   * @dev Allows the owner to set the base URI for the NFTs.
+   * @param baseURI_ The new base URI for the NFT metadata.
+   */
+  function setBaseURI(string calldata baseURI_)
+    external
+    onlyOwner 
+  {
+    baseURI = baseURI_;
+  }
+
+  /**
+   * @notice Withdraws the contract's balance to the owner's address.
+   * @dev Uses the `call` method to send the entire contract balance to the owner, ensuring no reentrancy.
+   */
+  function withdraw()
+    external
+    onlyOwner
+    nonReentrant 
+  {
+    Address.sendValue(payable(msg.sender), address(this).balance);
+  }
+
+  /**
+   * @notice Gets the number of NFTs minted by a specific address.
+   * @dev Returns the number of NFTs minted by the given address.
+   * @param owner The address to check.
+   * @return uint256 The number of NFTs minted by the address.
+   */
+  function numberMinted(address owner)
+    public
+    view
+    returns (uint256) 
+  {
+    return _numberMinted(owner);
+  }
+
+  /**
+   * @notice Gets the ownership data for a specific NFT token.
+   * @dev Returns the ownership data for the specified token ID.
+   * @param tokenId The ID of the NFT token.
+   * @return TokenOwnership The ownership data for the token.
+   */
+  function getOwnershipData(uint256 tokenId) 
+    external
+    view
+    returns (TokenOwnership memory)
+  {
+    return _ownershipOf(tokenId);
+  }
+
+  /**
+   * @notice Gets the total number of NFTs minted.
+   * @dev Calculates the total number of NFTs minted by subtracting the start token ID from the current index.
+   * @return uint256 The total number of NFTs minted.
+   */
+  function totalMinted()
+    public
+    view
+    returns (uint256) 
+  {
+    return _totalMinted();
+  }
+
+  /**
+   * @notice Receives Ether and does nothing.
+   * @dev This function is used to receive Ether without reverting.
+   */
+  receive() external payable {}
+
+  /**
+   * @dev Base URI for computing {tokenURI}. If set, the resulting URI for each
+   * token will be the concatenation of the `baseURI` and the `tokenId`. Empty
+   * by default, can be overriden in child contracts.
+   */
+  function _baseURI() internal view virtual override returns (string memory) {
+    return baseURI;
+  }
+}
+```
+
+### Notes:
+- **Immutable Variables**: `maxPerAddressDuringMint`, `amountForDevs`, `amountForSaleAndDev`, `collectionSize`, and `maxBatchSize` are set as immutable in the constructor to ensure they cannot be changed after deployment.
+- **Modifiers**: The `callerIsUser` modifier ensures that only EOAs can call the `mint` function.
+- **Mint Functionality**: The `mint` function checks various conditions before minting, including whether the sale is active and whether the sender has exceeded the mint limit.
+- **Refund Logic**: If a user sends more ETH than the required amount, any excess is refunded.
+- **Ownership and Reentrancy**: The `reserve`, `withdraw`, and `mint` functions include the `onlyOwner` and `nonReentrant` modifiers to ensure proper ownership control and prevent reentrancy attacks.
+- **Base URI**: The `_baseURI()` function is overridden to provide the base URI for the metadata.
+  
+This contract should be carefully reviewed and tested before deployment to the mainnet.

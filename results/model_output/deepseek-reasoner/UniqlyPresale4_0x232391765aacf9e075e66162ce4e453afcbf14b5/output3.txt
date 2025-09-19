@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: Unlicense
+pragma solidity 0.8.2;
+
+contract UniqlyPresale4 {
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+    address public owner;
+    
+    uint256 constant failSafeTime = 2 weeks;
+    bool public presaleEnded;
+    bool public presaleFailed;
+    bool public presaleStarted;
+    mapping(address => uint256) private balances;
+    address public newOwner;
+
+    constructor(
+        uint256 _presaleLimit,
+        uint256 _minPerUser,
+        uint256 _maxPerUser,
+        uint256 _presaleEnd,
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 amount = msg.value + balances[msg.sender];
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+        balances[msg.sender] = amount;
+
+        if (address(this).balance >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    function start() external {
+        require(msg.sender == owner, "Only owner can start");
+        presaleStarted = true;
+    }
+
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    function withdraw() external returns (bool) {
+        if (!presaleEnded && block.timestamp >= presaleEnd + failSafeTime) {
+            presaleFailed = true;
+            presaleEnded = true;
+        }
+
+        if (!presaleEnded) return false;
+
+        if (presaleFailed) {
+            uint256 amount = balances[msg.sender];
+            if (amount == 0) return false;
+            balances[msg.sender] = 0;
+            send(msg.sender, amount);
+            return true;
+        } else {
+            if (msg.sender != owner) return false;
+            uint256 balance = address(this).balance;
+            if (balance == 0) return false;
+            send(owner, balance);
+            return true;
+        }
+    }
+
+    function send(address user, uint256 amount) private {
+        payable(user).send(amount);
+    }
+
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Only owner");
+        token.transfer(owner, token.balanceOf(address(this)));
+    }
+
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Only owner");
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Only new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}

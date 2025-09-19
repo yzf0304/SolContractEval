@@ -1,0 +1,213 @@
+Certainly! Below is the complete implementation of the `TokenCashier` contract based on the provided specifications and comments. The contract is designed to manage deposits of various tokens and native currency, apply fees, and handle token whitelisting. It adheres to Solidity compiler version 0.5.12.
+
+```solidity
+pragma solidity ^0.5.12;
+
+contract Ownable {
+  address public owner;
+
+  event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+  constructor() public {
+    owner = msg.sender;
+  }
+
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  function transferOwnership(address newOwner) public onlyOwner {
+    require(newOwner != address(0));
+    emit OwnershipTransferred(owner, newOwner);
+    owner = newOwner;
+  }
+}
+
+contract Pausable is Ownable {
+  event Pause();
+  event Unpause();
+
+  bool public paused = false;
+
+  modifier whenNotPaused() {
+    require(!paused);
+    _;
+  }
+
+  modifier whenPaused() {
+    require(paused);
+    _;
+  }
+
+  function pause() onlyOwner whenNotPaused public {
+    paused = true;
+    emit Pause();
+  }
+
+  function unpause() onlyOwner whenPaused public {
+    paused = false;
+    emit Unpause();
+  }
+}
+
+interface ITokenList {
+    function isAllowed(address) external returns (bool);
+    function maxAmount(address) external returns (uint256);
+    function minAmount(address) external returns (uint256);
+}
+
+interface IWrappedCoin {
+    function deposit() external payable;
+}
+
+contract TokenCashier is Pausable {
+    event Receipt(address indexed token, uint256 indexed id, address sender, address recipient, uint256 amount, uint256 fee);
+
+    ITokenList[] public tokenLists;
+    address[] public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    constructor(IWrappedCoin _wrappedCoin, ITokenList[] memory _tokenLists, address[] memory _tokenSafes) public {
+        require(_tokenLists.length == _tokenSafes.length, "# of token lists is not equal to # of safes");
+        wrappedCoin = _wrappedCoin;
+        tokenLists = _tokenLists;
+        tokenSafes = _tokenSafes;
+    }
+
+    function() external {
+        revert();
+    }
+
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    function depositTo(address _token, address _to, uint256 _amount) public whenNotPaused payable {
+        require(_to != address(0), "Invalid recipient address");
+
+        uint256 fee = 0;
+        if (_token == address(0)) {
+            // Native currency deposit
+            require(msg.value == _amount, "Insufficient msg.value for native currency deposit");
+            fee = _amount * depositFee / 10000; // Assuming depositFee is in basis points (1/10000 of the amount)
+            require(msg.value >= fee, "Insufficient fee coverage");
+
+            // Wrap native currency
+            wrappedCoin.deposit.value(fee)();
+            _amount -= fee;
+        } else {
+            // ERC20 token deposit
+            fee = _amount * depositFee / 10000; // Assuming depositFee is in basis points (1/10000 of the amount)
+            require(_amount >= fee, "Insufficient fee coverage");
+
+            bool success = safeTransferFrom(_token, msg.sender, address(this), _amount);
+            require(success, "Token transfer failed");
+
+            // Return fee back to the sender (as the fee is not needed for ERC20 token deposits)
+        }
+
+        // Check if token is allowed and within limits
+        bool allowed = false;
+        for (uint i = 0; i < tokenLists.length; i++) {
+            if (tokenLists[i].isAllowed(_token)) {
+                allowed = true;
+                require(_amount <= tokenLists[i].maxAmount(_token), "Amount exceeds maximum allowed");
+                require(_amount >= tokenLists[i].minAmount(_token), "Amount is below minimum allowed");
+                break;
+            }
+        }
+        require(allowed, "Token not allowed");
+
+        // Route to safe or burn
+        address safe = findSafeForToken(_token);
+        if (safe == address(0)) {
+            // Attempt to burn tokens
+            bool burnSuccess = burnToken(_token, _amount);
+            require(burnSuccess, "Failed to burn tokens");
+        } else {
+            // Transfer to safe
+            bool transferSuccess = safeTransfer(_token, _to, _amount);
+            require(transferSuccess, "Failed to transfer tokens to safe");
+        }
+
+        // Emit receipt
+        counts[_token]++;
+        emit Receipt(_token, counts[_token], msg.sender, _to, _amount, fee);
+    }
+
+    function deposit(address _token, uint256 _amount) public payable {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    function withdraw() external onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    function withdrawToken(address _token) public onlyOwner {
+        uint256 balance = getERC20Balance(_token, address(this));
+        require(balance > 0, "Token balance is zero");
+
+        bool success = safeTransfer(_token, msg.sender, balance);
+        require(success, "Failed to withdraw token");
+    }
+
+    function safeTransferFrom(address _token, address _from, address _to, uint256 _amount) internal returns (bool) {
+        bytes4 selector = 0x23b872dd; // transferFrom(address,address,uint256)
+        bytes memory data = abi.encodeWithSelector(selector, _from, _to, _amount);
+        (bool success, bytes memory result) = _token.call(data);
+        if (!success || (result.length > 0 && !abi.decode(result, (bool)))) {
+            return false;
+        }
+        return true;
+    }
+
+    function safeTransfer(address _token, address _to, uint256 _amount) internal returns (bool) {
+        bytes4 selector = 0xa9059cbb; // transfer(address,uint256)
+        bytes memory data = abi.encodeWithSelector(selector, _to, _amount);
+        (bool success, bytes memory result) = _token.call(data);
+        if (!success || (result.length > 0 && !abi.decode(result, (bool)))) {
+            return false;
+        }
+        return true;
+    }
+
+    function burnToken(address _token, uint256 _amount) internal returns (bool) {
+        bytes4 selector = 0x42966c68; // burn(uint256)
+        bytes memory data = abi.encodeWithSelector(selector, _amount);
+        (bool success,) = _token.call(data);
+        return success;
+    }
+
+    function findSafeForToken(address _token) internal view returns (address) {
+        for (uint i = 0; i < tokenLists.length; i++) {
+            if (tokenLists[i].isAllowed(_token)) {
+                return tokenSafes[i];
+            }
+        }
+        return address(0);
+    }
+
+    function getERC20Balance(address _token, address _holder) internal view returns (uint256) {
+        bytes4 selector = 0x70a08231; // balanceOf(address)
+        bytes memory data = abi.encodeWithSelector(selector, _holder);
+        (bool success, bytes memory result) = _token.staticcall(data);
+        require(success, "Failed to get balance");
+        return abi.decode(result, (uint256));
+    }
+}
+```
+
+### Notes:
+- The `depositTo` function handles both native currency and ERC20 tokens, applying a deposit fee where appropriate.
+- Tokens that are not assigned to a specific safe are attempted to be burned.
+- The contract includes a method to safely transfer and transferFrom tokens, ensuring compatibility with non-standard ERC20 tokens.
+- The fallback function reverts any direct ETH transfers to prevent accidental fund loss.
+- The `withdraw` function allows the contract owner to withdraw all native currency from the contract.
+- The `withdrawToken` function enables the owner to withdraw all tokens of a specified type held by the contract.

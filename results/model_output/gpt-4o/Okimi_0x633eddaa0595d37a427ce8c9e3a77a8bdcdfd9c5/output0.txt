@@ -1,0 +1,140 @@
+Below is the completed `Okimi` contract based on the provided context and the outlined specification. It includes implementation for all the required functionalities:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    uint256 public immutable maxPerAddressDuringMint;
+    uint256 public immutable amountForDevs;
+    uint256 public immutable amountForSaleAndDev;
+    uint256 internal immutable collectionSize;
+    uint256 internal immutable maxBatchSize;
+
+    struct SaleConfig {
+        uint32 publicSaleStartTime;
+        uint64 publicPriceWei;
+    }
+
+    SaleConfig public saleConfig;
+
+    string private _baseTokenURI;
+
+    constructor()
+        ERC721A("Okimi", "OKM")
+    {
+        maxPerAddressDuringMint = 5;
+        maxBatchSize = 5;
+        collectionSize = amountForDevs = amountForSaleAndDev = 1500;
+        saleConfig.publicPriceWei = 5 ether / 1000; // 0.005 ETH
+        saleConfig.publicSaleStartTime = uint32(block.timestamp);
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Okimi: Caller is not a user");
+        _;
+    }
+
+    function mint(uint256 quantity) external payable callerIsUser {
+        uint256 price = uint256(saleConfig.publicPriceWei);
+        uint256 startTime = uint256(saleConfig.publicSaleStartTime);
+        require(isSaleOn(price, startTime), "Okimi: Sale is not active");
+        require(totalSupply() + quantity <= collectionSize, "Okimi: Exceeds max supply");
+        require(numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint, "Okimi: Exceeds mint limit");
+        require(quantity <= maxBatchSize, "Okimi: Exceeds max batch size");
+
+        _safeMint(msg.sender, quantity);
+        refundIfOver(price * quantity);
+    }
+
+    function refundIfOver(uint256 price) private {
+        require(msg.value >= price, "Okimi: Insufficient ETH sent");
+        if (msg.value > price) {
+            (bool success, ) = msg.sender.call{value: msg.value - price}("");
+            require(success, "Okimi: Refund failed");
+        }
+    }
+
+    function isSaleOn(uint256 _price, uint256 _startTime) public view returns (bool) {
+        return _price != 0 && block.timestamp >= _startTime;
+    }
+
+    function getPrice() public view returns (uint256) {
+        return uint256(saleConfig.publicPriceWei);
+    }
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price) external onlyOwner {
+        saleConfig.publicSaleStartTime = timestamp;
+        saleConfig.publicPriceWei = price;
+    }
+
+    function reserve(uint256 quantity) external onlyOwner {
+        require(totalSupply() + quantity <= amountForDevs, "Okimi: Exceeds dev mint limit");
+        require(quantity % maxBatchSize == 0, "Okimi: Must mint in multiples of maxBatchSize");
+        uint256 numChunks = quantity / maxBatchSize;
+        for (uint256 i = 0; i < numChunks; i++) {
+            _safeMint(msg.sender, maxBatchSize);
+        }
+    }
+
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        (bool success, ) = msg.sender.call{value: address(this).balance}("");
+        require(success, "Okimi: Withdraw failed");
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted() public view returns (uint256) {
+        return _totalMinted();
+    }
+
+    receive() external payable {}
+}
+```
+
+### Explanation of the Contract Implementation
+
+1. **Minting Logic (`mint`)**:
+   - Users can mint NFTs, provided that the sale is active.
+   - Checks ensure total supply does not exceed the collection size, the user's mint count does not exceed the per-address limit, and the batch size is respected.
+   - Refunds excess ETH if the user sends more than the required price.
+
+2. **Helper Functions**:
+   - `refundIfOver`: Ensures proper ETH is sent and refunds excess.
+   - `isSaleOn`: Validates that the sale is active based on the `publicPriceWei` and `publicSaleStartTime`.
+   - `getPrice`: Gets the current sale price.
+
+3. **Admin Functions**:
+   - `setPublicSaleConfig`: Allows the owner to update the public sale's price and start time.
+   - `reserve`: Reserves NFTs for the owner by minting in batches. Ensures reservation does not exceed the dev allocation.
+   - `setBaseURI`: Updates the base URI for token metadata.
+   - `withdraw`: Transfers the contract's balance to the owner securely using `nonReentrant`.
+
+4. **View Functions**:
+   - `numberMinted`: Fetches the number of NFTs a specific address has minted.
+   - `getOwnershipData`: Retrieves the ownership data for a token.
+   - `totalMinted`: Calculates the total number of minted tokens.
+
+5. **Receive Functionality**:
+   - A `receive` function allows the contract to accept Ether without reverting.
+
+6. **Modifiers**:
+   - `callerIsUser`: Blocks contract addresses from calling the function and ensures only EOA can interact.
+
+---
+
+This implementation adheres to the contract description and context, ensuring security, maintainability, and clarity.

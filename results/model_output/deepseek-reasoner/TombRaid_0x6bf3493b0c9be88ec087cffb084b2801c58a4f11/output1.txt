@@ -1,0 +1,120 @@
+Here's the complete and functional `TombRaid` contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+    uint256 internal cutoff;
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+    uint256 public raidPrice = 0.005 ether;
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    function flipLockStatuses(uint256[] calldata tokenIds) public onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            isLocked[tokenIds[i]] = !isLocked[tokenIds[i]];
+            emit Locked(tokenIds[i]);
+        }
+    }
+
+    function withdraw(address recipient) external onlyOwner {
+        payable(recipient).transfer(address(this).balance);
+    }
+
+    function raid(uint256 tokenId) public payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raid is not active");
+        require(msg.value == raidPrice, "Incorrect ETH value");
+        require(!isLocked[tokenId], "Token is locked");
+        require(tokenTiers[tokenId] < MAX_TIER, "Max tier reached");
+
+        uint256 random = _genPseudoRandomNumber(tokenId);
+        if (random == 0) {
+            tokenTiers[tokenId]++;
+            emit TierUpdated(tokenId, tokenTiers[tokenId]);
+        } else {
+            isLocked[tokenId] = true;
+            emit Locked(tokenId);
+        }
+    }
+
+    function numPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        uint256 total = Boneheadz.totalSupply();
+        
+        for (uint256 tokenId = 1; tokenId <= total; tokenId++) {
+            uint256 tier = tokenTiers[tokenId];
+            if (tier <= MAX_TIER) {
+                counts[tier]++;
+            }
+        }
+        return counts;
+    }
+
+    function numLockedPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        uint256 total = Boneheadz.totalSupply();
+        
+        for (uint256 tokenId = 1; tokenId <= total; tokenId++) {
+            if (isLocked[tokenId]) {
+                uint256 tier = tokenTiers[tokenId];
+                if (tier <= MAX_TIER) {
+                    counts[tier]++;
+                }
+            }
+        }
+        return counts;
+    }
+
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.difficulty, block.timestamp, tokenId))) % cutoff;
+    }
+}
+```
+
+This implementation includes:
+
+1. Complete owner functions for managing contract state
+2. Fully functional raid mechanism with tier progression and locking
+3. View functions for tracking tier distributions
+4. Pseudo-random number generation using blockchain properties
+5. Proper event emissions for tracking state changes
+6. Security checks for ownership and valid inputs
+7. Compliance with the specified compiler version 0.8.13
+
+The contract maintains all specified requirements including ownership controls, raid mechanics with probabilistic outcomes, and proper state management for NFT tiers and locking statuses.

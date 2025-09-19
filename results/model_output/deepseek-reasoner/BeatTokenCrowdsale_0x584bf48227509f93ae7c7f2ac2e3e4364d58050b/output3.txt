@@ -1,0 +1,226 @@
+To solve this problem, we need to create a smart contract for a crowdsale of the BeatToken, which includes multiple phases with varying bonus percentages. The contract should handle token distribution, manage different ICO phases, and finalize the ICO after completion. The solution must use SafeMath for arithmetic operations and adhere to the provided specifications.
+
+### Approach
+1. **Phases Management**: The ICO is divided into several phases (Pre-ICO, ICO Phase 1, 2, 3), each with specific durations and token limits. The contract transitions between phases automatically based on time elapsed or token limits reached.
+2. **Token Distribution**: Tokens are minted during each phase with bonuses applied according to the current phase. The contract ensures that token distribution does not exceed the hard cap.
+3. **ETH to Token Conversion**: The conversion rate from ETH to tokens is determined by the current ETH price in Euro cents, which can be updated by the owner.
+4. **Finalization**: After the ICO ends, unsold tokens are minted to the BEAT team wallet, and token contract ownership is transferred.
+
+### Solution Code
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract BeatTokenCrowdsale is Ownable {
+    using SafeMath for uint256;
+
+    enum Stages {
+        Deployed,
+        PreIco,
+        IcoPhase1,
+        IcoPhase2,
+        IcoPhase3,
+        IcoEnded,
+        Finalized
+    }
+
+    Stages public stage;
+    BeatToken public token;
+    uint256 public contractStartTime;
+    uint256 public preIcoEndTime;
+    uint256 public icoPhase1EndTime;
+    uint256 public icoPhase2EndTime;
+    uint256 public icoPhase3EndTime;
+    uint256 public contractEndTime;
+    address public ethTeamWallet;
+    address public beatTeamWallet;
+    uint256 public ethWeiRaised;
+    mapping(address => uint256) public balanceOf;
+    uint public constant PRE_ICO_PERIOD = 28 days;
+    uint public constant ICO_PHASE1_PERIOD = 28 days;
+    uint public constant ICO_PHASE2_PERIOD = 28 days;
+    uint public constant ICO_PHASE3_PERIOD = 28 days;
+    uint256 public constant PRE_ICO_BONUS_PERCENTAGE = 100;
+    uint256 public constant ICO_PHASE1_BONUS_PERCENTAGE = 75;
+    uint256 public constant ICO_PHASE2_BONUS_PERCENTAGE = 50;
+    uint256 public constant ICO_PHASE3_BONUS_PERCENTAGE = 25;
+    uint256 public constant PRE_ICO_AMOUNT = 5000 * (10 ** 6) * (10 ** 18);
+    uint256 public constant ICO_PHASE1_AMOUNT = 7000 * (10 ** 6) * (10 ** 18);
+    uint256 public constant ICO_PHASE2_AMOUNT = 10500 * (10 ** 6) * (10 ** 18);
+    uint256 public constant ICO_PHASE3_AMOUNT = 11875 * (10 ** 6) * (10 ** 18);
+    uint256 public constant PRE_ICO_LIMIT = PRE_ICO_AMOUNT;
+    uint256 public constant ICO_PHASE1_LIMIT = PRE_ICO_LIMIT + ICO_PHASE1_AMOUNT;
+    uint256 public constant ICO_PHASE2_LIMIT = ICO_PHASE1_LIMIT + ICO_PHASE2_AMOUNT;
+    uint256 public constant ICO_PHASE3_LIMIT = ICO_PHASE2_LIMIT + ICO_PHASE3_AMOUNT;
+    uint256 public constant HARD_CAP = 230 * (10 ** 9) * (10 ** 18);
+    uint256 public ethPriceInEuroCent;
+
+    event BeatTokenPurchased(address indexed purchaser, address indexed beneficiary, uint256 ethWeiAmount, uint256 beatWeiAmount);
+    event BeatTokenEthPriceChanged(uint256 newPrice);
+    event BeatTokenPreIcoStarted();
+    event BeatTokenIcoPhase1Started();
+    event BeatTokenIcoPhase2Started();
+    event BeatTokenIcoPhase3Started();
+    event BeatTokenIcoFinalized();
+
+    function BeatTokenCrowdsale(address _ethTeamWallet, address _beatTeamWallet) public {
+        require(_ethTeamWallet != address(0));
+        require(_beatTeamWallet != address(0));
+
+        token = new BeatToken(HARD_CAP);
+        stage = Stages.Deployed;
+        ethTeamWallet = _ethTeamWallet;
+        beatTeamWallet = _beatTeamWallet;
+        ethPriceInEuroCent = 0;
+
+        contractStartTime = 0;
+        preIcoEndTime = 0;
+        icoPhase1EndTime = 0;
+        icoPhase2EndTime = 0;
+        icoPhase3EndTime = 0;
+        contractEndTime = 0;
+    }
+
+    function setEtherPriceInEuroCent(uint256 _ethPriceInEuroCent) onlyOwner public {
+        ethPriceInEuroCent = _ethPriceInEuroCent;
+        emit BeatTokenEthPriceChanged(_ethPriceInEuroCent);
+    }
+
+    function start() onlyOwner public {
+        require(stage == Stages.Deployed);
+        contractStartTime = block.timestamp;
+        preIcoEndTime = contractStartTime.add(PRE_ICO_PERIOD);
+        stage = Stages.PreIco;
+        emit BeatTokenPreIcoStarted();
+    }
+
+    function finalize() onlyOwner public {
+        require(stage == Stages.IcoEnded);
+        uint256 remainingTokens = HARD_CAP.sub(token.getTotalSupply());
+        if (remainingTokens > 0) {
+            token.mint(beatTeamWallet, remainingTokens);
+        }
+        token.transferOwnership(beatTeamWallet);
+        stage = Stages.Finalized;
+        emit BeatTokenIcoFinalized();
+    }
+
+    function() payable public {
+        buyTokens(msg.sender);
+    }
+
+    function buyTokens(address beneficiary) payable public {
+        require(beneficiary != address(0));
+        require(stage == Stages.PreIco || stage == Stages.IcoPhase1 || stage == Stages.IcoPhase2 || stage == Stages.IcoPhase3);
+        require(msg.value > 0);
+        require(ethPriceInEuroCent > 0);
+
+        if (stage == Stages.PreIco) {
+            require(block.timestamp <= preIcoEndTime);
+        } else if (stage == Stages.IcoPhase1) {
+            require(block.timestamp <= icoPhase1EndTime);
+        } else if (stage == Stages.IcoPhase2) {
+            require(block.timestamp <= icoPhase2EndTime);
+        } else if (stage == Stages.IcoPhase3) {
+            require(block.timestamp <= icoPhase3EndTime);
+        }
+
+        uint256 beatWeiAmount = calculateBeatWeiAmount(msg.value);
+        require(isWithinTokenAllocLimit(beatWeiAmount));
+
+        balanceOf[beneficiary] = balanceOf[beneficiary].add(beatWeiAmount);
+        ethWeiRaised = ethWeiRaised.add(msg.value);
+        token.mint(beneficiary, beatWeiAmount);
+        ethTeamWallet.transfer(msg.value);
+        emit BeatTokenPurchased(msg.sender, beneficiary, msg.value, beatWeiAmount);
+        determineCurrentStage(beatWeiAmount);
+    }
+
+    function calculateBeatWeiAmount(uint256 ethWeiAmount) internal view returns (uint256) {
+        uint256 bonusPercentage;
+        if (stage == Stages.PreIco) {
+            bonusPercentage = PRE_ICO_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase1) {
+            bonusPercentage = ICO_PHASE1_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase2) {
+            bonusPercentage = ICO_PHASE2_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase3) {
+            bonusPercentage = ICO_PHASE3_BONUS_PERCENTAGE;
+        } else {
+            revert();
+        }
+
+        return ethWeiAmount.mul(ethPriceInEuroCent).mul(100 + bonusPercentage).div(1e18);
+    }
+
+    function isWithinTokenAllocLimit(uint256 beatWeiAmount) internal view returns (bool) {
+        uint256 currentSupply = token.getTotalSupply();
+        if (stage == Stages.PreIco) {
+            return currentSupply.add(beatWeiAmount) <= PRE_ICO_LIMIT;
+        } else if (stage == Stages.IcoPhase1) {
+            return currentSupply.add(beatWeiAmount) <= ICO_PHASE1_LIMIT;
+        } else if (stage == Stages.IcoPhase2) {
+            return currentSupply.add(beatWeiAmount) <= ICO_PHASE2_LIMIT;
+        } else if (stage == Stages.IcoPhase3) {
+            return currentSupply.add(beatWeiAmount) <= ICO_PHASE3_LIMIT;
+        }
+        return false;
+    }
+
+    function determineCurrentStage(uint256 beatWeiAmount) internal {
+        if (stage == Stages.PreIco) {
+            if (token.getTotalSupply() > PRE_ICO_LIMIT || block.timestamp > preIcoEndTime) {
+                stage = Stages.IcoPhase1;
+                icoPhase1EndTime = block.timestamp.add(ICO_PHASE1_PERIOD);
+                emit BeatTokenIcoPhase1Started();
+            }
+        } else if (stage == Stages.IcoPhase1) {
+            if (token.getTotalSupply() > ICO_PHASE1_LIMIT || block.timestamp > icoPhase1EndTime) {
+                stage = Stages.IcoPhase2;
+                icoPhase2EndTime = block.timestamp.add(ICO_PHASE2_PERIOD);
+                emit BeatTokenIcoPhase2Started();
+            }
+        } else if (stage == Stages.IcoPhase2) {
+            if (token.getTotalSupply() > ICO_PHASE2_LIMIT || block.timestamp > icoPhase2EndTime) {
+                stage = Stages.IcoPhase3;
+                icoPhase3EndTime = block.timestamp.add(ICO_PHASE3_PERIOD);
+                emit BeatTokenIcoPhase3Started();
+            }
+        } else if (stage == Stages.IcoPhase3) {
+            if (token.getTotalSupply() > ICO_PHASE3_LIMIT || block.timestamp > icoPhase3EndTime) {
+                stage = Stages.IcoEnded;
+                contractEndTime = block.timestamp;
+            }
+        }
+    }
+}
+
+contract CappedToken is Ownable {
+    using SafeMath for uint256;
+
+    uint256 public cap;
+    uint256 public totalSupply;
+
+    function CappedToken(uint256 _cap) public {
+        cap = _cap;
+        totalSupply = 0;
+    }
+
+    function mint(address _to, uint256 _amount) public onlyOwner {
+        require(totalSupply.add(_amount) <= cap);
+        totalSupply = totalSupply.add(_amount);
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        super.transferOwnership(newOwner);
+    }
+}
+```
+
+### Explanation
+1. **Phases Management**: The contract uses an enum to track stages and transitions between them based on time or token limits. Each phase has specific start and end times.
+2. **Token Distribution**: Tokens are minted using the `mint` function, which checks against the current phase's token limit and the overall hard cap.
+3. **ETH Conversion**: The `calculateBeatWeiAmount` function converts ETH to tokens considering the current ETH price and bonus percentage.
+4. **Finalization**: The `finalize` function mints remaining tokens to the BEAT team and transfers token ownership, ensuring no further changes can be made post-ICO.
+
+This approach ensures a structured and secure ICO process with automated phase transitions, proper token distribution, and finalization mechanisms.

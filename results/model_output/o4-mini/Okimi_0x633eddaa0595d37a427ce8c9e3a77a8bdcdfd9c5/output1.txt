@@ -1,0 +1,171 @@
+pragma solidity 0.8.7;
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Immutable configuration
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    uint256 public immutable maxPerAddressDuringMint;
+    uint256 public immutable amountForDevs;
+    uint256 public immutable amountForSaleAndDev;
+    uint256 internal immutable collectionSize;
+    uint256 internal immutable maxBatchSize;
+
+    struct SaleConfig {
+        uint32 publicSaleStartTime;
+        uint64 publicPriceWei;
+    }
+    SaleConfig public saleConfig;
+
+    // Base URI for metadata
+    string private baseTokenURI;
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Constructor
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    constructor() ERC721A("Okimi", "OKM") {
+        maxPerAddressDuringMint = 5;
+        maxBatchSize = 5;
+        collectionSize = amountForDevs = amountForSaleAndDev = 1500;
+        saleConfig.publicPriceWei = 5 ether / 1000;  // 0.005 ETH
+        saleConfig.publicSaleStartTime = uint32(block.timestamp);
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Modifiers
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Public minting
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    function mint(uint256 quantity)
+        external
+        payable
+        callerIsUser
+    {
+        require(isSaleOn(saleConfig.publicPriceWei, saleConfig.publicSaleStartTime),
+                "Sale not active");
+        require(quantity <= maxBatchSize, "Exceeds max batch size");
+        require(totalSupply() + quantity <= amountForSaleAndDev,
+                "Exceeds max supply");
+        require(_numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint,
+                "Exceeds max per address");
+
+        uint256 totalCost = uint256(saleConfig.publicPriceWei) * quantity;
+        refundIfOver(totalCost);
+        _safeMint(msg.sender, quantity);
+    }
+
+    /// @dev Refund any excess ETH
+    function refundIfOver(uint256 price) private {
+        require(msg.value >= price, "Insufficient ETH");
+        uint256 over = msg.value - price;
+        if (over > 0) {
+            (bool success, ) = msg.sender.call{value: over}("");
+            require(success, "Refund failed");
+        }
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Sale state
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    function isSaleOn(uint256 _price, uint256 _startTime)
+        public
+        view
+        returns (bool)
+    {
+        return (_price != 0 && block.timestamp >= _startTime);
+    }
+
+    function getPrice() public view returns (uint256) {
+        return uint256(saleConfig.publicPriceWei);
+    }
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price)
+        external
+        onlyOwner
+    {
+        saleConfig.publicSaleStartTime = timestamp;
+        saleConfig.publicPriceWei = price;
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Dev reserve
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    function reserve(uint256 quantity) external onlyOwner {
+        require(totalSupply() + quantity <= amountForDevs,
+                "Too many already minted for devs");
+        uint256 remaining = quantity;
+        while (remaining > 0) {
+            uint256 toMint = remaining > maxBatchSize ? maxBatchSize : remaining;
+            _safeMint(msg.sender, toMint);
+            remaining -= toMint;
+        }
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Metadata
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        baseTokenURI = baseURI;
+    }
+
+    function _baseURI()
+        internal
+        view
+        virtual
+        override
+        returns (string memory)
+    {
+        return baseTokenURI;
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Withdraw
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    function withdraw()
+        external
+        onlyOwner
+        nonReentrant
+    {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "Nothing to withdraw");
+        (bool success, ) = msg.sender.call{value: bal}("");
+        require(success, "Withdraw failed");
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Views
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    function numberMinted(address owner)
+        public
+        view
+        returns (uint256)
+    {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId)
+        external
+        view
+        returns (TokenOwnership memory)
+    {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted()
+        public
+        view
+        returns (uint256)
+    {
+        return _totalMinted();
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    // Fallback to accept ETH
+    //––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+    receive() external payable {}
+}

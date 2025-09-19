@@ -1,0 +1,145 @@
+pragma solidity 0.5.1;
+
+contract SuperplayerCharacter is Ownable {
+    using SafeMath for uint256;
+
+    /**
+     * @notice Emitted when a user selects a character.
+     * @param from The address of the user who selected the character.
+     * @param chaId The ID of the character selected.
+     */
+    event CharacterSelect(address indexed from, uint32 chaId);
+
+    /// @notice Maps each address to its selected character ID.
+    mapping(address => uint32) public addrMapCharacterIds;
+
+    /// @notice Fee required to change/select a character.
+    uint256 public changeFee = 0;
+
+    struct Character {
+        uint32 id;
+        uint256 weight;
+    }
+
+    /// @notice Array of available characters.
+    Character[] private characters;
+
+    /// @notice Total number of characters in the list.
+    uint256 public totalNum = 0;
+
+    /// @notice Sum of weights of all characters (for weighted random).
+    uint256 public totalWeight = 0;
+
+    /**
+     * @notice Deploys the contract with an initial set of 6 characters.
+     */
+    constructor() public {
+        _addCharacter(1, 1000000);
+        _addCharacter(2, 1000000);
+        _addCharacter(3, 1000000);
+        _addCharacter(4,    1000);
+        _addCharacter(5,    1000);
+        _addCharacter(6,    1000);
+    }
+
+    /**
+     * @notice Owner can add a new character.
+     * @param id The ID of the new character.
+     * @param weight The weight used for random selection.
+     */
+    function AddCharacter(uint32 id, uint weight) public onlyOwner {
+        _addCharacter(id, weight);
+    }
+
+    /**
+     * @notice Owner can update the fee required to select/change a character.
+     * @param fee New fee in wei.
+     */
+    function SetFee(uint256 fee) public onlyOwner {
+        changeFee = fee;
+    }
+
+    /**
+     * @notice Owner can withdraw all ETH from this contract to a specified address.
+     * @param to Recipient address.
+     */
+    function withdraw(address payable to) public onlyOwner {
+        require(to != address(0), "SuperplayerCharacter: zero address");
+        to.transfer(address(this).balance);
+    }
+
+    /**
+     * @notice Returns arrays of all character IDs and weights.
+     * @return ids     List of character IDs.
+     * @return weights List of character weights.
+     */
+    function getConfig() public view returns (uint32[] memory ids, uint256[] memory weights) {
+        uint len = characters.length;
+        ids     = new uint32[](len);
+        weights = new uint256[](len);
+        for (uint i = 0; i < len; i++) {
+            ids[i]     = characters[i].id;
+            weights[i] = characters[i].weight;
+        }
+        return (ids, weights);
+    }
+
+    /**
+     * @notice Fallback payable: performs a weighted-random selection of a character.
+     *         Requires msg.value >= changeFee. Refunds the excess.
+     */
+    function () external payable {
+        require(msg.value >= changeFee, "SuperplayerCharacter: insufficient fee");
+
+        // draw a random weight in [1..totalWeight]
+        uint256 rnd = uint256(
+            keccak256(
+                abi.encodePacked(
+                    block.timestamp,
+                    block.difficulty,
+                    msg.sender,
+                    msg.value
+                )
+            )
+        );
+        uint256 target = rnd % totalWeight + 1;
+
+        // find the character whose cumulative weight covers target
+        uint256 sum    = 0;
+        uint256 index  = characters.length - 1;
+        for (uint i = 0; i < characters.length; i++) {
+            sum = sum.add(characters[i].weight);
+            if (target <= sum) {
+                index = i;
+                break;
+            }
+        }
+
+        // record selection & emit
+        _selectCharacter(msg.sender, characters[index].id);
+
+        // refund any extra
+        uint256 refund = msg.value.sub(changeFee);
+        if (refund > 0) {
+            msg.sender.transfer(refund);
+        }
+    }
+
+    /**
+     * @dev Internal: records a user's selection and emits an event.
+     */
+    function _selectCharacter(address from, uint32 id) internal {
+        addrMapCharacterIds[from] = id;
+        emit CharacterSelect(from, id);
+    }
+
+    /**
+     * @dev Internal: appends a character and updates totals.
+     */
+    function _addCharacter(uint32 id, uint weight) internal {
+        require(weight > 0, "SuperplayerCharacter: weight must be > 0");
+        characters.push(Character({ id: id, weight: weight }));
+        totalNum      = totalNum.add(1);
+        totalWeight   = totalWeight.add(weight);
+    }
+}

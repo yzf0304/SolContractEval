@@ -1,0 +1,178 @@
+```solidity
+contract OdinToken is ERC20Interface, Owned {
+    using SafeMath for uint256;
+
+    string public symbol;
+    string public name;
+    uint8 public decimals;
+    uint private _totalSupply;
+    bool private _whitelistAll;
+
+    struct balanceData {  
+        bool locked;
+        uint balance;
+        uint airDropQty;
+    }
+
+    mapping(address => balanceData) balances;
+    mapping(address => mapping(address => uint)) allowed;
+
+    /**
+     * @dev Constructor
+     */
+    function OdinToken() public {
+        owner = msg.sender;
+        symbol = "ODIN";
+        name = "ODIN Token";
+        decimals = 18;
+        _whitelistAll = false;
+        _totalSupply = 100000000000000000000000; // 100k * 10^18
+        balances[owner].balance = _totalSupply;
+        emit Transfer(address(0), owner, _totalSupply);
+    }
+
+    /**
+     * @notice Total token supply
+     */
+    function totalSupply() constant public returns (uint256) {
+        return _totalSupply;
+    }
+
+    /**
+     * @notice Whitelist a single address (clears its airdrop balance)
+     */
+    function whitelistAddress(address to) onlyOwner public returns (bool) {
+        balances[to].airDropQty = 0;
+        return true;
+    }
+
+    /**
+     * @notice Whitelist all addresses globally
+     */
+    function whitelistAllAddresses() onlyOwner public returns (bool) {
+        _whitelistAll = true;
+        return true;
+    }
+
+    /**
+     * @notice Get balance of an address
+     */
+    function balanceOf(address tokenOwner) public constant returns (uint) {
+        return balances[tokenOwner].balance;
+    }
+
+    /**
+     * @notice Transfer with airdrop‐lock restrictions
+     */
+    function transfer(address to, uint tokens) public returns (bool success) {
+        require(to != address(0) && to != msg.sender);
+        require(balances[msg.sender].balance >= tokens);
+
+        // If sender is owner, treat as airdrop distribution
+        if (msg.sender == owner) {
+            // deduct
+            balances[msg.sender].balance = balances[msg.sender].balance.sub(tokens);
+            // credit
+            balances[to].balance = balances[to].balance.add(tokens);
+            // mark airdropped qty
+            balances[to].airDropQty = balances[to].airDropQty.add(tokens);
+            emit Transfer(msg.sender, to, tokens);
+            return true;
+        }
+
+        // If global whitelist is off and sender has airdropped tokens, apply time‐based locks
+        if (!_whitelistAll && balances[msg.sender].airDropQty > 0) {
+            uint t = now;
+            uint pct;
+            // time thresholds (UTC)
+            uint t1 = 1535760000; // 2018-09-01
+            uint t2 = 1538352000; // 2018-10-01
+            uint t3 = 1546300800; // 2019-01-01
+            uint t4 = 1554076800; // 2019-04-01
+            uint t5 = 1561939200; // 2019-07-01
+
+            if (t < t1) {
+                pct = 0;
+            } else if (t < t2) {
+                pct = 10;
+            } else if (t < t3) {
+                pct = 25;
+            } else if (t < t4) {
+                pct = 50;
+            } else if (t < t5) {
+                pct = 75;
+            } else {
+                pct = 100;
+            }
+
+            // free balance (non‐airdrop)
+            uint freeBal = balances[msg.sender].balance.sub(balances[msg.sender].airDropQty);
+            // allowed airdrop portion
+            uint allowedAirdrop = balances[msg.sender].airDropQty.mul(pct).div(100);
+            // overall available
+            uint available = freeBal.add(allowedAirdrop);
+            require(tokens <= available);
+
+            // consume from airdrop bucket if needed
+            if (tokens > freeBal) {
+                uint useAirdrop = tokens.sub(freeBal);
+                balances[msg.sender].airDropQty = balances[msg.sender].airDropQty.sub(useAirdrop);
+            }
+        }
+
+        // Standard balance updates
+        balances[msg.sender].balance = balances[msg.sender].balance.sub(tokens);
+        balances[to].balance = balances[to].balance.add(tokens);
+        emit Transfer(msg.sender, to, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Not supported
+     */
+    function approve(address spender, uint tokens) public returns (bool success) {
+        revert();
+    }
+
+    /**
+     * @notice Not supported
+     */
+    function transferFrom(address from, address to, uint tokens) public returns (bool success) {
+        revert();
+    }
+
+    /**
+     * @notice Not supported
+     */
+    function allowance(address tokenOwner, address spender) public constant returns (uint remaining) {
+        revert();
+    }
+
+    /**
+     * @notice Not supported
+     */
+    function approveAndCall(address spender, uint tokens, bytes data) public returns (bool success) {
+        revert();
+    }
+
+    /**
+     * @notice Burn tokens from owner
+     */
+    function burn(uint256 tokens) onlyOwner public returns (bool) {
+        require(balances[owner].balance >= tokens);
+        balances[owner].balance = balances[owner].balance.sub(tokens);
+        _totalSupply = _totalSupply.sub(tokens);
+        emit Burn(tokens);
+        emit Transfer(owner, address(0), tokens);
+        return true;
+    }
+
+    /**
+     * @notice Reject incoming ETH
+     */
+    function () {
+        // if ether is sent to this address, throw
+        throw;
+    }
+}
+```

@@ -1,0 +1,100 @@
+To solve this problem, we need to create a smart contract for the PepeYogaClub NFT collection that allows users to mint NFTs with specific constraints and configurations managed by the contract owner. The contract should be built using the ERC721A standard for efficient batch minting and include features such as pausing minting, setting maximum mints per wallet, and withdrawing funds.
+
+### Approach
+1. **Inheritance**: The contract inherits from ERC721A (for efficient NFT minting) and Ownable (for access control).
+2. **Minting Constraints**: Users can mint NFTs up to a specified maximum per wallet, and the total supply is capped. Minting can be paused and resumed by the owner.
+3. **Price Management**: The owner can adjust the minting price.
+4. **Team Minting**: The owner can mint NFTs in bulk to multiple addresses.
+5. **Withdrawal**: The owner can withdraw collected funds.
+6. **Metadata**: Token URIs are constructed using a base URI, which can be updated by the owner.
+
+### Solution Code
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.15;
+
+contract PepeYogaClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string public baseURI = "ipfs://QmTLWN9WPq5L9eS9EKcTn2rqUCzr9QK5sd8DYVkkL7yguL/";
+    string public contractURI = "ipfs://QmUvB8sKL4XFTxbMkL9FykiqLgrXeBV1mUkdzWMWhachvD";
+
+    uint256 public MAX_PER_WALLET = 11;
+    uint256 public constant MAX_SUPPLY = 2069;
+    uint256 public price = 0.0069 ether;
+
+    bool public paused = true;
+
+    constructor() ERC721A("PepeYogaClub", "PYC") {}
+
+    function mint(uint256 _amount) external payable {
+        require(!paused, "Minting is paused");
+        require(_amount > 0, "Amount must be positive");
+        require(totalSupply() + _amount <= MAX_SUPPLY, "Exceeds max supply");
+        require(minted(msg.sender) + _amount <= MAX_PER_WALLET, "Exceeds max per wallet");
+        require(msg.value == price * _amount, "Incorrect payment");
+
+        _safeMint(msg.sender, _amount);
+    }
+
+    function _startTokenId() internal override view virtual returns (uint256) {
+        return 1;
+    }
+
+    function minted(address _owner) public view returns (uint256) {
+        return _numberMinted(_owner);
+    }
+
+    function withdraw() external onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+
+    function teamMint(address[] memory _to, uint256[] memory _amount) external onlyOwner {
+        require(_to.length == _amount.length, "Arrays length mismatch");
+        uint256 total;
+        for (uint256 i = 0; i < _to.length; i++) {
+            total += _amount[i];
+        }
+        require(totalSupply() + total <= MAX_SUPPLY, "Exceeds max supply");
+        for (uint256 i = 0; i < _to.length; i++) {
+            _safeMint(_to[i], _amount[i]);
+        }
+    }
+
+    function setMaxPerWallet(uint256 _max) external onlyOwner {
+        MAX_PER_WALLET = _max;
+    }
+
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    function toggleMint() external onlyOwner {
+        paused = !paused;
+    }
+
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setContractURI(string memory _contractURI) external onlyOwner {
+        contractURI = _contractURI;
+    }
+
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        require(_exists(_tokenId), "Token does not exist");
+        return string(abi.encodePacked(baseURI, _tokenId.toString(), ".json"));
+    }
+}
+```
+
+### Explanation
+1. **Constructor**: Initializes the contract with the name "PepeYogaClub" and symbol "PYC".
+2. **Mint Function**: Allows users to mint NFTs if minting is active, they don't exceed the wallet limit, and they pay the correct amount.
+3. **Team Minting**: The owner can mint multiple NFTs to different addresses in bulk, ensuring the total supply isn't exceeded.
+4. **Withdraw Function**: Transfers the contract's balance to the owner.
+5. **Configuration Functions**: The owner can adjust the minting price, maximum mints per wallet, and toggle the minting state.
+6. **Token URI**: Constructs the metadata URL for each token using the base URI and token ID.
+7. **Efficiency**: Uses ERC721A for efficient batch minting, reducing gas costs for users.
+
+This solution ensures that the PepeYogaClub NFT collection is managed securely and efficiently, with flexible controls for the owner and a user-friendly minting process.

@@ -1,0 +1,176 @@
+```solidity
+/**
+ * @title LiquidityMigration
+ * @notice This contract allows users to stake, migrate, and refund liquidity tokens. It also supports creating new strategies.
+ * @dev Inherits from Timelocked and StrategyTypes. Utilizes SafeERC20 for safe token transfers.
+ */
+contract LiquidityMigration is Timelocked, StrategyTypes {
+    using SafeERC20 for IERC20;
+
+    address public generic;
+    address public controller;
+    IStrategyProxyFactory public factory;
+
+    mapping(address => bool) public adapters;
+    mapping(address => uint256) public stakedCount;
+    mapping(address => mapping(address => uint256)) public staked;
+    mapping(address => bool) private _tempIsUnderlying;
+
+    event Staked(address adapter, address strategy, uint256 amount, address account);
+    event Migrated(address adapter, address lp, address strategy, address account);
+    event Created(address adapter, address lp, address strategy, address account);
+    event Refunded(address lp, uint256 amount, address account);
+
+    /**
+     * @notice Modifier to ensure the adapter is registered.
+     * @dev Reverts if the adapter is not registered.
+     */
+    modifier onlyRegistered(address _adapter) {
+        require(adapters[_adapter], "LiquidityMigration: not registered adapter");
+        _;
+    }
+
+    /**
+     * @notice Modifier to ensure the adapter allows the specified LP token.
+     * @dev Reverts if the LP token is not whitelisted by the adapter.
+     */
+    modifier onlyWhitelisted(address _adapter, address _lp) {
+        require(IAdapter(_adapter).isWhitelisted(_lp), "LiquidityMigration: not whitelisted LP");
+        _;
+    }
+
+    constructor(
+        address[] memory adapters_,
+        address generic_,
+        IStrategyProxyFactory factory_,
+        address controller_,
+        uint256 _unlock,
+        uint256 _modify,
+        address _owner
+    ) Timelocked(_unlock, _modify, _owner) {
+        for (uint256 i = 0; i < adapters_.length; i++) {
+            adapters[adapters_[i]] = true;
+        }
+        generic = generic_;
+        factory = factory_;
+        controller = controller_;
+    }
+
+    function stake(address _lp, uint256 _amount, address _adapter) public onlyRegistered(_adapter) onlyWhitelisted(_adapter, _lp) {
+        IERC20(_lp).safeTransferFrom(msg.sender, address(this), _amount);
+        staked[_lp][msg.sender] += _amount;
+        stakedCount[_adapter]++;
+        emit Staked(_adapter, _lp, _amount, msg.sender);
+    }
+
+    function buyAndStake(address _lp, address _adapter, address _exchange, uint256 _minAmountOut, uint256 _deadline)
+        external
+        payable
+        onlyRegistered(_adapter)
+        onlyWhitelisted(_adapter, _lp)
+    {
+        IAdapter(_adapter).buy{value: msg.value}(_lp, _exchange, _minAmountOut, _deadline);
+        uint256 boughtAmount = IERC20(_lp).balanceOf(address(this));
+        staked[_lp][msg.sender] += boughtAmount;
+        stakedCount[_adapter]++;
+        emit Staked(_adapter, _lp, boughtAmount, msg.sender);
+    }
+
+    function migrate(address _lp, address _adapter, IStrategy _strategy, uint256 _slippage)
+        external
+        onlyUnlocked
+        onlyRegistered(_adapter)
+        onlyWhitelisted(_adapter, _lp)
+    {
+        uint256 amount = staked[_lp][msg.sender];
+        require(amount > 0, "LiquidityMigration: no staked amount");
+
+        IERC20(_lp).safeTransfer(generic, amount);
+        IAdapter.Call[] memory calls = IAdapter(_adapter).encodeMigration(generic, address(_strategy), _lp, amount);
+
+        for (uint256 i = 0; i < calls.length; i++) {
+            (bool success, ) = calls[i].target.call(calls[i].callData);
+            require(success, "LiquidityMigration: migration failed");
+        }
+
+        delete staked[_lp][msg.sender];
+        emit Migrated(_adapter, _lp, address(_strategy), msg.sender);
+    }
+
+    function refund(address _user, address _lp) public onlyOwner {
+        uint256 amount = staked[_lp][_user];
+        require(amount > 0, "LiquidityMigration: no staked amount to refund");
+
+        IERC20(_lp).safeTransfer(_user, amount);
+        delete staked[_lp][_user];
+        emit Refunded(_lp, amount, _user);
+    }
+
+    function createStrategy(address _lp, address _adapter, bytes calldata data)
+        public
+        onlyRegistered(_adapter)
+        onlyWhitelisted(_adapter, _lp)
+    {
+        StrategyItem[] memory strategyItems;
+        (address manager, string memory name, string memory symbol, strategyItems) = abi.decode(data, (address, string, string, StrategyItem[]));
+
+        _validateItems(_adapter, _lp, strategyItems);
+        InitialState memory initState;
+        address strategy = factory.createStrategy{value: 0}(manager, name, symbol, strategyItems, initState, address(this), new bytes(0));
+
+        emit Created(_adapter, _lp, strategy, msg.sender);
+    }
+
+    function updateController(address _controller) external onlyOwner {
+        require(controller != _controller, "LiquidityMigration: same controller address");
+        controller = _controller;
+    }
+
+    function updateGeneric(address _generic) external onlyOwner {
+        require(generic != _generic, "LiquidityMigration: same generic address");
+        generic = _generic;
+    }
+
+    function updateFactory(address _factory) external onlyOwner {
+        require(address(factory) != _factory, "LiquidityMigration: same factory address");
+        factory = IStrategyProxyFactory(_factory);
+    }
+
+    function addAdapter(address _adapter) external onlyOwner {
+        require(!adapters[_adapter], "LiquidityMigration: adapter already registered");
+        adapters[_adapter] = true;
+    }
+
+    function removeAdapter(address _adapter) external onlyOwner {
+        require(adapters[_adapter], "LiquidityMigration: adapter not registered");
+        delete adapters[_adapter];
+    }
+
+    function hasStaked(address _account, address _lp) external view returns (bool) {
+        return staked[_lp][_account] > 0;
+    }
+
+    function getStakeCount(address _adapter) external view returns (uint256) {
+        return stakedCount[_adapter];
+    }
+
+    function _validateItems(address adapter, address lp, StrategyItem[] memory strategyItems) private {
+        address[] memory outputs = IAdapter(adapter).outputTokens(lp);
+        for (uint256 i = 0; i < outputs.length; i++) {
+            _tempIsUnderlying[outputs[i]] = true;
+        }
+
+        for (uint256 i = 0; i < strategyItems.length; i++) {
+            require(strategyItems[i].percentage >= 0, "LiquidityMigration: invalid percentage");
+
+            if (strategyItems[i].percentage > 0) {
+                require(_tempIsUnderlying[strategyItems[i].item], "LiquidityMigration: non-output token included");
+            }
+        }
+
+        for (uint256 i = 0; i < outputs.length; i++) {
+            delete _tempIsUnderlying[outputs[i]];
+        }
+    }
+}
+```

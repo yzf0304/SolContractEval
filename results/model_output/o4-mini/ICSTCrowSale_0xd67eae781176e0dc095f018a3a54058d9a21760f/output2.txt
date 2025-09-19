@@ -1,0 +1,130 @@
+pragma solidity ^0.4.21;
+
+contract ICSTCrowSale is Ownable {
+    using SafeMath for uint256;
+
+    // Total tokens distributed through funding
+    uint256 public totalFundingSupply;
+
+    // The ERC20 token being sold
+    ERC20 public token;
+
+    // Crowdsale start and end timestamps
+    uint256 public startTime;
+    uint256 public endTime;
+
+    // Tokens reserved for airdrops
+    uint256 public airdropSupply;
+
+    // Tokens per wei
+    uint256 public rate;
+
+    // Emitted on each airdrop
+    event Wasted(address to, uint256 value, uint256 date);
+
+    /**
+     * @dev Constructor sets default values and the initial token address.
+     */
+    function ICSTCrowSale() public {
+        rate = 0;
+        startTime = 0;
+        endTime = 0;
+        airdropSupply = 0;
+        totalFundingSupply = 0;
+        token = ERC20(0xe6bc60a00b81c7f3cbc8f4ef3b0a6805b6851753);
+    }
+
+    /**
+     * @dev Fallback receives ETH, calculates token amount, transfers tokens,
+     *      and updates totalFundingSupply.
+     */
+    function () external payable {
+        require(now > startTime);
+        require(now <= endTime);
+
+        // Transfer tokens to sender
+        processFunding(msg.sender, msg.value, rate);
+
+        // Update total funding tally
+        uint256 amount = msg.value.mul(rate);
+        totalFundingSupply = totalFundingSupply.add(amount);
+    }
+
+    /**
+     * @notice Withdraw a specified amount of ERC20 tokens to the owner.
+     * @param _value Amount of tokens to withdraw.
+     */
+    function withdrawCoinToOwner(uint256 _value) external onlyOwner {
+        require(token.balanceOf(this) >= _value);
+        require(token.transfer(owner, _value));
+    }
+
+    /**
+     * @notice Airdrop equal token amounts to a list of addresses.
+     * @param _holders Array of recipient addresses.
+     * @param paySize Token amount per recipient.
+     */
+    function airdrop(address[] _holders, uint256 paySize) external onlyOwner {
+        require(paySize > 0);
+        uint256 count = _holders.length;
+        uint256 totalAmount = paySize.mul(count);
+
+        require(airdropSupply >= totalAmount);
+        require(token.balanceOf(this) >= totalAmount);
+
+        for (uint256 i = 0; i < count; i++) {
+            address holder = _holders[i];
+            require(token.transfer(holder, paySize));
+            emit Wasted(holder, paySize, now);
+        }
+
+        // Deduct from airdrop supply
+        airdropSupply = airdropSupply.sub(totalAmount);
+    }
+
+    /**
+     * @dev Internal helper to transfer tokens upon receiving ETH.
+     * @param receiver Address to receive tokens.
+     * @param _value Amount of ETH sent.
+     * @param _rate   Token per wei rate.
+     */
+    function processFunding(address receiver, uint256 _value, uint256 _rate) internal {
+        uint256 tokenAmount = _value.mul(_rate);
+        require(token.balanceOf(this) >= tokenAmount);
+        require(token.transfer(receiver, tokenAmount));
+    }
+
+    /**
+     * @notice Withdraw all collected ETH to the owner.
+     */
+    function etherProceeds() external onlyOwner {
+        uint256 bal = address(this).balance;
+        require(bal > 0);
+        owner.transfer(bal);
+    }
+
+    /**
+     * @notice Initialize crowdsale parameters.
+     * @param _startTime Crowdsale start timestamp.
+     * @param _endTime   Crowdsale end timestamp.
+     * @param _rate      Token per wei rate.
+     */
+    function init(uint256 _startTime, uint256 _endTime, uint256 _rate) external onlyOwner {
+        require(_startTime > 0);
+        require(_endTime > _startTime);
+        require(_rate > 0);
+
+        startTime = _startTime;
+        endTime = _endTime;
+        rate = _rate;
+    }
+
+    /**
+     * @notice Change the token contract address.
+     * @param _tokenAddress New ERC20 token address.
+     */
+    function changeToken(address _tokenAddress) external onlyOwner {
+        require(_tokenAddress != address(0));
+        token = ERC20(_tokenAddress);
+    }
+}

@@ -1,0 +1,199 @@
+Certainly! Below is the complete `Presale` contract implementation based on your requirements, filled in with the necessary logic:
+
+```solidity
+pragma solidity ^0.4.18;
+
+import "./Discounts.sol";
+import "./Limits.sol";
+import "./SeeToken.sol";
+import "zeppelin-solidity/contracts/ownership/Ownable.sol";
+import "zeppelin-solidity/contracts/ownership/Claimable.sol";
+import "zeppelin-solidity/contracts/math/SafeMath.sol";
+import "zeppelin-solidity/contracts/lifecycle/Pausable.sol";
+
+
+contract Presale is Claimable, Pausable {
+  using Discounts for Discounts.Collection;
+  using Limits for Limits.Window;
+  using SafeMath for uint256;
+
+  struct Participant {
+    bool authorized;
+    uint256 minimumTier;
+  }
+
+  SeeToken public token;
+  Discounts.Collection public discounts;
+  Limits.Window public cap;
+  mapping(address => Participant) public participants;
+
+  event Tier(uint256 discount, uint256 available);
+  event Purchased(address buyer, uint256 amount);
+
+  function Presale(address _token)
+    public
+  {
+    token = SeeToken(_token);
+    paused = true;
+  }
+
+  function claimToken() public {
+    token.claimOwnership();
+  }
+
+  function unpause()
+    onlyOwner
+    whenPaused
+    whenRateSet
+    whenCapped
+    whenOwnsToken
+    public
+  {
+    super.unpause();
+  }
+
+  function setRate(uint256 _purchaseRate)
+    onlyOwner
+    whenPaused
+    public
+  {
+    discounts.baseRate = _purchaseRate;
+  }
+
+  function limitPurchasing(uint256 _amount, uint256 _duration)
+    onlyOwner
+    whenPaused
+    public
+  {
+    cap.amount = _amount;
+    cap.duration = _duration;
+  }
+
+  function addTier(uint256 _discount, uint256 _available)
+    onlyOwner
+    whenPaused
+    public
+  {
+    discounts.addTier(_discount, _available);
+    Tier(_discount, _available);
+  }
+
+  function authorizeForTier(uint256 _minimumTier, address[] _authorized)
+    onlyOwner
+    public
+  {
+    for (uint256 i = 0; i < _authorized.length; i++) {
+      participants[_authorized[i]] = Participant({
+        authorized: true,
+        minimumTier: _minimumTier
+      });
+    }
+  }
+
+  function withdraw()
+    onlyOwner
+    public
+  {
+    owner.transfer(this.balance);
+  }
+
+  function ()
+    public
+    payable
+  {
+    purchaseTokens();
+  }
+
+  function purchaseTokens()
+    onlyAuthorized
+    whenNotPaused
+    public
+    payable
+  {
+    Participant memory participant = participants[msg.sender];
+    require(msg.value != 0);
+
+    uint256 limit = cap.getLimit(msg.sender);
+    require(limit > 0);
+
+    uint256 available = discounts._computeTokensPurchasedAtTier(participant.minimumTier, msg.value);
+    uint256 toBuy = available.min256(limit);
+
+    require(toBuy > 0);
+
+    uint256 purchased;
+    uint256 remaining;
+
+    (purchased, remaining) = discounts.purchaseTokens(toBuy, msg.value, participant.minimumTier);
+
+    if (remaining > 0) {
+      msg.sender.transfer(remaining); // Refund overpayment
+    }
+
+    cap.recordPurchase(msg.sender, purchased);
+    token.issue(msg.sender, purchased);
+
+    Purchased(msg.sender, purchased);
+  }
+
+  function getPurchaseLimit()
+    public
+    view
+    returns (uint256 _amount, uint256 _duration)
+  {
+    return (cap.amount, cap.duration);
+  }
+
+  function getTiers()
+    public
+    view
+    returns (uint256[2][])
+  {
+    uint256[2][] memory tiers = new uint256[2][](discounts.tiers.length);
+    for (uint256 i = 0; i < discounts.tiers.length; i++) {
+      tiers[i][0] = discounts.tiers[i].discount;
+      tiers[i][1] = discounts.tiers[i].available;
+    }
+    return tiers;
+  }
+
+  function getAvailability(address _participant)
+    public
+    view
+    returns (uint256[])
+  {
+    uint256[] memory available = new uint256[](discounts.tiers.length);
+    if (!participants[_participant].authorized) {
+      return available;
+    }
+    for (uint256 i = 0; i < discounts.tiers.length; i++) {
+      if (i >= participants[_participant].minimumTier) {
+        available[i] = discounts.tiers[i].available;
+      }
+    }
+    return available;
+  }
+
+  modifier onlyAuthorized() {
+    require(participants[msg.sender].authorized);
+    _;
+  }
+
+  modifier whenRateSet() {
+    require(discounts.baseRate != 0);
+    _;
+  }
+
+  modifier whenCapped() {
+    require(cap.amount != 0);
+    _;
+  }
+
+  modifier whenOwnsToken() {
+    require(token.owner() == address(this));
+    _;
+  }
+}
+```
+
+This contract integrates all functionalities as per your specifications, including tier management, purchase limits, participant authorization, and token issuing. It ensures that the presale can only proceed under certain conditions and respects user roles and limits.

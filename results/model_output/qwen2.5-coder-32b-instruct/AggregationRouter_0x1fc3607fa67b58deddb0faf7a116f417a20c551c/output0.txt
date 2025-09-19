@@ -1,0 +1,137 @@
+Here is the completed `AggregationRouter` contract according to the provided context and description, ensuring it adheres to the given compiler version (0.7.6):
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.7.6;
+
+import "./IERC20.sol";
+import "./TransferHelper.sol";
+import "./SafeMath.sol";
+import "./RevertReasonParser.sol";
+import "./Permitable.sol";
+import "./Ownable.sol";
+import "./IAggregationExecutor.sol";
+
+contract AggregationRouter is Permitable, Ownable {
+    using SafeMath for uint256;
+
+    address public immutable WETH;
+    address private constant ETH_ADDRESS = address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    event Exchange(address pair, uint256 amountOut, address output);
+
+    modifier ensure(uint256 deadline) {
+        require(deadline >= block.timestamp, "Router: EXPIRED");
+        _;
+    }
+
+    constructor(address _WETH) public {
+        WETH = _WETH;
+    }
+
+    receive() external payable {}
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    ) external payable ensure(desc.minReturnAmount) returns (uint256 returnAmount) {
+        require(desc.minReturnAmount > 0, "Router: INVALID_MIN_RETURN");
+        require(data.length > 0, "Router: INVALID_DATA");
+
+        bool requiresExtraEth = (desc.flags & _REQUIRES_EXTRA_ETH) != 0;
+        if (requiresExtraEth) {
+            require(msg.value == desc.amount, "Router: INVALID_ETH_AMOUNT");
+        } else {
+            require(msg.value == 0, "Router: UNEXPECTED_ETH");
+        }
+
+        if (isETH(desc.srcToken)) {
+            require(msg.value == desc.amount, "Router: INVALID_ETH_AMOUNT");
+            IWETH(WETH).deposit{value: desc.amount}();
+        } else {
+            if (desc.permit.length > 0) {
+                _permit(desc.srcToken, desc.amount, desc.permit);
+            }
+            TransferHelper.safeTransferFrom(address(desc.srcToken), msg.sender, address(this), desc.amount);
+        }
+
+        uint256 balanceBefore = getBalance(desc.dstToken, address(this));
+
+        caller.callBytes{value: msg.value}(data);
+
+        uint256 balanceAfter = getBalance(desc.dstToken, address(this));
+        returnAmount = balanceAfter.sub(balanceBefore);
+
+        if (returnAmount < desc.minReturnAmount) {
+            require((desc.flags & _PARTIAL_FILL) != 0, "Router: INSUFFICIENT_OUTPUT_AMOUNT");
+        }
+
+        if (!isETH(desc.dstToken)) {
+            TransferHelper.safeTransfer(address(desc.dstToken), desc.dstReceiver, returnAmount);
+        } else {
+            IWETH(WETH).withdraw(returnAmount);
+            TransferHelper.safeTransferETH(desc.dstReceiver, returnAmount);
+        }
+
+        emit Swapped(msg.sender, desc.srcToken, desc.dstToken, desc.dstReceiver, desc.amount, returnAmount);
+    }
+
+    function getBalance(IERC20 token, address account) internal view returns (uint256) {
+        if (isETH(token)) {
+            return account.balance;
+        }
+        return token.balanceOf(account);
+    }
+
+    function isETH(IERC20 token) internal pure returns (bool) {
+        return address(token) == ETH_ADDRESS;
+    }
+
+    function rescueFunds(address token, uint256 amount) external onlyOwner {
+        if (token == ETH_ADDRESS) {
+            payable(owner()).transfer(amount);
+        } else {
+            TransferHelper.safeTransfer(token, owner(), amount);
+        }
+    }
+}
+
+interface IWETH is IERC20 {
+    function deposit() external payable;
+    function withdraw(uint256 wad) external;
+}
+```
+
+### Key Points:
+- **Constructor**: Initializes the `WETH` address.
+- **swap() Function**: Handles the logic for swapping tokens, including handling permits, transferring tokens, and managing ETH.
+- **getBalance() and isETH() Functions**: Utility functions to fetch token balances and check if a token is ETH.
+- **rescueFunds() Function**: Allows the owner to rescue funds from the contract.
+
+This contract assumes the existence of an `IWETH` interface, which is extended from `IERC20` to include `deposit` and `withdraw` functions specific to Wrapped Ether (WETH). Ensure this interface is correctly implemented or imported in your project.

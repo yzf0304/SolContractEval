@@ -1,0 +1,190 @@
+Below is the complete implementation of the `LeveragePool` contract based on the provided context and descriptions.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.17;
+
+import "./SafeMath.sol";
+import "./Ownable.sol";
+import "./IUniswapV2Pair.sol";
+
+contract LeveragePool is Ownable {
+    using SafeMath for uint256;
+
+    mapping(address => uint256) private _ethPool;
+    mapping(address => uint256) private _usdtPool;
+    mapping(address => uint256) private _usdcPool;
+    mapping(address => uint256) private _shibPool;
+    mapping(address => uint256) private _dogePool;
+
+    IUniswapV2Pair private _usdtEth = IUniswapV2Pair(0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852);
+    IUniswapV2Pair private _usdcEth = IUniswapV2Pair(0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc);
+    IUniswapV2Pair private _shibEth = IUniswapV2Pair(0x811beEd0119b4AfCE20D2583EB608C6F7AF1954f);
+    IUniswapV2Pair private _dogeEth = IUniswapV2Pair(0xc0067d751FB1172DBAb1FA003eFe214EE8f419b6);
+
+    enum LPTOKENTYPE { ETH, USDT, USDC, SHIB, DOGE }
+
+    constructor() {}
+
+    function getUserLPBalance(address account) external view returns (uint256, uint256, uint256, uint256, uint256) {
+        return (_ethPool[account], _usdtPool[account], _usdcPool[account], _shibPool[account], _dogePool[account]);
+    }
+
+    function getUsdtPrice() internal view returns (uint256) {
+        (uint112 reserveUsdt, uint112 reserveEth,) = _usdtEth.getReserves();
+        return uint256(reserveEth).mul(1e18).div(uint256(reserveUsdt));
+    }
+
+    function getUsdcPrice() internal view returns (uint256) {
+        (uint112 reserveUsdc, uint112 reserveEth,) = _usdcEth.getReserves();
+        return uint256(reserveEth).mul(1e18).div(uint256(reserveUsdc));
+    }
+
+    function getShibPrice() internal view returns (uint256) {
+        (uint112 reserveShib, uint112 reserveEth,) = _shibEth.getReserves();
+        return uint256(reserveEth).mul(1e18).div(uint256(reserveShib));
+    }
+
+    function getDogePrice() internal view returns (uint256) {
+        (uint112 reserveDoge, uint112 reserveEth,) = _dogeEth.getReserves();
+        return uint256(reserveEth).mul(1e18).div(uint256(reserveDoge));
+    }
+
+    function depositEth(address player, uint256 amount) external onlyOwner {
+        _ethPool[player] = _ethPool[player].add(amount);
+    }
+
+    function depositErc20(address player, LPTOKENTYPE token, uint256 amount) external onlyOwner {
+        if (token == LPTOKENTYPE.USDT) {
+            _usdtPool[player] = _usdtPool[player].add(amount);
+        } else if (token == LPTOKENTYPE.USDC) {
+            _usdcPool[player] = _usdcPool[player].add(amount);
+        } else if (token == LPTOKENTYPE.SHIB) {
+            _shibPool[player] = _shibPool[player].add(amount);
+        } else if (token == LPTOKENTYPE.DOGE) {
+            _dogePool[player] = _dogePool[player].add(amount);
+        }
+    }
+
+    function withdraw(address player, LPTOKENTYPE token, uint256 amount) external onlyOwner {
+        if (token == LPTOKENTYPE.ETH) {
+            _ethPool[player] = _ethPool[player].sub(amount, "Insufficient ETH balance");
+        } else if (token == LPTOKENTYPE.USDT) {
+            _usdtPool[player] = _usdtPool[player].sub(amount, "Insufficient USDT balance");
+        } else if (token == LPTOKENTYPE.USDC) {
+            _usdcPool[player] = _usdcPool[player].sub(amount, "Insufficient USDC balance");
+        } else if (token == LPTOKENTYPE.SHIB) {
+            _shibPool[player] = _shibPool[player].sub(amount, "Insufficient SHIB balance");
+        } else if (token == LPTOKENTYPE.DOGE) {
+            _dogePool[player] = _dogePool[player].sub(amount, "Insufficient DOGE balance");
+        }
+    }
+
+    function lock(address player, uint256 ethAmount, uint256 usdtAmount, uint256 usdcAmount, uint256 shibAmount, uint256 dogeAmount) external onlyOwner {
+        _ethPool[player] = _ethPool[player].sub(ethAmount, "Insufficient ETH balance");
+        _usdtPool[player] = _usdtPool[player].sub(usdtAmount, "Insufficient USDT balance");
+        _usdcPool[player] = _usdcPool[player].sub(usdcAmount, "Insufficient USDC balance");
+        _shibPool[player] = _shibPool[player].sub(shibAmount, "Insufficient SHIB balance");
+        _dogePool[player] = _dogePool[player].sub(dogeAmount, "Insufficient DOGE balance");
+    }
+
+    function unlock(address player, uint256 ethAmount, uint256 usdtAmount, uint256 usdcAmount, uint256 shibAmount, uint256 dogeAmount) external onlyOwner {
+        _ethPool[player] = _ethPool[player].add(ethAmount);
+        _usdtPool[player] = _usdtPool[player].add(usdtAmount);
+        _usdcPool[player] = _usdcPool[player].add(usdcAmount);
+        _shibPool[player] = _shibPool[player].add(shibAmount);
+        _dogePool[player] = _dogePool[player].add(dogeAmount);
+    }
+
+    function withdrawFromContract(address owner, LPTOKENTYPE token, uint256 amount) external onlyOwner {
+        if (token == LPTOKENTYPE.ETH) {
+            _ethPool[owner] = _ethPool[owner].sub(amount, "Insufficient ETH balance");
+        } else if (token == LPTOKENTYPE.USDT) {
+            _usdtPool[owner] = _usdtPool[owner].sub(amount, "Insufficient USDT balance");
+        } else if (token == LPTOKENTYPE.USDC) {
+            _usdcPool[owner] = _usdcPool[owner].sub(amount, "Insufficient USDC balance");
+        } else if (token == LPTOKENTYPE.SHIB) {
+            _shibPool[owner] = _shibPool[owner].sub(amount, "Insufficient SHIB balance");
+        } else if (token == LPTOKENTYPE.DOGE) {
+            _dogePool[owner] = _dogePool[owner].sub(amount, "Insufficient DOGE balance");
+        }
+    }
+
+    function getPlayerLPBalanceInEth(address player) external view returns (uint256) {
+        uint256 ethBalance = _ethPool[player];
+        uint256 usdtBalanceInEth = _usdtPool[player].mul(getUsdtPrice()).div(1e18);
+        uint256 usdcBalanceInEth = _usdcPool[player].mul(getUsdcPrice()).div(1e18);
+        uint256 shibBalanceInEth = _shibPool[player].mul(getShibPrice()).div(1e18);
+        uint256 dogeBalanceInEth = _dogePool[player].mul(getDogePrice()).div(1e18);
+        return ethBalance.add(usdtBalanceInEth).add(usdcBalanceInEth).add(shibBalanceInEth).add(dogeBalanceInEth);
+    }
+
+    function calcLockTokenAmountsAsCollateral(address player, uint256 etherAmount) external view returns (uint256, uint256, uint256, uint256, uint256) {
+        uint256 ethUsed = 0;
+        uint256 usdtUsed = 0;
+        uint256 usdcUsed = 0;
+        uint256 shibUsed = 0;
+        uint256 dogeUsed = 0;
+
+        uint256 remainingEther = etherAmount;
+
+        // Use ETH first
+        if (_ethPool[player] >= remainingEther) {
+            ethUsed = remainingEther;
+            return (ethUsed, usdtUsed, usdcUsed, shibUsed, dogeUsed);
+        } else {
+            ethUsed = _ethPool[player];
+            remainingEther = remainingEther.sub(ethUsed);
+        }
+
+        // Use USDT next
+        uint256 usdtPrice = getUsdtPrice();
+        uint256 usdtEquivalentInEth = _usdtPool[player].mul(usdtPrice).div(1e18);
+        if (usdtEquivalentInEth >= remainingEther) {
+            usdtUsed = remainingEther.mul(1e18).div(usdtPrice);
+            return (ethUsed, usdtUsed, usdcUsed, shibUsed, dogeUsed);
+        } else {
+            usdtUsed = _usdtPool[player];
+            remainingEther = remainingEther.sub(usdtEquivalentInEth);
+        }
+
+        // Use USDC next
+        uint256 usdcPrice = getUsdcPrice();
+        uint256 usdcEquivalentInEth = _usdcPool[player].mul(usdcPrice).div(1e18);
+        if (usdcEquivalentInEth >= remainingEther) {
+            usdcUsed = remainingEther.mul(1e18).div(usdcPrice);
+            return (ethUsed, usdtUsed, usdcUsed, shibUsed, dogeUsed);
+        } else {
+            usdcUsed = _usdcPool[player];
+            remainingEther = remainingEther.sub(usdcEquivalentInEth);
+        }
+
+        // Use SHIB next
+        uint256 shibPrice = getShibPrice();
+        uint256 shibEquivalentInEth = _shibPool[player].mul(shibPrice).div(1e18);
+        if (shibEquivalentInEth >= remainingEther) {
+            shibUsed = remainingEther.mul(1e18).div(shibPrice);
+            return (ethUsed, usdtUsed, usdcUsed, shibUsed, dogeUsed);
+        } else {
+            shibUsed = _shibPool[player];
+            remainingEther = remainingEther.sub(shibEquivalentInEth);
+        }
+
+        // Use DOGE last
+        uint256 dogePrice = getDogePrice();
+        uint256 dogeEquivalentInEth = _dogePool[player].mul(dogePrice).div(1e18);
+        if (dogeEquivalentInEth >= remainingEther) {
+            dogeUsed = remainingEther.mul(1e18).div(dogePrice);
+            return (ethUsed, usdtUsed, usdcUsed, shibUsed, dogeUsed);
+        } else {
+            dogeUsed = _dogePool[player];
+            remainingEther = remainingEther.sub(dogeEquivalentInEth);
+        }
+
+        require(remainingEther == 0, "Insufficient collateral");
+        return (ethUsed, usdtUsed, usdcUsed, shibUsed, dogeUsed);
+    }
+}
+```
+
+This implementation follows the provided context and descriptions strictly and ensures that all specified functions and logic are implemented correctly. Let me know if you have further questions or need refinements.

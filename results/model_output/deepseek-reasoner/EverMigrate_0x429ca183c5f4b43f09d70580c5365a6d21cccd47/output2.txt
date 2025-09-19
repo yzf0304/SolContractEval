@@ -1,0 +1,141 @@
+Here is the completed Solidity smart contract for EverMigrate:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.8;
+
+contract EverMigrate is IEverMigrate, Context, Ownable {
+    using SafeMath for uint256;
+
+    struct TokenDetails {
+        address sourceToken;
+        address targetToken;
+        address devAddress;
+        uint256 ratio;
+        bool isPresent;
+    }
+
+    struct Transaction {
+        uint256 amount;
+        uint256 timestamp;
+        uint32 txnId;
+    }
+
+    mapping(address => TokenDetails) private _tokenList;
+    address[] private _allTokens;
+
+    uint32 private _txnId = 0;
+    mapping(address => mapping(address => Transaction[])) private _userTxns;
+
+    function addTokenDetails(
+        address sourceToken,
+        address targetToken,
+        address devAddress,
+        uint256 ratio
+    ) external onlyOwner {
+        require(sourceToken != address(0), "Invalid source token");
+        require(targetToken != address(0), "Invalid target token");
+        require(devAddress != address(0), "Invalid dev address");
+        require(ratio > 0, "Ratio must be positive");
+        require(!_tokenList[sourceToken].isPresent, "Token already added");
+
+        _tokenList[sourceToken] = TokenDetails({
+            sourceToken: sourceToken,
+            targetToken: targetToken,
+            devAddress: devAddress,
+            ratio: ratio,
+            isPresent: true
+        });
+        _allTokens.push(sourceToken);
+        emit TokenAdded(sourceToken, targetToken, ratio);
+    }
+
+    function migrateTokens(address sourceToken, address toAddress, uint256 amount) external override {
+        require(supportsToken(sourceToken), "Token not supported");
+        TokenDetails storage details = _tokenList[sourceToken];
+        
+        IERC20 source = IERC20(sourceToken);
+        require(source.transferFrom(_msgSender(), details.devAddress, amount), "Transfer failed");
+        
+        uint256 targetAmount = amount.mul(details.ratio);
+        IERC20 target = IERC20(details.targetToken);
+        require(target.transfer(toAddress, targetAmount), "Target transfer failed");
+
+        _userTxns[_msgSender()][sourceToken].push(Transaction(
+            amount,
+            block.timestamp,
+            _txnId
+        ));
+        _txnId++;
+        
+        emit TokensMigrated(sourceToken, details.targetToken, amount, targetAmount);
+    }
+
+    function userTransactionsLength(address sourceToken, address userAddress) external view override returns (uint256) {
+        return _userTxns[userAddress][sourceToken].length;
+    }
+
+    function userTransaction(address sourceToken, address userAddress, uint256 position) external view override returns (uint256, uint256, uint32) {
+        Transaction storage txn = _userTxns[userAddress][sourceToken][position];
+        return (txn.amount, txn.timestamp, txn.txnId);
+    }
+
+    function returnTokens(address sourceToken, address toAddress, uint256 amount) external override onlyOwner {
+        require(supportsToken(sourceToken), "Token not supported");
+        TokenDetails storage details = _tokenList[sourceToken];
+        
+        IERC20 target = IERC20(details.targetToken);
+        require(target.transfer(toAddress, amount), "Transfer failed");
+        
+        emit TokensReturned(details.targetToken, toAddress, amount);
+    }
+
+    function tokenMigrateDetails(address sourceToken) external view override returns (address, uint256) {
+        TokenDetails storage details = _tokenList[sourceToken];
+        require(details.isPresent, "Token not supported");
+        return (details.targetToken, details.ratio);
+    }
+
+    function allSupportedTokens() external view override returns (address[] memory) {
+        return _allTokens;
+    }
+
+    function allSupportedTokensLength() external view override returns (uint256) {
+        return _allTokens.length;
+    }
+
+    function supportsToken(address sourceToken) public view override returns (bool) {
+        return _tokenList[sourceToken].isPresent;
+    }
+}
+```
+
+### Key Features and Implementation Details:
+
+1. **Token Management**:
+   - Uses `addTokenDetails` to register new migration pairs with conversion ratios
+   - Maintains a list of all supported tokens in `_allTokens`
+
+2. **Migration Process**:
+   - Transfers source tokens to specified dev address
+   - Converts tokens using preset ratio
+   - Automatically tracks all migration transactions with unique IDs
+
+3. **Transaction Tracking**:
+   - Maintains per-user transaction history
+   - Provides view functions for transaction history access
+
+4. **Safety Features**:
+   - Uses SafeMath for arithmetic operations
+   - Implements strict input validation
+   - Includes onlyOwner modifiers for sensitive operations
+
+5. **ERC20 Compliance**:
+   - Properly handles ERC20 transfer return values
+   - Supports tokens with different decimal configurations through ratio system
+
+6. **Transparency**:
+   - Emits events for all key operations
+   - Provides complete visibility into supported tokens and conversion rates
+
+This implementation maintains full compatibility with the provided interface while implementing robust security measures and efficient state management.

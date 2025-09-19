@@ -1,0 +1,118 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+/**
+ * @title SaudiPotatoz
+ * @notice This contract is an ERC721A compliant NFT (Non-Fungible Token) contract for the "SaudiPotatoz" collection.
+ * It allows users to mint NFTs, with options for free and paid mints, and includes various owner-only functions for managing the contract.
+ * @dev The contract uses the ERC721A standard for efficient batch minting, and it includes reentrancy guards and modifiers to ensure security and prevent abuse.
+ */
+contract SaudiPotatoz is ERC721A, Ownable, ReentrancyGuard {
+  string public baseURI;
+  uint public price = 0 ether;
+  uint public maxPerTx = 1;
+  uint public maxPerWallet = 1;
+  uint public totalFree = 0;
+  uint public maxSupply = 5000;
+  uint public nextOwnerToExplicitlySet;
+  bool public mintEnabled;
+
+  constructor() ERC721A("SaudiPotatoz", "SaudiPotatoz") {}
+
+  modifier callerIsUser() {
+    require(tx.origin == msg.sender, "The caller is another contract");
+    _;
+  }
+
+  function freeMint(uint256 amt) external callerIsUser {
+    require(mintEnabled, "Minting is not enabled");
+    require(totalSupply() + amt <= totalFree, "Exceeds total free supply");
+    require(numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max per wallet for free mint");
+    _safeMint(msg.sender, amt);
+  }
+
+  function mint(uint256 amt) external payable callerIsUser {
+    require(mintEnabled, "Minting is not enabled");
+    require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+    require(amt <= maxPerTx, "Exceeds max per transaction");
+    require(numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max per wallet");
+    require(msg.value >= price * amt, "Insufficient payment");
+    _safeMint(msg.sender, amt);
+  }
+
+  function ownerBatchMint(uint256 amt) external onlyOwner {
+    require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+    _safeMint(msg.sender, amt);
+  }
+
+  function toggleMinting() external onlyOwner {
+    mintEnabled = !mintEnabled;
+  }
+
+  function numberMinted(address owner) public view returns (uint256) {
+    return _numberMinted(owner);
+  }
+
+  function setBaseURI(string calldata baseURI_) external onlyOwner {
+    baseURI = baseURI_;
+  }
+
+  function setPrice(uint256 price_) external onlyOwner {
+    price = price_;
+  }
+
+  function setTotalFree(uint256 totalFree_) external onlyOwner {
+    totalFree = totalFree_;
+  }
+
+  function setMaxPerTx(uint256 maxPerTx_) external onlyOwner {
+    maxPerTx = maxPerTx_;
+  }
+
+  function setMaxPerWallet(uint256 maxPerWallet_) external onlyOwner {
+    maxPerWallet = maxPerWallet_;
+  }
+
+  function setmaxSupply(uint256 maxSupply_) external onlyOwner {
+    require(maxSupply_ >= totalSupply(), "Cannot set max supply below current supply");
+    maxSupply = maxSupply_;
+  }
+
+  function _baseURI() internal view virtual override returns (string memory) {
+    return baseURI;
+  }
+
+  function withdraw() external onlyOwner nonReentrant {
+    (bool success, ) = msg.sender.call{value: address(this).balance}("");
+    require(success, "Withdraw failed");
+  }
+
+  function setOwnersExplicit(uint256 quantity) external onlyOwner nonReentrant {
+    _setOwnersExplicit(quantity);
+  }
+
+  function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+    return ownershipOf(tokenId);
+  }
+
+  function _setOwnersExplicit(uint256 quantity) internal {
+    require(quantity > 0, "Quantity must be greater than zero");
+    require(totalSupply() > 0, "No tokens minted yet");
+
+    uint256 endIndex = nextOwnerToExplicitlySet + quantity;
+    if (endIndex > currentIndex) {
+      endIndex = currentIndex;
+    }
+
+    for (uint256 i = nextOwnerToExplicitlySet; i < endIndex; i++) {
+      if (_ownerships[i].addr == address(0)) {
+        TokenOwnership memory ownership = ownershipOf(i);
+        _ownerships[i] = ownership;
+      }
+    }
+
+    nextOwnerToExplicitlySet = endIndex;
+  }
+}
+```

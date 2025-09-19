@@ -1,0 +1,130 @@
+Here is the completed `MintHelper` contract strictly adhering to the provided context and descriptions. The implementation assumes the use of Solidity version 0.5.10 and leverages all described functionalities:
+
+```solidity
+pragma solidity 0.5.10;
+
+import "./Ownable.sol";
+import "./SafeMath.sol";
+
+contract MintHelper is Ownable {
+    using SafeMath for uint;
+
+    string public name;
+    address public mintableToken;
+    mapping(bytes32 => bool) successfulPayments;
+
+    constructor(address mToken, string memory mName) public {
+        require(mToken != address(0), "MintHelper: mintable token is the zero address");
+        mintableToken = mToken;
+        name = mName;
+    }
+
+    /**
+     * @notice Allows the owner to set the mintable token address.
+     * @dev Only the owner can call this function. Updates the `mintableToken` state variable.
+     * @param mToken The address of the mintable token.
+     * @return A boolean indicating the success of the operation.
+     */
+    function setMintableToken(address mToken) public onlyOwner returns (bool) {
+        require(mToken != address(0), "MintHelper: mintable token is the zero address");
+        mintableToken = mToken;
+        return true;
+    }
+
+    /**
+     * @notice Checks if a payment with a given ID was successful.
+     * @dev Uses the `successfulPayments` mapping to check the status of the payment.
+     * @param paymentId The unique identifier for the payment.
+     * @return A boolean indicating whether the payment was successful.
+     */
+    function paymentSuccessful(bytes32 paymentId) public view returns (bool) {
+        return successfulPayments[paymentId];
+    }
+
+    /**
+     * @notice Proxies the minting of a token using the provided nonce and challenge digest.
+     * @dev Calls the `mint` function on the `mintableToken` contract. Requires that the minting is successful.
+     * @param nonce The nonce used in the minting process.
+     * @param challenge_digest The challenge digest used in the minting process.
+     * @return A boolean indicating the success of the minting operation.
+     */
+    function proxyMint(uint256 nonce, bytes32 challenge_digest) public returns (bool) {
+        require(mintableToken != address(0), "MintHelper: mintable token is not set");
+        ERC918Interface token = ERC918Interface(mintableToken);
+        bool success = token.mint(nonce, challenge_digest);
+        require(success, "MintHelper: minting failed");
+        return success;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw any ETH held by the contract.
+     * @dev Only the owner can call this function. Transfers the entire balance of the contract to the owner.
+     */
+    function withdraw() public onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "MintHelper: no ETH balance to withdraw");
+        msg.sender.transfer(balance);
+    }
+
+    /**
+     * @notice Sends a specified amount of tokens to a destination address.
+     * @dev Only the owner can call this function. Uses the ERC20 `transfer` function to send tokens.
+     * @param _tokenAddr The address of the ERC20 token to send.
+     * @param dest The destination address to receive the tokens.
+     * @param value The amount of tokens to send.
+     * @return A boolean indicating the success of the transfer.
+     */
+    function send(address _tokenAddr, address dest, uint value) public onlyOwner returns (bool) {
+        require(_tokenAddr != address(0), "MintHelper: token address is the zero address");
+        require(dest != address(0), "MintHelper: destination address is the zero address");
+        require(value > 0, "MintHelper: value must be greater than 0");
+        ERC20Interface token = ERC20Interface(_tokenAddr);
+        bool success = token.transfer(dest, value);
+        require(success, "MintHelper: token transfer failed");
+        return success;
+    }
+
+    /**
+     * @notice Sends tokens to multiple destination addresses in a single transaction.
+     * @dev Only the owner can call this function. Ensures that the payment ID is unique and not already marked as successful. Uses the ERC20 `transfer` function to send tokens to each destination.
+     * @param _tokenAddr The address of the ERC20 token to send.
+     * @param paymentId The unique identifier for the payment.
+     * @param dests An array of destination addresses.
+     * @param values An array of token amounts corresponding to each destination address.
+     * @return The number of successful transfers.
+     */
+    function multisend(address _tokenAddr, bytes32 paymentId, address[] memory dests, uint256[] memory values)
+        public
+        onlyOwner
+        returns (uint256)
+    {
+        require(_tokenAddr != address(0), "MintHelper: token address is the zero address");
+        require(!successfulPayments[paymentId], "MintHelper: payment ID already used");
+        require(dests.length == values.length, "MintHelper: destinations and values length mismatch");
+
+        ERC20Interface token = ERC20Interface(_tokenAddr);
+        uint256 successfulTransfers = 0;
+
+        for (uint256 i = 0; i < dests.length; i++) {
+            require(dests[i] != address(0), "MintHelper: destination address is the zero address");
+            require(values[i] > 0, "MintHelper: value must be greater than 0");
+
+            bool success = token.transfer(dests[i], values[i]);
+            if (success) {
+                successfulTransfers = successfulTransfers.add(1);
+            }
+        }
+
+        successfulPayments[paymentId] = true;
+        return successfulTransfers;
+    }
+}
+```
+
+### Key Notes:
+1. **SafeMath Utilization**: Used `SafeMath` for arithmetic operations to prevent overflows/underflows.
+2. **Strict Validation**: Ensured proper input validation for addresses, values, and payment IDs.
+3. **Functionality**: Implemented all specified features as described, maintaining the behavior strictly according to the context provided.
+4. **Compatibility**: The contract is designed for Solidity version 0.5.10.
+
+Let me know if you need further modifications or explanations regarding the implementation!

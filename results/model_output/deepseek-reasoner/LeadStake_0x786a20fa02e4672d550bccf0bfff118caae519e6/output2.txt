@@ -1,0 +1,191 @@
+Here is the complete implementation of the LeadStake contract based on the provided requirements and context:
+
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity 0.6.12;
+
+contract LeadStake is Owned {
+    using SafeMath for uint;
+
+    address public lead;
+    uint public totalStaked;
+    uint public stakingTaxRate;
+    uint public registrationTax;
+    uint public dailyROI;
+    uint public unstakingTaxRate;
+    uint public minimumStakeValue;
+    bool public active = true;
+
+    mapping(address => uint) public stakes;
+    mapping(address => uint) public referralRewards;
+    mapping(address => uint) public referralCount;
+    mapping(address => uint) public stakeRewards;
+    mapping(address => uint) private lastClock;
+    mapping(address => bool) public registered;
+
+    event OnWithdrawal(address sender, uint amount);
+    event OnStake(address sender, uint amount, uint tax);
+    event OnUnstake(address sender, uint amount, uint tax);
+    event OnRegisterAndStake(address stakeholder, uint amount, uint totalTax, address _referrer);
+
+    constructor(
+        address _token,
+        uint _stakingTaxRate,
+        uint _unstakingTaxRate,
+        uint _dailyROI,
+        uint _registrationTax,
+        uint _minimumStakeValue
+    ) public {
+        lead = _token;
+        stakingTaxRate = _stakingTaxRate;
+        unstakingTaxRate = _unstakingTaxRate;
+        dailyROI = _dailyROI;
+        registrationTax = _registrationTax;
+        minimumStakeValue = _minimumStakeValue;
+    }
+
+    modifier onlyRegistered() {
+        require(registered[msg.sender], "Stakeholder must be registered");
+        _;
+    }
+
+    modifier onlyUnregistered() {
+        require(!registered[msg.sender], "Stakeholder is already registered");
+        _;
+    }
+
+    modifier whenActive() {
+        require(active, "Smart contract is currently inactive");
+        _;
+    }
+
+    function registerAndStake(uint _amount, address _referrer) external onlyUnregistered() whenActive() {
+        require(_referrer != msg.sender, "Cannot refer self");
+        require(_referrer == address(0) || registered[_referrer], "Referrer is not registered");
+        require(_amount >= registrationTax.add(minimumStakeValue), "Insufficient amount");
+        
+        require(IERC20(lead).transferFrom(msg.sender, address(this), _amount), "Transfer failed");
+        
+        uint stakableAmount = _amount.sub(registrationTax);
+        uint stakingTax = stakableAmount.mul(stakingTaxRate).div(1000);
+        uint afterTax = stakableAmount.sub(stakingTax);
+        
+        if (_referrer != address(0)) {
+            referralRewards[_referrer] = referralRewards[_referrer].add(stakingTax);
+            referralCount[_referrer] = referralCount[_referrer].add(1);
+        }
+
+        stakes[msg.sender] = afterTax;
+        registered[msg.sender] = true;
+        lastClock[msg.sender] = block.timestamp;
+        totalStaked = totalStaked.add(afterTax);
+
+        emit OnRegisterAndStake(msg.sender, _amount, registrationTax.add(stakingTax), _referrer);
+    }
+
+    function calculateEarnings(address _stakeholder) public view returns(uint) {
+        if (stakes[_stakeholder] == 0) return 0;
+        uint timeElapsed = block.timestamp.sub(lastClock[_stakeholder]);
+        return stakes[_stakeholder].mul(dailyROI).mul(timeElapsed).div(100 * 86400);
+    }
+
+    function stake(uint _amount) external onlyRegistered() whenActive() {
+        require(_amount >= minimumStakeValue, "Amount below minimum");
+        require(IERC20(lead).transferFrom(msg.sender, address(this), _amount), "Transfer failed");
+        
+        uint tax = _amount.mul(stakingTaxRate).div(1000);
+        uint afterTax = _amount.sub(tax);
+        
+        stakeRewards[msg.sender] = stakeRewards[msg.sender].add(calculateEarnings(msg.sender));
+        stakes[msg.sender] = stakes[msg.sender].add(afterTax);
+        totalStaked = totalStaked.add(afterTax);
+        lastClock[msg.sender] = block.timestamp;
+
+        emit OnStake(msg.sender, _amount, tax);
+    }
+
+    function unstake(uint _amount) external onlyRegistered() {
+        require(_amount > 0 && _amount <= stakes[msg.sender], "Invalid amount");
+        
+        stakeRewards[msg.sender] = stakeRewards[msg.sender].add(calculateEarnings(msg.sender));
+        totalStaked = totalStaked.sub(_amount);
+        stakes[msg.sender] = stakes[msg.sender].sub(_amount);
+        
+        uint tax = _amount.mul(unstakingTaxRate).div(1000);
+        uint afterTax = _amount.sub(tax);
+        
+        require(IERC20(lead).transfer(msg.sender, afterTax), "Transfer failed");
+        lastClock[msg.sender] = block.timestamp;
+
+        if (stakes[msg.sender] == 0) {
+            registered[msg.sender] = false;
+        }
+
+        emit OnUnstake(msg.sender, _amount, tax);
+    }
+
+    function withdrawEarnings() external returns (bool) {
+        uint earnings = calculateEarnings(msg.sender);
+        uint total = referralRewards[msg.sender].add(stakeRewards[msg.sender]).add(earnings);
+        require(total > 0, "No rewards");
+        
+        uint available = IERC20(lead).balanceOf(address(this)).sub(totalStaked);
+        require(available >= total, "Insufficient pool");
+        
+        referralRewards[msg.sender] = 0;
+        stakeRewards[msg.sender] = 0;
+        lastClock[msg.sender] = block.timestamp;
+        
+        require(IERC20(lead).transfer(msg.sender, total), "Transfer failed");
+        emit OnWithdrawal(msg.sender, total);
+        return true;
+    }
+
+    function rewardPool() external view onlyOwner returns(uint) {
+        return IERC20(lead).balanceOf(address(this)).sub(totalStaked);
+    }
+
+    function changeActiveStatus() external onlyOwner() {
+        active = !active;
+    }
+
+    function setStakingTaxRate(uint _stakingTaxRate) external onlyOwner() {
+        stakingTaxRate = _stakingTaxRate;
+    }
+
+    function setUnstakingTaxRate(uint _unstakingTaxRate) external onlyOwner() {
+        unstakingTaxRate = _unstakingTaxRate;
+    }
+
+    function setDailyROI(uint _dailyROI) external onlyOwner() {
+        dailyROI = _dailyROI;
+    }
+
+    function setRegistrationTax(uint _registrationTax) external onlyOwner() {
+        registrationTax = _registrationTax;
+    }
+
+    function setMinimumStakeValue(uint _minimumStakeValue) external onlyOwner() {
+        minimumStakeValue = _minimumStakeValue;
+    }
+
+    function filter(uint _amount) external onlyOwner returns (bool) {
+        uint available = IERC20(lead).balanceOf(address(this)).sub(totalStaked);
+        require(_amount <= available, "Insufficient balance");
+        require(IERC20(lead).transfer(owner, _amount), "Transfer failed");
+        return true;
+    }
+}
+```
+
+This implementation includes:
+1. Complete registration and staking logic with referral system
+2. Tax calculations for staking and unstaking
+3. Daily ROI calculations
+4. Reward withdrawal functionality
+5. Owner controls for managing parameters
+6. Safety checks for all operations
+7. Proper event emissions
+8. Compliance with Solidity 0.6.12 syntax and requirements
+
+The contract maintains strict separation between staked funds and reward pools, ensures proper tax distribution, and includes all necessary modifiers for access control and contract state management.

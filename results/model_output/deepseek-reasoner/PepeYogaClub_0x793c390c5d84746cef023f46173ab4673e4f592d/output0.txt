@@ -1,0 +1,95 @@
+Here is the completed smart contract for PepeYogaClub:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.15;
+
+contract PepeYogaClub is ERC721A, Ownable {
+    string public baseURI = "ipfs://QmTLWN9WPq5L9eS9EKcTn2rqUCzr9QK5sd8DYVkkL7yguL/";
+    string public contractURI = "ipfs://QmUvB8sKL4XFTxbMkL9FykiqLgrXeBV1mUkdzWMWhachvD";
+    
+    uint256 public MAX_PER_WALLET = 11;
+    uint256 public constant MAX_SUPPLY = 2069;
+    uint256 public price = 0.0069 ether;
+    
+    bool public paused = true;
+
+    constructor() ERC721A("PepeYogaClub", "PYC") {}
+
+    function mint(uint256 _amount) external payable {
+        require(!paused, "Minting paused");
+        require(_amount > 0, "Invalid amount");
+        require(minted(msg.sender) + _amount <= MAX_PER_WALLET, "Exceeds wallet limit");
+        require(totalSupply() + _amount <= MAX_SUPPLY, "Exceeds supply");
+        require(msg.value >= price * _amount, "Insufficient ETH");
+        
+        _mint(msg.sender, _amount);
+    }
+
+    function _startTokenId() internal view override returns (uint256) {
+        return 1;
+    }
+
+    function minted(address _owner) public view returns (uint256) {
+        return _numberMinted(_owner);
+    }
+
+    function withdraw() external onlyOwner {
+        (bool success, ) = owner().call{value: address(this).balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function teamMint(address[] memory _to, uint256[] memory _amount) external onlyOwner {
+        require(_to.length == _amount.length, "Array mismatch");
+        
+        uint256 totalAmount;
+        for (uint256 i = 0; i < _amount.length; i++) {
+            totalAmount += _amount[i];
+        }
+        require(totalSupply() + totalAmount <= MAX_SUPPLY, "Exceeds supply");
+        
+        for (uint256 i = 0; i < _to.length; i++) {
+            _mint(_to[i], _amount[i]);
+        }
+    }
+
+    function setMaxPerWallet(uint256 _max) external onlyOwner {
+        MAX_PER_WALLET = _max;
+    }
+
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    function toggleMint() external onlyOwner {
+        paused = !paused;
+    }
+
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setContractURI(string memory _contractURI) external onlyOwner {
+        contractURI = _contractURI;
+    }
+
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        require(_exists(_tokenId), "Non-existent token");
+        return string(abi.encodePacked(baseURI, Strings.toString(_tokenId), ".json"));
+    }
+}
+```
+
+This implementation includes:
+
+1. ERC721A standard with optimized batch minting
+2. Configurable mint price and wallet limits
+3. Owner-only administrative functions
+4. Proper URI handling with IPFS compatibility
+5. Supply limit enforcement
+6. Withdrawal functionality for collected funds
+7. Team minting capability for reserved NFTs
+8. Pausable minting functionality
+9. Metadata URI configuration
+
+The contract maintains all specified requirements including the 0.0069 ETH mint price, 11 NFT per wallet limit, and 2069 total supply cap. It uses the efficient ERC721A implementation to minimize gas costs for multiple mints.

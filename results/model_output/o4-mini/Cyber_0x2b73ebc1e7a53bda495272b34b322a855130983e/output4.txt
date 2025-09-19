@@ -1,0 +1,254 @@
+pragma solidity 0.8.14;
+// SPDX-License-Identifier: MIT
+
+/**
+ * @title Cyber
+ * @author  
+ * @notice The Cyber contract is an ERC721 token contract that allows for minting, burning,
+ *         and traversing tokens across different chains using LayerZero.
+ * @dev This contract extends the ERC721Omni contract to include additional functionality
+ *      such as public minting, huntlist minting, and chain traversal.
+ */
+contract Cyber is ERC721Omni {
+
+    // metadata
+    string private _baseURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+
+    // supply caps
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+
+    // state
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    /**
+     * @dev Modifier to ensure the caller is a user (not a contract).
+     */
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Contract Caller");
+        _;
+    }
+
+    /**
+     * @notice Allows users to donate to the contract.
+     * @dev This function accepts ETH donations.
+     */
+    function donate() external payable {}
+
+    /**
+     * @notice Allows token owner to traverse to another chain via LayerZero.
+     * @param _chainId Destination chain ID
+     * @param tokenId ID of the token to traverse
+     */
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        // must own
+        require(ownerOf(tokenId) == msg.sender, "Not token owner");
+        // must have a trusted remote set
+        require(trustedRemoteLookup[_chainId].length != 0, "Destination not trusted");
+        // burn locally
+        _burn(tokenId);
+        totalSupply--;
+
+        // build payload: recipient + tokenId
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        // adapter params: version 1 and gas limit for dst receive
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForLzReceive);
+
+        // estimate fee and require enough payment
+        (uint256 messageFee, ) = endpoint.estimateFees(
+            _chainId,
+            address(this),
+            payload,
+            false,
+            adapterParams
+        );
+        require(msg.value >= messageFee, "Insufficient message fee");
+
+        // send cross-chain, refund extra to sender
+        _lzSend(
+            _chainId,
+            payload,
+            payable(msg.sender),
+            address(0),
+            adapterParams
+        );
+    }
+
+    /**
+     * @notice Internal function to handle the reception of tokens from another chain.
+     * @dev Decodes payload and mints the token on this chain.
+     */
+    function _LzReceive(
+        uint16,
+        bytes memory,
+        uint64,
+        bytes memory _payload
+    ) internal override {
+        (address to, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        totalSupply++;
+        _safeMint(to, tokenId);
+    }
+
+    /**
+     * @notice Allows users to mint a token during the public mint phase.
+     */
+    function publicMint() external callerIsUser {
+        require(publicStatus, "Public mint inactive");
+        require(!depreciatedMint, "Mint deprecated");
+        require(publicMinted < publicMintedCap, "Public cap reached");
+        require(totalSupply < maximumSupply, "Max supply reached");
+
+        publicMinted++;
+        totalSupply++;
+        _safeMint(msg.sender, totalSupply);
+    }
+
+    /**
+     * @notice Allows users to mint tokens if they are on the huntlist.
+     * @param _proof The Merkle proof to verify the caller's inclusion.
+     */
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        require(huntlistStatus, "Huntlist mint inactive");
+        require(!depreciatedMint, "Mint deprecated");
+        require(_addressData[msg.sender].huntlistMinted == 0, "Already claimed");
+
+        // verify Merkle proof
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(verifyProof(_proof, merkleRoot, leaf), "Invalid proof");
+
+        // mint two tokens
+        require(totalSupply + 2 <= maximumSupply, "Max supply reached");
+        _addressData[msg.sender].huntlistMinted = 2;
+
+        totalSupply++;
+        _safeMint(msg.sender, totalSupply);
+        totalSupply++;
+        _safeMint(msg.sender, totalSupply);
+    }
+
+    /**
+     * @notice Verifies a Merkle proof against the root.
+     */
+    function verifyProof(
+        bytes32[] memory proof,
+        bytes32 root,
+        bytes32 leaf
+    ) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash <= proofElement) {
+                computedHash = keccak256(
+                    abi.encodePacked(computedHash, proofElement)
+                );
+            } else {
+                computedHash = keccak256(
+                    abi.encodePacked(proofElement, computedHash)
+                );
+            }
+        }
+        return computedHash == root;
+    }
+
+    /**
+     * @notice Allows the owner of a token to burn it.
+     * @param tokenId The ID of the token to be burned.
+     */
+    function burnHunter(uint256 tokenId) external {
+        require(ownerOf(tokenId) == msg.sender, "Not token owner");
+        _burn(tokenId);
+        totalSupply--;
+    }
+
+    /**
+     * @notice Sets the state of the public mint.
+     */
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    /**
+     * @notice Sets the state of the huntlist mint.
+     */
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    /**
+     * @notice Sets the cap for the public mint supply.
+     */
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        publicMintedCap = _supply;
+    }
+
+    /**
+     * @notice Sets the Merkle root for the huntlist.
+     */
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    /**
+     * @notice Deprecates the mint and mints 66 tokens to the deployer.
+     */
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Already deprecated");
+        depreciatedMint = true;
+
+        // mint 66 to deployer
+        require(totalSupply + 66 <= maximumSupply, "Max supply exceeded");
+        for (uint256 i = 0; i < 66; i++) {
+            totalSupply++;
+            _safeMint(msg.sender, totalSupply);
+        }
+    }
+
+    /**
+     * @notice Sets the base URI for the token metadata.
+     */
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseURI = _newURI;
+    }
+
+    /**
+     * @notice Sets the gas amount for the LayerZero receive function.
+     */
+    function setGasForDestinationLzReceive(uint256 _newGasValue)
+        external
+        onlyOwner
+    {
+        gasForLzReceive = _newGasValue;
+    }
+
+    /**
+     * @notice Sets the LayerZero endpoint address.
+     */
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    /**
+     * @notice Returns the base URI for the token metadata.
+     */
+    function baseURI() public view override returns (string memory) {
+        return _baseURI;
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all ETH from the contract.
+     */
+    function withdrawDonations() external onlyOwner {
+        payable(msg.sender).transfer(address(this).balance);
+    }
+}

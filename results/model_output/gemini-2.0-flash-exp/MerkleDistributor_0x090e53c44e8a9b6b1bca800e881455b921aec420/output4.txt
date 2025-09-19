@@ -1,0 +1,72 @@
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+/**
+ * @notice A contract for distributing tokens based on a Merkle tree, allowing users to claim their tokens by providing a valid Merkle proof.
+ * @dev The contract uses a Merkle tree to verify the validity of claims. It also uses a bit map to keep track of which claims have been made.
+ */
+contract MerkleDistributor is IMerkleDistributor {
+    address public immutable override token;
+    bytes32 public immutable override merkleRoot;
+
+    // This is a packed array of booleans.
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    /**
+     * @notice Initializes the contract with the token address and the Merkle root.
+     * @param token_ The address of the token to be distributed.
+     * @param merkleRoot_ The root of the Merkle tree used for verifying claims.
+     */
+    constructor(address token_, bytes32 merkleRoot_) public {
+        token = token_;
+        merkleRoot = merkleRoot_;
+    }
+
+    /**
+     * @notice Checks if a particular index has already been claimed.
+     * @param index The index in the Merkle tree to check.
+     * @return bool True if the index has been claimed, false otherwise.
+     * @dev Uses a bit map to efficiently store and check the claimed status of each index.
+     */
+    function isClaimed(uint256 index) public view override returns (bool) {
+        uint256 bit = index % 256;
+        uint256 byte = index / 256;
+        uint256 claimedWord = claimedBitMap[byte];
+        uint256 mask = 1 << bit;
+        return claimedWord & mask != 0;
+    }
+
+    /**
+     * @notice Marks a particular index as claimed.
+     * @param index The index in the Merkle tree to mark as claimed.
+     * @dev Updates the bit map to reflect that the index has been claimed.
+     */
+    function _setClaimed(uint256 index) private {
+        uint256 bit = index % 256;
+        uint256 byte = index / 256;
+        claimedBitMap[byte] |= 1 << bit;
+    }
+
+    /**
+     * @notice Allows a user to claim their tokens by providing a valid Merkle proof.
+     * @param index The index in the Merkle tree corresponding to the claim.
+     * @param account The address of the account claiming the tokens.
+     * @param amount The amount of tokens to be claimed.
+     * @param merkleProof The Merkle proof to verify the claim.
+     * @dev Verifies the Merkle proof, checks if the claim has already been made, and transfers the tokens to the account.
+     */
+    function claim(uint256 index, address account, uint256 amount, bytes32[] calldata merkleProof) external override {
+        require(!isClaimed(index), "MerkleDistributor: Drop already claimed.");
+
+        // Reconstruct the leaf node from the arguments.
+        bytes32 leaf = keccak256(abi.encodePacked(index, account, amount));
+
+        require(MerkleProof.verify(merkleProof, merkleRoot, leaf), "MerkleDistributor: Invalid proof.");
+
+        _setClaimed(index);
+
+        IERC20(token).transfer(account, amount);
+
+        emit Claimed(index, account, amount);
+    }
+}
+```

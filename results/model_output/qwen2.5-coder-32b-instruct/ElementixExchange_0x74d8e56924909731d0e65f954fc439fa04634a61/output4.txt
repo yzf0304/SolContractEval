@@ -1,0 +1,122 @@
+Here is the completed `ProxyRegistry` contract based on the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity 0.8.4;
+
+import "./dependencies/openzeppelin/contracts/access/Ownable.sol";
+
+contract ProxyRegistry is Ownable {
+
+    /* DelegateProxy implementation contract. Must be initialized. */
+    address public delegateProxyImplementation;
+
+    /* Authenticated proxies by user. */
+    mapping(address => OwnableDelegateProxy) public proxies;
+
+    /* Contracts pending access. */
+    mapping(address => uint256) public pending;
+
+    /* Contracts allowed to call those proxies. */
+    mapping(address => bool) public contracts;
+
+    /* Delay period for adding an authenticated contract.
+       This mitigates a particular class of potential attack on the Elementix DAO (which owns this registry) - if at any point the value of assets held by proxy contracts exceeded the value of half the ELT supply (votes in the DAO),
+       a malicious but rational attacker could buy half the Elementix and grant themselves access to all the proxy contracts. A delay period renders this attack nonthreatening - given one weeks, if that happened, users would have
+       plenty of time to notice and transfer their assets.
+    */
+    uint256 public constant DELAY_PERIOD = 7 days;
+
+    // event
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool opt);
+
+    /**
+     * @notice Start the process to enable access for a specified contract. Subject to a delay period.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function startGrantAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        require(pending[addr] == 0, "Address already pending authentication");
+        pending[addr] = block.timestamp;
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice End the process to enable access for a specified contract after the delay period has passed.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function endGrantAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        require(pending[addr] != 0, "No pending authentication");
+        require(block.timestamp >= pending[addr] + DELAY_PERIOD, "Delay period has not yet passed");
+        contracts[addr] = true;
+        delete pending[addr];
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice Revoke access for a specified contract. Can be done instantly.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address of which to revoke permissions
+     */
+    function revokeAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        contracts[addr] = false;
+        emit AuthenticationOperation(addr, false);
+    }
+
+    /**
+     * @notice Register a proxy contract with this registry.
+     * @dev Must be called by the user for whom the proxy is being created. Creates a new AuthenticatedProxy.
+     * @return proxy New AuthenticatedProxy contract
+     */
+    function registerProxy()
+        public
+        returns (OwnableDelegateProxy proxy)
+    {
+        require(delegateProxyImplementation != address(0), "Delegate proxy implementation is not set");
+
+        proxy = new OwnableDelegateProxy(
+            msg.sender,
+            delegateProxyImplementation,
+            abi.encodeWithSignature("initialize(address,address)", msg.sender, address(this))
+        );
+
+        proxies[msg.sender] = proxy;
+        emit RegisterProxy(msg.sender, address(proxy));
+        return proxy;
+    }
+}
+
+// Mocking OwnableDelegateProxy for compilation
+contract OwnableDelegateProxy {
+    address public owner;
+    address public implementation;
+
+    constructor(address owner_, address implementation_, bytes memory data) {
+        owner = owner_;
+        implementation = implementation_;
+        (bool success, ) = implementation_.delegatecall(data);
+        require(success, "Initialization failed");
+    }
+}
+```
+
+### Explanation:
+- **OwnableDelegateProxy**: This is a mock contract just to allow the `registerProxy` function to compile and test the behavior. In a real-world scenario, `OwnableDelegateProxy` would contain the necessary functionality as per the intended design.
+- **startGrantAuthentication**: Starts the process to add a contract to the list of approved contracts by recording the timestamp when the request was made.
+- **endGrantAuthentication**: Completes the process to add a contract after ensuring the delay period has passed.
+- **revokeAuthentication**: Immediately removes a contract from the list of approved contracts.
+- **registerProxy**: Registers a new proxy contract for the calling user. It ensures that the `delegateProxyImplementation` is set before creating a new proxy.
+
+Ensure that the `OwnableDelegateProxy` contract matches your actual implementation for production use.

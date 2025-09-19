@@ -1,0 +1,446 @@
+I'll complete the ERC721 contract according to the provided context and description. Here's the fully implemented contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+/**
+ * @title ERC721 NFT Contract
+ * @notice This contract implements the ERC721 standard for non-fungible tokens (NFTs) and includes additional functionalities such as minting, ownership transfer, and token URI management.
+ * @dev The contract is designed to be a basic implementation of an NFT collection, with specific features like limited minting, custom URI generation, and owner-controlled minting status.
+ */
+contract ERC721 is ERC165, IERC721, IERC721Metadata {
+    using Address for address;
+    using Strings for uint256;
+    
+    uint256 private _totalMintsAllowed = 4;
+    
+    string private uriLink = "https://spicypumpkins.com/api/json";
+    
+    bool private _minting = true;
+    
+    address payable private _owner;
+    
+    uint256 private _count;
+    
+    string private _name;
+
+    string private _symbol;
+
+    mapping(uint256 => address) private _owners;
+    
+    mapping(uint256 => string) private _uri;
+
+    mapping(address => uint256) private _balances;
+
+    mapping(uint256 => address) private _tokenApprovals;
+    
+    mapping(address => uint256) private _minted;
+
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+
+    /**
+     * @notice Initializes the contract with the provided name and symbol.
+     * @param name_ The name of the NFT collection.
+     * @param symbol_ The symbol of the NFT collection.
+     * @dev Sets the initial owner and assigns the first token to the contract creator.
+     */
+    constructor (string memory name_, string memory symbol_) {
+        _name = name_;
+        _symbol = symbol_;
+        _owners[0] = msg.sender;
+        _balances[msg.sender] = 1;
+        _owner = payable(msg.sender);
+    }
+    
+    /**
+     * @notice Allows the owner to enable or disable minting.
+     * @param boolean The new minting status.
+     * @dev Only the contract owner can call this function.
+     */
+    function setMinting(bool boolean) external {
+        require(msg.sender == _owner, "Only owner can set minting status");
+        _minting = boolean;
+    }
+    
+    /**
+     * @notice Transfers ownership of the contract to a new address.
+     * @param to The new owner's address.
+     * @dev Only the current owner can call this function.
+     */
+    function transferOwnership(address to) external {
+        require(msg.sender == _owner, "Only owner can transfer ownership");
+        require(to != address(0), "Cannot transfer to zero address");
+        _owner = payable(to);
+    }
+    
+    /**
+     * @notice Checks if the contract supports a given interface.
+     * @param interfaceId The ID of the interface to check.
+     * @return A boolean indicating whether the interface is supported.
+     * @dev Supports the ERC721 and ERC721Metadata interfaces.
+     */
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return 
+            interfaceId == type(IERC721).interfaceId || 
+            interfaceId == type(IERC721Metadata).interfaceId || 
+            super.supportsInterface(interfaceId);
+    }
+
+    /**
+     * @notice Returns the balance of NFTs owned by a given address.
+     * @param owner The address to query the balance of.
+     * @return The number of NFTs owned by the address.
+     * @dev Reverts if the `owner` is the zero address.
+     */
+    function balanceOf(address owner) public view virtual override returns (uint256) {
+        require(owner != address(0), "ERC721: balance query for the zero address");
+        return _balances[owner];
+    }
+
+    /**
+     * @notice Returns the owner of a given NFT.
+     * @param tokenId The ID of the NFT to query.
+     * @return The address of the NFT's owner.
+     * @dev Reverts if the `tokenId` does not exist.
+     */
+    function ownerOf(uint256 tokenId) public view virtual override returns (address) {
+        address owner = _owners[tokenId];
+        require(owner != address(0), "ERC721: owner query for nonexistent token");
+        return owner;
+    }
+
+    /**
+     * @notice Returns the name of the NFT collection.
+     * @return The name of the NFT collection.
+     */
+    function name() public view virtual override returns (string memory) {
+        return _name;
+    }
+
+    /**
+     * @notice Returns the symbol of the NFT collection.
+     * @return The symbol of the NFT collection.
+     */
+    function symbol() public view virtual override returns (string memory) {
+        return _symbol;
+    }
+    
+    /**
+     * @notice Returns the total supply of NFTs in the collection.
+     * @return The total number of NFTs in the collection.
+     * @dev This is a fixed value of 4444.
+     */
+    function totalSupply() external view override returns(uint256) {
+        return 4444;
+    }
+
+    /**
+     * @notice Returns the URI for a given NFT.
+     * @param tokenId The ID of the NFT to query.
+     * @return The URI of the NFT.
+     * @dev The URI is generated based on the `uriLink` and `tokenId`.
+     */
+    function tokenURI(uint256 tokenId) external view override returns (string memory) {
+        require(_exists(tokenId), "ERC721: URI query for nonexistent token");
+        
+        string memory baseURI = _baseURI();
+        if (bytes(_uri[tokenId]).length > 0) {
+            return _uri[tokenId];
+        }
+        
+        return bytes(baseURI).length > 0 ? concat(uriLink, tokenId.toString()) : "";
+    }
+
+    /**
+     * @notice Returns the base URI for the NFTs.
+     * @return The base URI for the NFTs.
+     * @dev This is currently an empty string.
+     */
+    function _baseURI() internal view virtual returns (string memory) {
+        return "";
+    }
+
+    /**
+     * @notice Approves a given address to manage a specific NFT.
+     * @param to The address to approve.
+     * @param tokenId The ID of the NFT to approve.
+     * @dev Only the owner or an approved operator can call this function.
+     */
+    function approve(address to, uint256 tokenId) external override {
+        address owner = ownerOf(tokenId);
+        require(to != owner, "ERC721: approval to current owner");
+        require(
+            msg.sender == owner || isApprovedForAll(owner, msg.sender),
+            "ERC721: approve caller is not owner nor approved for all"
+        );
+
+        _approve(to, tokenId);
+    }
+
+    /**
+     * @notice Returns the address approved to manage a specific NFT.
+     * @param tokenId The ID of the NFT to query.
+     * @return The address approved to manage the NFT.
+     * @dev Reverts if the `tokenId` does not exist.
+     */
+    function getApproved(uint256 tokenId) public view virtual override returns (address) {
+        require(_exists(tokenId), "ERC721: approved query for nonexistent token");
+
+        return _tokenApprovals[tokenId];
+    }
+
+    /**
+     * @notice Sets the approval for all NFTs of the caller to a given address.
+     * @param operator The address to set the approval for.
+     * @param approved The new approval status.
+     * @dev Emits an `ApprovalForAll` event.
+     */
+    function setApprovalForAll(address operator, bool approved) public virtual override {
+        require(operator != msg.sender, "ERC721: approve to caller");
+
+        _operatorApprovals[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    /**
+     * @notice Checks if an address is approved for all NFTs of another address.
+     * @param owner The address to check the approval for.
+     * @param operator The address to check the approval of.
+     * @return A boolean indicating whether the operator is approved for all NFTs of the owner.
+     */
+    function isApprovedForAll(address owner, address operator) public view virtual override returns (bool) {
+        return _operatorApprovals[owner][operator];
+    }
+
+    /**
+     * @notice Transfers an NFT from one address to another.
+     * @param from The address to transfer the NFT from.
+     * @param to The address to transfer the NFT to.
+     * @param tokenId The ID of the NFT to transfer.
+     * @dev Only the owner or an approved operator can call this function.
+     */
+    function transferFrom(address from, address to, uint256 tokenId) external override {
+        require(_isApprovedOrOwner(msg.sender, tokenId), "ERC721: transfer caller is not owner nor approved");
+        _transfer(from, to, tokenId);
+    }
+
+    /**
+     * @notice Safely transfers an NFT from one address to another.
+     * @param from The address to transfer the NFT from.
+     * @param to The address to transfer the NFT to.
+     * @param tokenId The ID of the NFT to transfer.
+     * @dev Ensures that the recipient is an ERC721Receiver.
+     */
+    function safeTransferFrom(address from, address to, uint256 tokenId) external override {
+        safeTransferFrom(from, to, tokenId, "");
+    }
+
+    /**
+     * @notice Safely transfers an NFT from one address to another with additional data.
+     * @param from The address to transfer the NFT from.
+     * @param to The address to transfer the NFT to.
+     * @param tokenId The ID of the NFT to transfer.
+     * @param _data Additional data to send with the transfer.
+     * @dev Ensures that the recipient is an ERC721Receiver and processes the `_data`.
+     */
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public override {
+        require(_isApprovedOrOwner(msg.sender, tokenId), "ERC721: transfer caller is not owner nor approved");
+        _safeTransfer(from, to, tokenId, _data);
+    }
+
+    /**
+     * @notice Safely transfers an NFT from one address to another with additional data.
+     * @param from The address to transfer the NFT from.
+     * @param to The address to transfer the NFT to.
+     * @param tokenId The ID of the NFT to transfer.
+     * @param _data Additional data to send with the transfer.
+     * @dev Ensures that the recipient is an ERC721Receiver and processes the `_data`.
+     */
+    function _safeTransfer(address from, address to, uint256 tokenId, bytes memory _data) internal virtual {
+        _transfer(from, to, tokenId);
+        require(_checkOnERC721Received(from, to, tokenId, _data), "ERC721: transfer to non ERC721Receiver implementer");
+    }
+
+    /**
+     * @notice Checks if an NFT exists.
+     * @param tokenId The ID of the NFT to check.
+     * @return A boolean indicating whether the NFT exists.
+     */
+    function _exists(uint256 tokenId) internal view returns (bool) {
+        return _owners[tokenId] != address(0);
+    }
+
+    /**
+     * @notice Checks if an address is the owner or approved to manage a specific NFT.
+     * @param spender The address to check.
+     * @param tokenId The ID of the NFT to check.
+     * @return A boolean indicating whether the address is the owner or approved.
+     * @dev Reverts if the `tokenId` does not exist.
+     */
+    function _isApprovedOrOwner(address spender, uint256 tokenId) internal view returns (bool) {
+        require(_exists(tokenId), "ERC721: operator query for nonexistent token");
+        address owner = ownerOf(tokenId);
+        return (spender == owner || getApproved(tokenId) == spender || isApprovedForAll(owner, spender));
+    }
+
+    /**
+     * @notice Mints a new NFT to a given address.
+     * @param to The address to mint the NFT to.
+     * @return The ID of the newly minted NFT.
+     * @dev Requires the sender to have sufficient ETH, and the minting to be enabled. The minting fee is transferred to the owner.
+     */
+    function mint(address to) external payable returns(uint256 ID) {
+        require(_minting, "Minting is disabled");
+        require(_minted[msg.sender] < _totalMintsAllowed, "Maximum mints reached");
+        require(msg.value >= 0.05 ether, "Insufficient ETH sent");
+        
+        _owner.transfer(msg.value);
+        
+        ID = internalMint(to);
+        _minted[msg.sender]++;
+        
+        return ID;
+    }
+
+    /**
+     * @notice Internally mints a new NFT to a given address.
+     * @param to The address to mint the NFT to.
+     * @return The ID of the newly minted NFT.
+     * @dev Used by the `mint` function to handle the actual minting logic.
+     */
+    function internalMint(address to) internal returns(uint256 ID) {
+        require(to != address(0), "ERC721: mint to the zero address");
+        
+        _count++;
+        uint256 tokenId = _count;
+        
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+        
+        emit Transfer(address(0), to, tokenId);
+        
+        return tokenId;
+    }
+
+    /**
+     * @notice Concatenates two strings.
+     * @param _base The base string.
+     * @param _value The value string to concatenate.
+     * @return The concatenated string.
+     * @dev Used to generate the URI for the NFT.
+     */
+    function concat(string memory _base, string memory _value) pure internal returns (string memory) {
+        bytes memory _baseBytes = bytes(_base);
+        bytes memory _valueBytes = bytes(_value);
+
+        string memory _tmpValue = new string(_baseBytes.length + _valueBytes.length);
+        bytes memory _newValue = bytes(_tmpValue);
+
+        uint i;
+        uint j;
+
+        for (i = 0; i < _baseBytes.length; i++) {
+            _newValue[j++] = _baseBytes[i];
+        }
+
+        for (i = 0; i < _valueBytes.length; i++) {
+            _newValue[j++] = _valueBytes[i];
+        }
+
+        return string(_newValue);
+    }
+
+    /**
+     * @notice Mints multiple NFTs to a given address.
+     * @param to The address to mint the NFTs to.
+     * @param amount The number of NFTs to mint.
+     * @return An array of the IDs of the newly minted NFTs.
+     * @dev Requires the sender to have sufficient ETH for the specified amount of NFTs, and the minting to be enabled. The minting fee is transferred to the owner.
+     */
+    function multiMint(address to, uint256 amount) external payable returns(uint256[] memory IDs) {
+        require(_minting, "Minting is disabled");
+        require(_minted[msg.sender] + amount <= _totalMintsAllowed, "Maximum mints reached");
+        require(msg.value >= 0.05 ether * amount, "Insufficient ETH sent");
+        
+        _owner.transfer(msg.value);
+        
+        IDs = new uint256[](amount);
+        for (uint256 i = 0; i < amount; i++) {
+            IDs[i] = internalMint(to);
+        }
+        
+        _minted[msg.sender] += amount;
+        
+        return IDs;
+    }
+
+    /**
+     * @notice Changes the maximum number of NFTs that can be minted by a single address.
+     * @param newMax The new maximum number of NFTs.
+     * @dev Only the contract owner can call this function.
+     */
+    function changeMax(uint256 newMax) external {
+        require(msg.sender == _owner, "Only owner can change max");
+        _totalMintsAllowed = newMax;
+    }
+
+    /**
+     * @notice Transfers an NFT from one address to another.
+     * @param from The address to transfer the NFT from.
+     * @param to The address to transfer the NFT to.
+     * @param tokenId The ID of the NFT to transfer.
+     * @dev Internal function used by other transfer functions. Ensures the NFT is owned by the `from` address and the `to` address is valid.
+     */
+    function _transfer(address from, address to, uint256 tokenId) internal virtual {
+        require(ownerOf(tokenId) == from, "ERC721: transfer of token that is not own");
+        require(to != address(0), "ERC721: transfer to the zero address");
+
+        // Clear approvals from the previous owner
+        _approve(address(0), tokenId);
+
+        _balances[from] -= 1;
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+
+        emit Transfer(from, to, tokenId);
+    }
+
+    /**
+     * @notice Approves a given address to manage a specific NFT.
+     * @param to The address to approve.
+     * @param tokenId The ID of the NFT to approve.
+     * @dev Internal function used by the `approve` function. Emits an `Approval` event.
+     */
+    function _approve(address to, uint256 tokenId) internal virtual {
+        _tokenApprovals[tokenId] = to;
+        emit Approval(ownerOf(tokenId), to, tokenId);
+    }
+
+    /**
+     * @notice Checks if a recipient is an ERC721Receiver.
+     * @param from The address sending the NFT.
+     * @param to The address receiving the NFT.
+     * @param tokenId The ID of the NFT being transferred.
+     * @param _data Additional data to send with the transfer.
+     * @return A boolean indicating whether the recipient is an ERC721Receiver.
+     * @dev Reverts if the recipient is a contract and does not implement the ERC721Receiver interface.
+     */
+    function _checkOnERC721Received(address from, address to, uint256 tokenId, bytes memory _data)
+        private returns (bool)
+    {
+        if (!to.isContract()) {
+            return true;
+        }
+        bytes4 retval = IERC721Receiver(to).onERC721Received(msg.sender, from, tokenId, _data);
+        return (retval == IERC721Receiver.onERC721Received.selector);
+    }
+
+    /**
+     * @notice Fallback function to accept ETH.
+     * @dev This function is called when the contract receives ETH without a function call.
+     */
+    receive() external payable {}
+}
+```
+
+This implementation includes all the required functionality for the ERC721 contract according to the provided description and context. It properly implements the ERC721 and ERC721Metadata interfaces, includes minting functionality with limits per address, ownership transfer capabilities, and URI management.

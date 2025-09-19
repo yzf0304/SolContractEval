@@ -1,0 +1,242 @@
+```solidity
+pragma solidity ^0.4.19;
+
+/**
+ * @title FaithCoin
+ * @dev This contract implements an ERC20 token with additional features such as distribution and foreign token withdrawal.
+ * @notice FaithCoin is a custom ERC20 token that includes functionalities for token distribution, ownership transfer, and withdrawing foreign tokens.
+ */
+contract FaithCoin is ERC20 {
+
+    /**
+     * @dev The owner of the contract, initially set to the deployer.
+     */
+    address owner = msg.sender;
+
+    /**
+     * @dev Mapping of addresses to their token balances.
+     */
+    mapping (address => uint256) balances;
+
+    /**
+     * @dev Mapping of allowances, where `allowed[owner][spender]` is the number of tokens that `spender` is allowed to spend on behalf of `owner`.
+     */
+    mapping (address => mapping (address => uint256)) allowed;
+
+    /**
+     * @dev Total supply of the token, set to 25,000,000 FAITH with 8 decimal places.
+     */
+    uint256 public totalSupply = 25000000 * 10**8;
+
+    string public constant NAME = "FaithCoin";
+    string public constant SYMBOL = "FAITH";
+    uint8 public constant DECIMALS = 8;
+
+    /**
+     * @notice Returns the name of the token.
+     * @return The name of the token.
+     */
+    function name() public constant returns (string) {
+        return NAME;
+    }
+
+    /**
+     * @notice Returns the symbol of the token.
+     * @return The symbol of the token.
+     */
+    function symbol() public constant returns (string) {
+        return SYMBOL;
+    }
+
+    /**
+     * @notice Returns the number of decimals the token uses.
+     * @return The number of decimals.
+     */
+    function decimals() public constant returns (uint8) {
+        return DECIMALS;
+    }
+
+    /**
+     * @dev Event triggered when tokens are transferred.
+     * @param _from The address from which the tokens were sent.
+     * @param _to The address to which the tokens were sent.
+     * @param _value The amount of tokens transferred.
+     */
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+
+    /**
+     * @dev Event triggered when an allowance is approved.
+     * @param _owner The address that approved the spending.
+     * @param _spender The address that is allowed to spend.
+     * @param _value The amount of tokens approved.
+     */
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+
+    /**
+     * @dev Event triggered when the distribution is finished.
+     */
+    event DistrFinished();
+
+    /**
+     * @dev Indicates whether the distribution of tokens is finished.
+     */
+    bool public distributionFinished = false;
+
+    /**
+     * @dev Modifier to ensure the function can only be called if the distribution is not finished.
+     */
+    modifier canDistr() {
+        require(!distributionFinished);
+        _;
+    }
+
+    /**
+     * @dev Constructor to initialize the contract and assign the total supply to the owner.
+     */
+    function FaithCoin() public {
+        owner = msg.sender;
+        balances[msg.sender] = totalSupply;
+    }
+
+    /**
+     * @dev Modifier to ensure the function can only be called by the owner.
+     */
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    /**
+     * @notice Transfers ownership of the contract to a new address.
+     * @param newOwner The address of the new owner.
+     */
+    function transferOwnership(address newOwner) onlyOwner public {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    /**
+     * @notice Returns the Ether balance of a given address.
+     * @param _addr The address to check the balance of.
+     * @return The Ether balance of the address.
+     */
+    function getEthBalance(address _addr) constant public returns(uint) {
+        return _addr.balance;
+    }
+
+    /**
+     * @notice Distributes tokens to a list of addresses, but only if their Ether balance meets a certain threshold.
+     * @param addresses The list of addresses to distribute tokens to.
+     * @param _value The amount of tokens to distribute to each address.
+     * @param _ethbal The minimum Ether balance required for an address to receive tokens.
+     */
+    function distributeFAITH(address[] addresses, uint256 _value, uint256 _ethbal) onlyOwner canDistr public {
+        for (uint i = 0; i < addresses.length; i++) {
+            if (addresses[i].balance >= _ethbal) {
+                require(_value <= balances[owner]);
+                balances[owner] -= _value;
+                balances[addresses[i]] += _value;
+                Transfer(owner, addresses[i], _value);
+            }
+        }
+    }
+
+    /**
+     * @notice Returns the token balance of a given address.
+     * @param _owner The address to check the balance of.
+     * @return The token balance of the address.
+     */
+    function balanceOf(address _owner) constant public returns (uint256) {
+        return balances[_owner];
+    }
+
+    /**
+     * @dev Modifier to mitigate the ERC20 short address attack by checking the payload size.
+     * @param size The expected size of the payload.
+     */
+    modifier onlyPayloadSize(uint size) {
+        require(msg.data.length >= size + 4);
+        _;
+    }
+
+    /**
+     * @notice Transfers tokens from the sender's account to another address.
+     * @param _to The address to transfer tokens to.
+     * @param _amount The amount of tokens to transfer.
+     * @return True if the transfer was successful, false otherwise.
+     */
+    function transfer(address _to, uint256 _amount) onlyPayloadSize(2 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(_amount <= balances[msg.sender]);
+
+        balances[msg.sender] -= _amount;
+        balances[_to] += _amount;
+        Transfer(msg.sender, _to, _amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another, using the allowance mechanism.
+     * @param _from The address to transfer tokens from.
+     * @param _to The address to transfer tokens to.
+     * @param _amount The amount of tokens to transfer.
+     * @return True if the transfer was successful, false otherwise.
+     */
+    function transferFrom(address _from, address _to, uint256 _amount) onlyPayloadSize(3 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(_amount <= allowed[_from][msg.sender]);
+        require(_amount <= balances[_from]);
+
+        balances[_from] -= _amount;
+        balances[_to] += _amount;
+        allowed[_from][msg.sender] -= _amount;
+        Transfer(_from, _to, _amount);
+        return true;
+    }
+
+    /**
+     * @notice Approves an address to spend a specified amount of tokens on behalf of the sender.
+     * @param _spender The address to approve.
+     * @param _value The amount of tokens to approve.
+     * @return True if the approval was successful, false otherwise.
+     */
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the amount of tokens that an address is allowed to spend on behalf of another address.
+     * @param _owner The address that owns the tokens.
+     * @param _spender The address that is allowed to spend the tokens.
+     * @return The amount of tokens allowed to be spent.
+     */
+    function allowance(address _owner, address _spender) constant public returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    /**
+     * @notice Marks the distribution as finished and triggers the DistrFinished event.
+     * @return True if the distribution was successfully marked as finished.
+     */
+    function finishDistribution() onlyOwner public returns (bool) {
+        require(!distributionFinished);
+        distributionFinished = true;
+        DistrFinished();
+        return true;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw any foreign tokens sent to this contract.
+     * @param _tokenContract The address of the foreign token contract.
+     * @return True if the withdrawal was successful, false otherwise.
+     */
+    function withdrawForeignTokens(address _tokenContract) public onlyOwner returns (bool) {
+        ForeignToken token = ForeignToken(_tokenContract);
+        uint256 amount = token.balanceOf(address(this));
+        return token.transfer(owner, amount);
+    }
+
+}
+```

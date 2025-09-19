@@ -1,0 +1,126 @@
+Below is the completed PepeYogaClub contract. It fills in all of the previously-omitted function bodies, strictly follows the given context (Solidity 0.8.15, no extra dependencies) and retains only the contract you asked for.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
+
+/*
+  [ ERC721A, ERC721A__IERC721Receiver, IERC721A, Strings, Context, Ownable ]
+  are assumed to be defined exactly as in the provided context above.
+*/
+
+contract PepeYogaClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string public baseURI = "ipfs://QmTLWN9WPq5L9eS9EKcTn2rqUCzr9QK5sd8DYVkkL7yguL/";
+    string public contractURI = "ipfs://QmUvB8sKL4XFTxbMkL9FykiqLgrXeBV1mUkdzWMWhachvD";
+
+    uint256 public MAX_PER_WALLET = 11;
+    uint256 public constant MAX_SUPPLY = 2069;
+    uint256 public price = 0.0069 ether;
+
+    bool public paused = true;
+
+    constructor() ERC721A("PepeYogaClub", "PYC") {}
+
+    /**
+     * @notice Mint `_amount` tokens, paying `price * _amount`.
+     */
+    function mint(uint256 _amount) external payable {
+        require(!paused, "Minting is paused");
+        require(_amount > 0, "Must mint at least one");
+        require(totalSupply() + _amount <= MAX_SUPPLY, "Exceeds max supply");
+        require(minted(msg.sender) + _amount <= MAX_PER_WALLET, "Exceeds max per wallet");
+        require(msg.value == price * _amount, "Incorrect Ether value");
+
+        _safeMint(msg.sender, _amount);
+    }
+
+    /**
+     * @dev Start token IDs at 1 instead of 0.
+     */
+    function _startTokenId() internal pure override returns (uint256) {
+        return 1;
+    }
+
+    /**
+     * @notice Number of tokens minted by `_owner`.
+     */
+    function minted(address _owner) public view returns (uint256) {
+        return _numberMinted(_owner);
+    }
+
+    /**
+     * @notice Withdraw all ETH to owner.
+     */
+    function withdraw() external onlyOwner {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "No balance");
+        (bool success, ) = payable(owner()).call{value: bal}("");
+        require(success, "Withdraw failed");
+    }
+
+    /**
+     * @notice Bulk mint for the team.
+     */
+    function teamMint(address[] memory _to, uint256[] memory _amount) external onlyOwner {
+        require(_to.length == _amount.length, "Array length mismatch");
+        for (uint256 i; i < _to.length; ++i) {
+            uint256 amt = _amount[i];
+            require(totalSupply() + amt <= MAX_SUPPLY, "Exceeds max supply");
+            _safeMint(_to[i], amt);
+        }
+    }
+
+    /**
+     * @notice Change the per-wallet limit.
+     */
+    function setMaxPerWallet(uint256 _max) external onlyOwner {
+        MAX_PER_WALLET = _max;
+    }
+
+    /**
+     * @notice Change mint price.
+     */
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    /**
+     * @notice Pause/unpause minting.
+     */
+    function toggleMint() external onlyOwner {
+        paused = !paused;
+    }
+
+    /**
+     * @notice Change base URI for metadata.
+     */
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    /**
+     * @notice Change contract-level metadata URI.
+     */
+    function setContractURI(string memory _contractURI) external onlyOwner {
+        contractURI = _contractURI;
+    }
+
+    /**
+     * @notice Return metadata URI for token `_tokenId`.
+     */
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        require(_exists(_tokenId), "ERC721A: URI query for nonexistent token");
+        return string(abi.encodePacked(baseURI, _tokenId.toString()));
+    }
+}
+```
+
+Explanation of key points:
+- `mint` enforces pause, supply cap, per-wallet cap, and exact payment.
+- `teamMint` allows the owner to mint arbitrary amounts to arbitrary addresses (also respects max supply).
+- Administrative setters (`setMaxPerWallet`, `setPrice`, `toggleMint`, `setBaseURI`, `setContractURI`) all use `onlyOwner`.
+- `withdraw` sends the entire contract balance to the owner.
+- `tokenURI` constructs the full metadata URI by concatenating `baseURI` + `tokenId`.
+- `_startTokenId()` is overridden to begin at `1` instead of `0`.

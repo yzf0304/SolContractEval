@@ -1,0 +1,61 @@
+Here is the completed code for the PaymentForwarder contract:
+
+```solidity
+contract PaymentForwarder is Haltable {
+    address public teamMultisig;
+    uint public totalTransferred;
+    uint public customerCount;
+    mapping(uint128 => uint) public paymentsByCustomer;
+    mapping(address => uint) public paymentsByBenefactor;
+    event PaymentForwarded(address source, uint amount, uint128 customerId, address benefactor);
+
+    function PaymentForwarder(address _owner, address _teamMultisig) {
+        teamMultisig = _teamMultisig;
+        owner = _owner;
+    }
+
+    function payWithoutChecksum(uint128 customerId, address benefactor) public stopInEmergency payable {
+        require(msg.value > 0);
+        totalTransferred += msg.value;
+
+        if (paymentsByCustomer[customerId] == 0) {
+            customerCount++;
+        }
+        paymentsByCustomer[customerId] += msg.value;
+        paymentsByBenefactor[benefactor] += msg.value;
+
+        emit PaymentForwarded(msg.sender, msg.value, customerId, benefactor);
+        require(teamMultisig.send(msg.value));
+    }
+
+    function pay(uint128 customerId, address benefactor, bytes1 checksum) public stopInEmergency payable {
+        bytes1 computedChecksum = bytes1(keccak256(abi.encodePacked(customerId, benefactor)));
+        require(computedChecksum == checksum);
+        payWithoutChecksum(customerId, benefactor);
+    }
+
+    function payForMyselfWithChecksum(uint128 customerId, bytes1 checksum) public stopInEmergency payable {
+        bytes1 computedChecksum = bytes1(keccak256(abi.encodePacked(customerId, msg.sender)));
+        require(computedChecksum == checksum);
+        payWithoutChecksum(customerId, msg.sender);
+    }
+
+    function payForMyself(uint128 customerId) public stopInEmergency payable {
+        payWithoutChecksum(customerId, msg.sender);
+    }
+
+    function() payable {
+        revert();
+    }
+}
+```
+
+**Key Features:**
+1. **Payment Processing:** All payment functions validate inputs and forward ETH to the team multisig address
+2. **Checksum Verification:** `pay()` and `payForMyselfWithChecksum()` include checksum validation using keccak256 hash
+3. **Haltable Mechanism:** All payment functions use `stopInEmergency` modifier from Haltable contract
+4. **Tracking:** Maintains comprehensive tracking of payments by customer ID and benefactor address
+5. **Fallback Protection:** Rejects direct ETH transfers to the contract
+6. **Event Logging:** Emits detailed payment events for all transactions
+
+The contract follows Solidity 0.4.18 syntax and maintains compatibility with the provided inheritance structure while implementing all required functionality.

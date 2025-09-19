@@ -1,0 +1,125 @@
+Below is the complete implementation of the **Okimi** contract based on the provided context and descriptions. The contract complies strictly with the given requirements.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    uint256 public immutable maxPerAddressDuringMint;
+    uint256 public immutable amountForDevs;
+    uint256 public immutable amountForSaleAndDev;
+    uint256 internal immutable collectionSize;
+    uint256 internal immutable maxBatchSize;
+
+    struct SaleConfig {
+        uint32 publicSaleStartTime;
+        uint64 publicPriceWei;
+    }
+
+    SaleConfig public saleConfig;
+
+    string private _baseTokenURI;
+
+    constructor()
+        ERC721A("Okimi", "OKM")
+    {
+        maxPerAddressDuringMint = 5;
+        maxBatchSize = 5;
+        collectionSize = amountForDevs = amountForSaleAndDev = 1500;
+        saleConfig.publicPriceWei = 5 ether / 1000; // 0.005 ETH
+        saleConfig.publicSaleStartTime = uint32(block.timestamp);
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function mint(uint256 quantity) external payable callerIsUser {
+        require(isSaleOn(saleConfig.publicPriceWei, saleConfig.publicSaleStartTime), "Sale has not started");
+        require(totalSupply() + quantity <= collectionSize, "Exceeds max supply");
+        require(numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint, "Exceeds per address limit");
+        require(quantity <= maxBatchSize, "Exceeds max batch size");
+
+        refundIfOver(saleConfig.publicPriceWei * quantity);
+        _safeMint(msg.sender, quantity);
+    }
+
+    function refundIfOver(uint256 price) private {
+        require(msg.value >= price, "Insufficient payment");
+        if (msg.value > price) {
+            payable(msg.sender).transfer(msg.value - price);
+        }
+    }
+
+    function isSaleOn(uint256 _price, uint256 _startTime) public view returns (bool) {
+        return _price > 0 && block.timestamp >= _startTime;
+    }
+
+    function getPrice() public view returns (uint256) {
+        return uint256(saleConfig.publicPriceWei);
+    }
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price) external onlyOwner {
+        saleConfig.publicSaleStartTime = timestamp;
+        saleConfig.publicPriceWei = price;
+    }
+
+    function reserve(uint256 quantity) external onlyOwner {
+        require(totalSupply() + quantity <= amountForDevs, "Exceeds reserved supply");
+        require(quantity % maxBatchSize == 0, "Must be multiple of maxBatchSize");
+
+        uint256 numChunks = quantity / maxBatchSize;
+        for (uint256 i = 0; i < numChunks; i++) {
+            _safeMint(msg.sender, maxBatchSize);
+        }
+    }
+
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        (bool success, ) = payable(msg.sender).call{value: address(this).balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted() public view returns (uint256) {
+        return _totalMinted();
+    }
+
+    receive() external payable {}
+}
+```
+
+### Key Points of Implementation:
+1. **ERC721A Integration**: The contract inherits from `ERC721A` to optimize batch minting.
+2. **Modifiers**: 
+   - `callerIsUser`: Ensures the caller is an Externally Owned Account (EOA).
+3. **Mint Functionality**: 
+   - Verifies sale activation, limits per address and total supply, and refunds excess payment.
+4. **Reserve Functionality**: Allows the owner to reserve NFTs for development purposes, ensuring the reserved quantity does not exceed the allocation.
+5. **Sale Configuration**: Owner can update the sale start time and price.
+6. **Withdraw Functionality**: Enables the owner to withdraw contract funds securely with reentrancy protection.
+7. **Base URI Management**: Owner can set and update the base URI for metadata.
+8. **Helper Functions**:
+   - `numberMinted`: Returns the number of NFTs minted by an address.
+   - `getOwnershipData`: Fetches token ownership data.
+   - `totalMinted`: Computes total NFTs minted.
+9. **Receive Ether**: Supports Ether reception without triggering revert.
+
+### Compliance with Context:
+- The contract adheres strictly to the provided structure, using `ERC721A`, `Ownable`, and `ReentrancyGuard` appropriately.
+- All required functionalities are implemented without introducing unrelated code or dependencies.

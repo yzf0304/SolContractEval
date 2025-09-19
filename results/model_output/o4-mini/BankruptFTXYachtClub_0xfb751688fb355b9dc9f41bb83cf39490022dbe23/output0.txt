@@ -1,0 +1,121 @@
+pragma solidity 0.8.7;
+
+import "./ERC721A.sol";
+import "./Ownable.sol";
+import "./Strings.sol";
+
+contract BankruptFTXYachtClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string private uriPrefix;
+    string private uriSuffix = ".json";
+    string public hiddenURL;
+
+    uint256 public cost = 0.0025 ether;
+
+    uint16 public maxSupply = 6969;
+    uint8 public maxMintAmountPerTx = 21;
+    uint8 public maxFreeMintAmountPerWallet = 1;
+
+    bool public paused = true;
+    bool public reveal = false;
+
+    mapping(address => uint8) public NFTPerPublicAddress;
+
+    constructor() ERC721A("Bankrupt FTX Yacht Club", "BFTX") {}
+
+    function mint(uint8 _mintAmount) external payable {
+        require(!paused, "Minting is paused");
+        require(_mintAmount > 0 && _mintAmount <= maxMintAmountPerTx, "Invalid mint amount");
+        uint256 currentSupply = totalSupply();
+        require(currentSupply + _mintAmount <= maxSupply, "Max supply exceeded");
+
+        uint8 alreadyMinted = NFTPerPublicAddress[msg.sender];
+        uint8 freeLeft = 0;
+        if (alreadyMinted < maxFreeMintAmountPerWallet) {
+            freeLeft = maxFreeMintAmountPerWallet - alreadyMinted;
+        }
+        uint8 freeToUse = _mintAmount <= freeLeft ? _mintAmount : freeLeft;
+        uint256 payableAmount = cost * (_mintAmount - freeToUse);
+        require(msg.value >= payableAmount, "Insufficient ETH sent");
+
+        NFTPerPublicAddress[msg.sender] = alreadyMinted + _mintAmount;
+        _safeMint(msg.sender, _mintAmount);
+
+        // refund if overpaid
+        if (msg.value > payableAmount) {
+            payable(msg.sender).transfer(msg.value - payableAmount);
+        }
+    }
+
+    function Reserve(uint16 _mintAmount, address _receiver) external onlyOwner {
+        require(_mintAmount > 0, "Mint amount must be > 0");
+        uint256 currentSupply = totalSupply();
+        require(currentSupply + _mintAmount <= maxSupply, "Max supply exceeded");
+        _safeMint(_receiver, _mintAmount);
+    }
+
+    function Airdrop(uint8 _amountPerAddress, address[] calldata addresses) external onlyOwner {
+        require(_amountPerAddress > 0, "Amount per address must be > 0");
+        uint256 totalToMint = uint256(_amountPerAddress) * addresses.length;
+        require(totalSupply() + totalToMint <= maxSupply, "Max supply exceeded");
+        for (uint256 i = 0; i < addresses.length; i++) {
+            _safeMint(addresses[i], _amountPerAddress);
+        }
+    }
+
+    function setMaxSupply(uint16 _maxSupply) external onlyOwner {
+        require(_maxSupply >= totalSupply(), "Cannot set below current supply");
+        maxSupply = _maxSupply;
+    }
+
+    function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
+        if (!_exists(_tokenId)) revert URIQueryForNonexistentToken();
+        if (!reveal) {
+            return hiddenURL;
+        }
+        return string(abi.encodePacked(uriPrefix, _tokenId.toString(), uriSuffix));
+    }
+
+    function setFreeMaxLimitPerAddress(uint8 _limit) external onlyOwner {
+        maxFreeMintAmountPerWallet = _limit;
+    }
+
+    function setUriPrefix(string memory _uriPrefix) external onlyOwner {
+        uriPrefix = _uriPrefix;
+    }
+
+    function setHiddenUri(string memory _hiddenUri) external onlyOwner {
+        hiddenURL = _hiddenUri;
+    }
+
+    function setPaused() external onlyOwner {
+        paused = !paused;
+    }
+
+    function setCost(uint _cost) external onlyOwner {
+        cost = _cost;
+    }
+
+    function setRevealed() external onlyOwner {
+        reveal = !reveal;
+    }
+
+    function setMaxMintAmountPerTx(uint8 _maxtx) external onlyOwner {
+        require(_maxtx > 0, "Must be non-zero");
+        maxMintAmountPerTx = _maxtx;
+    }
+
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No ETH to withdraw");
+        (bool success, ) = payable(owner()).call{value: balance}("");
+        require(success, "Transfer failed");
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return uriPrefix;
+    }
+
+    receive() external payable {}
+}

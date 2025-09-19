@@ -1,0 +1,127 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.7.4;
+
+interface IFlashToken {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function mint(address to, uint256 value) external returns (bool);
+    function burn(uint256 value) external returns (bool);
+}
+
+library SafeMath {
+    function add(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x + y) >= x, "MATH:: ADD_OVERFLOW");
+    }
+
+    function sub(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x - y) <= x, "MATH:: SUB_UNDERFLOW");
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) return 0;
+        uint256 c = a * b;
+        require(c / a == b, "MATH:: MUL_OVERFLOW");
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "MATH:: DIVISION_BY_ZERO");
+        return a / b;
+    }
+}
+
+library MerkleProof {
+    function verify(bytes32[] memory proof, bytes32 root, bytes32 leaf) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash <= proofElement) {
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+        return computedHash == root;
+    }
+}
+
+contract ClaimContract {
+    using SafeMath for uint256;
+    using MerkleProof for bytes32[];
+
+    enum MigrationType { V1_UNCLAIMED, HOLDER, STAKER }
+
+    address public constant FLASH_TOKEN_V1 = 0xB4467E8D621105312a914F1D42f10770C0Ffe3c8;
+    address public constant FLASH_TOKEN_V2 = 0x20398aD62bb2D930646d45a6D4292baa0b860C1f;
+    bytes32 public constant MERKLE_ROOT = 0x56dc616cf485d230be34e774839fc4b1b11b0ab99b92d594f7f16f4065f7e814;
+    uint256 public constant V1_UNCLAIMED_DEADLINE = 1617235140;
+
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    event Claimed(uint256 index, address sender, uint256 amount);
+
+    function isClaimed(uint256 index) public view returns (bool) {
+        uint256 wordIndex = index / 256;
+        uint256 bitIndex = index % 256;
+        uint256 mask = (1 << bitIndex);
+        return (claimedBitMap[wordIndex] & mask) != 0;
+    }
+
+    function _setClaimed(uint256 index) private {
+        uint256 wordIndex = index / 256;
+        uint256 bitIndex = index % 256;
+        claimedBitMap[wordIndex] = claimedBitMap[wordIndex] | (1 << bitIndex);
+    }
+
+    function _getMigratableAmountAndTransferV1(address _user, uint256 _balance) private returns (uint256) {
+        IFlashToken v1 = IFlashToken(FLASH_TOKEN_V1);
+        require(v1.transferFrom(_user, address(this), _balance), "Transfer failed");
+        v1.burn(_balance);
+        return _balance;
+    }
+
+    function claim(
+        uint256 index,
+        uint256 balance,
+        uint256 bonusAmount,
+        uint256 expiry,
+        uint256 expireAfter,
+        MigrationType migrationType,
+        bytes32[] calldata merkleProof
+    ) external {
+        require(!isClaimed(index), "Already claimed");
+        bytes32 leaf = keccak256(abi.encodePacked(index, msg.sender, balance, bonusAmount, expiry, expireAfter, migrationType));
+        require(merkleProof.verify(MERKLE_ROOT, leaf), "Invalid proof");
+
+        uint256 amount;
+        if (migrationType == MigrationType.V1_UNCLAIMED) {
+            require(block.timestamp <= V1_UNCLAIMED_DEADLINE, "Deadline passed");
+            uint256 v2Amount = _getMigratableAmountAndTransferV1(msg.sender, balance);
+            amount = v2Amount.add(bonusAmount);
+        } else if (migrationType == MigrationType.HOLDER) {
+            amount = balance.add(bonusAmount);
+        } else if (migrationType == MigrationType.STAKER) {
+            uint256 adjustedBonus = bonusAmount;
+            if (block.timestamp >= expiry) {
+                adjustedBonus = 0;
+            } else if (block.timestamp > expireAfter) {
+                uint256 timeRemaining = expiry.sub(block.timestamp);
+                uint256 expirationPeriod = expiry.sub(expireAfter);
+                adjustedBonus = bonusAmount.mul(timeRemaining).div(expirationPeriod);
+            }
+            amount = balance.add(adjustedBonus);
+        } else {
+            revert("Invalid migration type");
+        }
+
+        require(IFlashToken(FLASH_TOKEN_V2).mint(msg.sender, amount), "Mint failed");
+        _setClaimed(index);
+        emit Claimed(index, msg.sender, amount);
+    }
+}
+```

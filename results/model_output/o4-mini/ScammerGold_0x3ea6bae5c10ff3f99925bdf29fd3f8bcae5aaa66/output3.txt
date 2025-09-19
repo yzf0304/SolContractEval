@@ -1,0 +1,151 @@
+```solidity
+pragma solidity 0.8.6;
+
+// Assumes Context, Ownable, ERC20, IERC721Enumerable are defined above per the provided context
+
+contract ScammerGold is Context, Ownable, ERC20 {
+    // sLoot contract address
+    address public slootContractAddress = 0xb12F78434AE7D12Ae548c51A5cb734Ecc4536594;
+    IERC721Enumerable public slootContract;
+
+    // Amount of Scammer Gold per sLoot token ID (in raw decimals)
+    uint256 public scammerGoldPerTokenId = 10000 * (10**decimals());
+
+    // Start and end token IDs for sLoot eligibility
+    uint256 public tokenIdStart = 1;
+    uint256 public tokenIdEnd = 8000;
+
+    // Current season for claiming Scammer Gold
+    uint256 public season = 0;
+
+    // Tracks whether a given tokenId has claimed in a given season
+    mapping(uint256 => mapping(uint256 => bool)) public seasonClaimedByTokenId;
+
+    constructor() Ownable() ERC20("Scammer Gold", "SGLD") {
+        // Renounce ownership to the zero address (as per design)
+        transferOwnership(address(0));
+        slootContract = IERC721Enumerable(slootContractAddress);
+    }
+
+    /// @notice Claim Scammer Gold for a single sLoot token ID
+    /// @param tokenId The tokenId of the sLoot NFT
+    function claimById(uint256 tokenId) external {
+        require(
+            tokenId >= tokenIdStart && tokenId <= tokenIdEnd,
+            "ScammerGold: tokenId out of range"
+        );
+        address tokenOwner = slootContract.ownerOf(tokenId);
+        require(
+            tokenOwner == _msgSender(),
+            "ScammerGold: caller is not token owner"
+        );
+        _claim(tokenId, tokenOwner);
+    }
+
+    /// @notice Claim Scammer Gold for *all* sLoot tokens owned by the sender
+    /// @dev May run out of gas if balance is large. Use claimRangeForOwner in that case.
+    function claimAllForOwner() external {
+        address sender = _msgSender();
+        uint256 balance = slootContract.balanceOf(sender);
+        require(balance > 0, "ScammerGold: no tokens to claim");
+
+        for (uint256 i = 0; i < balance; i++) {
+            uint256 tokenId = slootContract.tokenOfOwnerByIndex(sender, i);
+            _claim(tokenId, sender);
+        }
+    }
+
+    /// @notice Claim Scammer Gold for a subset of the caller's sLoot tokens
+    /// @param ownerIndexStart The start index in the owner's token list (0-based)
+    /// @param ownerIndexEnd   The end index in the owner's token list (0-based, inclusive)
+    function claimRangeForOwner(uint256 ownerIndexStart, uint256 ownerIndexEnd)
+        external
+    {
+        address sender = _msgSender();
+        uint256 balance = slootContract.balanceOf(sender);
+        require(balance > 0, "ScammerGold: no tokens to claim");
+        require(
+            ownerIndexStart <= ownerIndexEnd,
+            "ScammerGold: start index > end index"
+        );
+        require(
+            ownerIndexEnd < balance,
+            "ScammerGold: end index out of bounds"
+        );
+
+        for (uint256 idx = ownerIndexStart; idx <= ownerIndexEnd; idx++) {
+            uint256 tokenId = slootContract.tokenOfOwnerByIndex(sender, idx);
+            _claim(tokenId, sender);
+        }
+    }
+
+    /// @dev Internal helper that mints SGLD for a given tokenId and marks it claimed
+    function _claim(uint256 tokenId, address tokenOwner) internal {
+        require(
+            tokenId >= tokenIdStart && tokenId <= tokenIdEnd,
+            "ScammerGold: tokenId out of range"
+        );
+        require(
+            !seasonClaimedByTokenId[season][tokenId],
+            "ScammerGold: already claimed this season"
+        );
+
+        seasonClaimedByTokenId[season][tokenId] = true;
+        _mint(tokenOwner, scammerGoldPerTokenId);
+    }
+
+    /// @notice Allows the DAO (owner) to mint arbitrary SGLD
+    /// @param amountDisplayValue The display amount (e.g. 100 → 100 * 10^decimals())
+    function daoMint(uint256 amountDisplayValue) external onlyOwner {
+        uint256 amount = amountDisplayValue * (10**decimals());
+        _mint(_msgSender(), amount);
+    }
+
+    /// @notice Allows the DAO to update the sLoot contract address
+    /// @param slootContractAddress_ The new sLoot contract address
+    function daoSetLootContractAddress(address slootContractAddress_)
+        external
+        onlyOwner
+    {
+        slootContractAddress = slootContractAddress_;
+        slootContract = IERC721Enumerable(slootContractAddress_);
+    }
+
+    /// @notice Allows the DAO to update the eligible token ID range
+    function daoSetTokenIdRange(uint256 tokenIdStart_, uint256 tokenIdEnd_)
+        external
+        onlyOwner
+    {
+        tokenIdStart = tokenIdStart_;
+        tokenIdEnd = tokenIdEnd_;
+    }
+
+    /// @notice Allows the DAO to set the active claiming season
+    function daoSetSeason(uint256 season_) public onlyOwner {
+        season = season_;
+    }
+
+    /// @notice Allows the DAO to set how much SGLD is minted per tokenId
+    /// @param scammerGoldDisplayValue The display amount (e.g. 100 → 100 * 10^decimals())
+    function daoSetScammerGoldPerTokenId(uint256 scammerGoldDisplayValue)
+        public
+        onlyOwner
+    {
+        scammerGoldPerTokenId =
+            scammerGoldDisplayValue *
+            (10**decimals());
+    }
+
+    /// @notice Allows the DAO to set season and per-token mint amount in one call
+    function daoSetSeasonAndScammerGoldPerTokenID(
+        uint256 season_,
+        uint256 scammerGoldDisplayValue
+    ) external onlyOwner {
+        daoSetSeason(season_);
+        daoSetScammerGoldPerTokenId(scammerGoldDisplayValue);
+    }
+
+    /// @notice Fallback to receive ETH
+    receive() external payable {}
+}
+```

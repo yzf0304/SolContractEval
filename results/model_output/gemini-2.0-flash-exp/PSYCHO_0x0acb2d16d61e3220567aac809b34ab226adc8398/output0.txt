@@ -1,0 +1,207 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+import "@openzeppelin/contracts/utils/Context.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
+import "erc721a/contracts/IERC721A.sol";
+import "erc721a/contracts/ERC721A.sol";
+
+/**
+ * @title PSYCHO
+ * @notice This contract is an ERC721A NFT minting contract with features for both paid and free mints, and various administrative controls.
+ * @dev The contract inherits from Ownable and ERC721A. It includes functions to manage the minting process, set prices, and control the sale state.
+ */
+contract PSYCHO is Ownable, ERC721A {
+    using Strings for uint256;
+
+    uint256 public maxSupply                    = 8888;
+    uint256 public maxFreeSupply                = 8888;
+    uint256 public maxPerTxDuringMint           = 20;
+    uint256 public maxPerAddressDuringMint      = 21;
+    uint256 public maxPerAddressDuringFreeMint  = 1;
+    uint256 public price                        = 0.003 ether;
+    bool    public saleIsActive                 = true;
+    bool    public revealed                     = false;
+
+    address constant internal TEAM_ADDRESS = 0x06C8033719b4fa22DE97d4632b4120D2F429c538;
+    string public baseURI = "";
+    string public constant baseExtension = ".json";
+    string public hiddenMetadataUri;
+    mapping(address => uint256) public freeMintedAmount;
+    mapping(address => uint256) public mintedAmount;
+
+    /**
+     * @notice Initializes the contract and sets the name, symbol, and mints the first token to the contract owner.
+     * @dev The constructor also sets the hidden metadata URI.
+     */
+    constructor() ERC721A("PSYCHO", "PSYCHO") {
+        _safeMint(msg.sender, 1);
+        setHiddenMetadataUri("https://gateway.pinata.cloud/ipfs/QmcJ9dJMmgNiUD9oSASjgxhbuqam7y2WVSxDKLuX3GFyz5");
+    }
+
+    /**
+     * @notice Modifier to ensure that the sale is active and the caller is not a contract.
+     * @dev This modifier checks if the sale is active and if the transaction origin is the same as the message sender.
+     */
+    modifier mintCompliance() {
+        require(saleIsActive, "Sale is not active yet.");
+        require(tx.origin == msg.sender, "Wrong Caller");
+        _;
+    }
+
+    /**
+     * @notice Allows users to mint a specified number of tokens by paying the required amount.
+     * @dev Ensures the user has sufficient funds, does not exceed the max supply, and complies with per-transaction and per-address limits.
+     * @param _quantity The number of tokens to mint.
+     */
+    function mint(uint256 _quantity) external payable mintCompliance() {
+        require(_quantity > 0, "Quantity must be greater than zero.");
+        require(_quantity <= maxPerTxDuringMint, "Can only mint max " + Strings.toString(maxPerTxDuringMint) + " per tx");
+        require(totalSupply() + _quantity <= maxSupply, "Purchase would exceed max supply");
+        require(msg.value >= price * _quantity, "Not enough ether sent");
+        require(mintedAmount[msg.sender] + _quantity <= maxPerAddressDuringMint, "Can only mint max " + Strings.toString(maxPerAddressDuringMint) + " per address");
+
+        mintedAmount[msg.sender] += _quantity;
+        _safeMint(msg.sender, _quantity);
+    }
+
+    /**
+     * @notice Allows users to mint a specified number of tokens for free.
+     * @dev Ensures the user does not exceed the max free supply and complies with per-address limits.
+     * @param _quantity The number of tokens to mint.
+     */
+    function freeMint(uint256 _quantity) external mintCompliance() {
+        require(_quantity > 0, "Quantity must be greater than zero.");
+        require(totalSupply() + _quantity <= maxFreeSupply, "Free mint would exceed max free supply");
+        require(freeMintedAmount[msg.sender] + _quantity <= maxPerAddressDuringFreeMint, "Can only free mint max " + Strings.toString(maxPerAddressDuringFreeMint) + " per address");
+
+        freeMintedAmount[msg.sender] += _quantity;
+        _safeMint(msg.sender, _quantity);
+    }
+
+    /**
+     * @notice Sets the price for minting a single token.
+     * @dev Only the contract owner can call this function.
+     * @param _price The new price for minting a token.
+     */
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    /**
+     * @notice Sets the maximum number of tokens that can be minted in a single transaction.
+     * @dev Only the contract owner can call this function.
+     * @param _amount The new maximum number of tokens per transaction.
+     */
+    function setMaxPerTx(uint256 _amount) external onlyOwner {
+        maxPerTxDuringMint = _amount;
+    }
+
+    /**
+     * @notice Sets the maximum number of tokens that can be minted by a single address during the mint period.
+     * @dev Only the contract owner can call this function.
+     * @param _amount The new maximum number of tokens per address.
+     */
+    function setMaxPerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringMint = _amount;
+    }
+
+    /**
+     * @notice Sets the maximum number of tokens that can be minted for free by a single address.
+     * @dev Only the contract owner can call this function.
+     * @param _amount The new maximum number of free mints per address.
+     */
+    function setMaxFreePerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringFreeMint = _amount;
+    }
+
+    /**
+     * @notice Toggles the sale state (active or inactive).
+     * @dev Only the contract owner can call this function.
+     */
+    function flipSale() public onlyOwner {
+        saleIsActive = !saleIsActive;
+    }
+
+    /**
+     * @notice Sets the maximum supply of tokens.
+     * @dev Only the contract owner can call this function.
+     * @param newSupply The new maximum supply of tokens.
+     */
+    function setMaxSupply(uint256 newSupply) public onlyOwner {
+        maxSupply = newSupply;
+    }
+
+    /**
+     * @notice Reduces the maximum supply of tokens.
+     * @dev Only the contract owner can call this function and ensures the new supply is not less than the total supply.
+     * @param _amount The amount to reduce the maximum supply by.
+     */
+    function cutMaxSupply(uint256 _amount) public onlyOwner {
+        require(maxSupply - _amount >= totalSupply(), "New supply cannot be less than current total supply");
+        maxSupply -= _amount;
+    }
+
+    /**
+     * @notice Sets the reveal state of the tokens.
+     * @dev Only the contract owner can call this function.
+     * @param _state The new reveal state (true for revealed, false for hidden).
+     */
+    function setRevealed(bool _state) public onlyOwner {
+        revealed = _state;
+    }
+
+    /**
+     * @notice Sets the base URI for the token metadata.
+     * @dev Only the contract owner can call this function.
+     * @param baseURI_ The new base URI for the token metadata.
+     */
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    /**
+     * @notice Sets the hidden metadata URI for unrevealed tokens.
+     * @dev Only the contract owner can call this function.
+     * @param _hiddenMetadataUri The new hidden metadata URI.
+     */
+    function setHiddenMetadataUri(string memory _hiddenMetadataUri) public onlyOwner {
+        hiddenMetadataUri = _hiddenMetadataUri;
+    }
+
+    /**
+     * @notice Returns the base URI for the token metadata.
+     * @dev This function overrides the default implementation in ERC721A.
+     * @return The base URI for the token metadata.
+     */
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
+
+    /**
+     * @notice Returns the URI for a specific token.
+     * @dev If the token is not revealed, it returns the hidden metadata URI. Otherwise, it constructs the URI using the base URI and token ID.
+     * @param _tokenId The ID of the token.
+     * @return The URI for the token.
+     */
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        if (!_exists(_tokenId)) revert URIQueryForNonexistentToken();
+        if (!revealed) {
+            return hiddenMetadataUri;
+        }
+        string memory base = _baseURI();
+        return bytes(base).length > 0 ? string(abi.encodePacked(base, _tokenId.toString(), baseExtension)) : "";
+    }
+
+    /**
+     * @notice Withdraws the contract balance to the team's address.
+     * @dev Only the contract owner can call this function.
+     */
+    function withdrawBalance() external payable onlyOwner {
+        (bool success, ) = TEAM_ADDRESS.call{value: address(this).balance}("");
+        require(success, "Transfer failed.");
+    }
+}
+```

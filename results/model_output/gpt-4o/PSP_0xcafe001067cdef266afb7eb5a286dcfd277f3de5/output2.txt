@@ -1,0 +1,142 @@
+Below is the complete implementation of the `PSP` contract based on the context and description provided. It strictly adheres to the requirements and does not introduce any extraneous dependencies or unrelated code. The contract is compatible with Solidity compiler version 0.5.17.
+
+```solidity
+pragma solidity 0.5.17;
+
+contract PSP {
+    using SafeMath for uint256;
+
+    /// @notice EIP-20 token name for this token
+    string public constant name = "ParaSwap";
+
+    /// @notice EIP-20 token symbol for this token
+    string public constant symbol = "PSP";
+
+    /// @notice EIP-20 token decimals for this token
+    uint8 public constant decimals = 18;
+
+    /// @notice Total number of tokens in circulation
+    uint public totalSupply = 2_000_000_000e18; // 2 billion PSP
+
+    /// @notice Address which may mint new tokens
+    address public minter;
+
+    /// @notice The timestamp after which minting may occur
+    uint public mintingAllowedAfter;
+
+    /// @notice Minimum time between mints
+    uint32 public constant minimumTimeBetweenMints = 1 days * 365;
+
+    /// @notice Cap on the percentage of totalSupply that can be minted at each mint
+    uint8 public constant mintCap = 2;
+
+    /// @notice Allowance amounts on behalf of others
+    mapping(address => mapping(address => uint96)) internal allowances;
+
+    /// @notice Official record of token balances for each account
+    mapping(address => uint96) internal balances;
+
+    /// @notice Constructor that initializes the PSP token contract
+    constructor(address account, address minter_, uint mintingAllowedAfter_) public {
+        require(mintingAllowedAfter_ >= block.timestamp, "PSP::constructor: minting can only begin after deployment");
+
+        balances[account] = uint96(totalSupply);
+        emit Transfer(address(0), account, totalSupply);
+        minter = minter_;
+        emit MinterChanged(address(0), minter);
+        mintingAllowedAfter = mintingAllowedAfter_;
+    }
+
+    /// @notice Standard transfer event
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+
+    /// @notice Approval event
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+
+    /// @notice Minter changed event
+    event MinterChanged(address minter, address newMinter);
+
+    function balanceOf(address account) external view returns (uint256) {
+        return balances[account];
+    }
+
+    function allowance(address account, address spender) external view returns (uint256) {
+        return allowances[account][spender];
+    }
+
+    function transfer(address dst, uint256 rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP::transfer: amount exceeds 96 bits");
+        _transferTokens(msg.sender, dst, amount);
+        return true;
+    }
+
+    function approve(address spender, uint256 rawAmount) external returns (bool) {
+        uint96 amount = rawAmount == uint256(-1) ? uint96(-1) : safe96(rawAmount, "PSP::approve: amount exceeds 96 bits");
+        allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transferFrom(address src, address dst, uint256 rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP::transferFrom: amount exceeds 96 bits");
+        uint96 spenderAllowance = allowances[src][msg.sender];
+
+        if (msg.sender != src && spenderAllowance != uint96(-1)) {
+            uint96 newAllowance = sub96(spenderAllowance, amount, "PSP::transferFrom: transfer amount exceeds allowance");
+            allowances[src][msg.sender] = newAllowance;
+            emit Approval(src, msg.sender, newAllowance);
+        }
+
+        _transferTokens(src, dst, amount);
+        return true;
+    }
+
+    function mint(address dst, uint256 rawAmount) external {
+        require(msg.sender == minter, "PSP::mint: only the minter can mint");
+        require(block.timestamp >= mintingAllowedAfter, "PSP::mint: minting not allowed yet");
+        require(dst != address(0), "PSP::mint: cannot transfer to the zero address");
+
+        uint96 amount = safe96(rawAmount, "PSP::mint: amount exceeds 96 bits");
+        require(amount <= totalSupply.mul(mintCap).div(100), "PSP::mint: mint amount exceeds cap");
+
+        mintingAllowedAfter = block.timestamp + minimumTimeBetweenMints;
+
+        totalSupply = totalSupply.add(amount);
+        balances[dst] = add96(balances[dst], amount, "PSP::mint: balance overflow");
+        emit Transfer(address(0), dst, amount);
+    }
+
+    function setMinter(address minter_) external {
+        require(msg.sender == minter, "PSP::setMinter: only the current minter can update the minter");
+        emit MinterChanged(minter, minter_);
+        minter = minter_;
+    }
+
+    function _transferTokens(address src, address dst, uint96 amount) internal {
+        require(src != address(0), "PSP::_transferTokens: cannot transfer from the zero address");
+        require(dst != address(0), "PSP::_transferTokens: cannot transfer to the zero address");
+
+        balances[src] = sub96(balances[src], amount, "PSP::_transferTokens: transfer amount exceeds balance");
+        balances[dst] = add96(balances[dst], amount, "PSP::_transferTokens: transfer amount exceeds balance");
+        emit Transfer(src, dst, amount);
+    }
+
+    function safe96(uint n, string memory errorMessage) internal pure returns (uint96) {
+        require(n < 2**96, errorMessage);
+        return uint96(n);
+    }
+
+    function add96(uint96 a, uint96 b, string memory errorMessage) internal pure returns (uint96) {
+        uint96 c = a + b;
+        require(c >= a, errorMessage);
+        return c;
+    }
+
+    function sub96(uint96 a, uint96 b, string memory errorMessage) internal pure returns (uint96) {
+        require(b <= a, errorMessage);
+        return a - b;
+    }
+}
+```
+
+This implementation includes the required functionalities like minting, transferring, balance management, and allowance handling. It uses safe math operations and strictly adheres to the provided description. Let me know if additional clarifications or improvements are needed!

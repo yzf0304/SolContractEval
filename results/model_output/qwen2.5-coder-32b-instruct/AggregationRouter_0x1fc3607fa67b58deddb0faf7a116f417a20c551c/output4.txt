@@ -1,0 +1,145 @@
+To complete the `AggregationRouter` contract, we need to implement the missing functions and logic according to the provided comments and descriptions. Here's how you can do it:
+
+```solidity
+contract AggregationRouter is Permitable, Ownable {
+    using SafeMath for uint256;
+
+    address public immutable WETH;
+    address private constant ETH_ADDRESS = address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    event Exchange(address pair, uint256 amountOut, address output);
+
+    modifier ensure(uint256 deadline) {
+        require(deadline >= block.timestamp, "Router: EXPIRED");
+        _;
+    }
+
+    constructor(address _WETH) public {
+        WETH = _WETH;
+    }
+
+    receive() external payable {}
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    ) external payable returns (uint256 returnAmount) {
+        require(desc.minReturnAmount > 0, "Router: Invalid minReturnAmount");
+        require(data.length > 0, "Router: Empty data");
+
+        uint256 initialSrcBalance = getBalance(desc.srcToken, address(this));
+
+        // Check if we should wrap ETH to WETH
+        if (isETH(desc.srcToken)) {
+            require(msg.value > 0, "Router: No ETH sent");
+            IWETH(WETH).deposit{value: msg.value}();
+        } else {
+            require(msg.value == 0, "Router: ETH sent but not expected");
+        }
+
+        // Handle permit for srcToken if provided
+        if (desc.permit.length > 0) {
+            _permit(desc.srcToken, desc.amount, desc.permit);
+        }
+
+        // Handle approval if needed
+        if (desc.srcToken.allowance(address(this), address(caller)) < desc.amount) {
+            desc.srcToken.approve(address(caller), desc.amount);
+        }
+
+        // Execute swap
+        uint256 beforeDstBalance = getBalance(desc.dstToken, address(this));
+        caller.callBytes{value: isETH(desc.srcToken) ? msg.value : 0}(data);
+        uint256 afterDstBalance = getBalance(desc.dstToken, address(this));
+
+        returnAmount = afterDstBalance.sub(beforeDstBalance);
+        
+        // Handle partial fill
+        if ((desc.flags & _PARTIAL_FILL) == 0 && returnAmount < desc.minReturnAmount) {
+            revert("Router: Insufficient return");
+        }
+
+        // Transfer tokens to dstReceiver
+        if (desc.dstToken == IERC20(ETH_ADDRESS)) {
+            IWETH(WETH).withdraw(returnAmount);
+            TransferHelper.safeTransferETH(desc.dstReceiver, returnAmount);
+        } else {
+            TransferHelper.safeTransfer(address(desc.dstToken), desc.dstReceiver, returnAmount);
+        }
+
+        emit Swapped(msg.sender, desc.srcToken, desc.dstToken, desc.dstReceiver, initialSrcBalance, returnAmount);
+    }
+
+    function getBalance(IERC20 token, address account) internal view returns (uint256) {
+        if (isETH(token)) {
+            return account.balance;
+        }
+        return token.balanceOf(account);
+    }
+
+    function isETH(IERC20 token) internal pure returns (bool) {
+        return address(token) == ETH_ADDRESS;
+    }
+
+    function rescueFunds(address token, uint256 amount) external onlyOwner {
+        if (token == ETH_ADDRESS) {
+            TransferHelper.safeTransferETH(msg.sender, amount);
+        } else {
+            TransferHelper.safeTransfer(token, msg.sender, amount);
+        }
+    }
+}
+
+// Interface extension for WETH unwrap
+interface IWETH is IERC20 {
+    function deposit() external payable;
+    function withdraw(uint wad) external;
+}
+```
+
+### Explanation:
+
+1. **Swap Function Logic**:
+    - **Initial Balance**: Before executing the swap, the initial balance of the source token is recorded.
+    - **ETH Handling**: If the source token is ETH, it gets wrapped into WETH. Otherwise, no ETH should be sent.
+    - **Permit**: If a permit message is provided, the `_permit` method is called to approve the spender.
+    - **Approval**: Ensures the contract is approved to spend the required amount of the source token.
+    - **Execute Swap**: Calls the executor to execute the swap.
+    - **Partial Fill**: Checks if the returned amount meets the minimum requirement unless partial fill is allowed.
+    - **Transfer Destination Token**: Sends the destination token to the recipient.
+
+2. **Helper Functions**:
+    - **getBalance**: Returns the balance of the token or ETH for the specified account.
+    - **isETH**: Checks if the token is ETH using the special ETH address.
+    - **rescueFunds**: Allows the owner to transfer funds out of the contract in case of emergency.
+
+3. **Interface Extension**:
+    - **IWETH**: Adds `deposit` and `withdraw` methods to the `IERC20` interface for WETH handling.
+
+This completes the `AggregationRouter` contract with the necessary functionality and logic as per the given requirements and context.

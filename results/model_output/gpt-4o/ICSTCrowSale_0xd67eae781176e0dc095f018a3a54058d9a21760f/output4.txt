@@ -1,0 +1,136 @@
+Here is the complete and functional `ICSTCrowSale` smart contract based on the provided description and context. The contract is compatible with Solidity version 0.4.21:
+
+```solidity
+pragma solidity ^0.4.21;
+
+contract ERC20 {
+    function allowance(address owner, address spender) public view returns (uint256);
+    function transferFrom(address from, address to, uint256 value) public returns (bool);
+    function approve(address spender, uint256 value) public returns (bool);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    function transfer(address to, uint256 value) public returns (bool);
+    function balanceOf(address who) public view returns (uint256);
+}
+
+contract Ownable {
+    address public owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    function Ownable() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+}
+
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        assert(c / a == b);
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a / b;
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+contract ICSTCrowSale is Ownable {
+    using SafeMath for uint256;
+
+    uint256 public totalFundingSupply;
+    ERC20 public token;
+    uint256 public startTime;
+    uint256 public endTime;
+    uint256 public airdropSupply;
+    uint256 public rate;
+
+    event Wasted(address indexed to, uint256 value, uint256 date);
+
+    function ICSTCrowSale() public {
+        rate = 0;
+        startTime = 0;
+        endTime = 0;
+        airdropSupply = 0;
+        totalFundingSupply = 0;
+        token = ERC20(0xe6bc60a00b81c7f3cbc8f4ef3b0a6805b6851753);
+    }
+
+    function () external payable {
+        require(now > startTime);
+        require(now <= endTime);
+        uint256 tokensToTransfer = msg.value.mul(rate);
+        processFunding(msg.sender, msg.value, rate);
+        totalFundingSupply = totalFundingSupply.add(tokensToTransfer);
+    }
+
+    function withdrawCoinToOwner(uint256 _value) external onlyOwner {
+        require(token.transfer(owner, _value));
+    }
+
+    function airdrop(address[] _holders, uint256 paySize) external onlyOwner {
+        require(paySize.mul(_holders.length) <= token.balanceOf(address(this)));
+        for (uint256 i = 0; i < _holders.length; i++) {
+            require(token.transfer(_holders[i], paySize));
+            emit Wasted(_holders[i], paySize, now);
+        }
+        airdropSupply = airdropSupply.add(paySize.mul(_holders.length));
+    }
+
+    function processFunding(address receiver, uint256 _value, uint256 _rate) internal {
+        uint256 tokensToTransfer = _value.mul(_rate);
+        require(token.balanceOf(address(this)) >= tokensToTransfer);
+        require(token.transfer(receiver, tokensToTransfer));
+    }
+
+    function etherProceeds() external onlyOwner {
+        owner.transfer(address(this).balance);
+    }
+
+    function init(uint256 _startTime, uint256 _endTime, uint256 _rate) external onlyOwner {
+        require(_startTime < _endTime);
+        require(_rate > 0);
+        startTime = _startTime;
+        endTime = _endTime;
+        rate = _rate;
+    }
+
+    function changeToken(address _tokenAddress) external onlyOwner {
+        require(_tokenAddress != address(0));
+        token = ERC20(_tokenAddress);
+    }
+}
+```
+
+### Key Features:
+1. **Funding Mechanism**: Accepts ether, calculates tokens to transfer using the `rate`, and ensures the crowdsale operates within the defined timeframe.
+2. **Airdrop Functionality**: Distributes tokens to multiple addresses while ensuring the contract's token balance suffices.
+3. **Owner Privileges**: Functions for withdrawing tokens, airdropping tokens, changing the token address, and withdrawing contract ether are restricted to the owner.
+4. **Validation**: Uses `SafeMath` to ensure arithmetic operations are secure.
+
+Ensure that the contract is compiled using Solidity version `0.4.21` to avoid compatibility issues.

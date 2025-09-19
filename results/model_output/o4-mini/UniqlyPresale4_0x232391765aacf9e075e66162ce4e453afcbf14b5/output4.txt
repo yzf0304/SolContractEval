@@ -1,0 +1,183 @@
+pragma solidity 0.8.2;
+
+abstract contract IERC20 {
+    function balanceOf(address _owner)
+        external
+        virtual
+        returns (uint256 balance);
+
+    function transfer(address _to, uint256 _value) external virtual;
+}
+
+contract UniqlyPresale4 {
+    // presale target - close presale when reached
+    uint256 public immutable presaleLimit;
+
+    // minimum pay-in per user
+    uint256 public immutable minPerUser;
+
+    // maximum pay-in per user
+    uint256 public immutable maxPerUser;
+
+    // timestamp ending presale
+    uint256 public immutable presaleEnd;
+
+    // failsafe time - fail if not properly closed after presaleEnd
+    uint256 constant failSafeTime = 2 weeks;
+
+    // owner address - will receive ETH if success
+    address public owner;
+
+    // flags need for logic (false is default)
+    bool public presaleEnded;
+    bool public presaleFailed;
+    bool public presaleStarted;
+
+    // list of user balances (zero is default)
+    mapping(address => uint256) private balances;
+
+    // change ownership in two steps to be sure about owner address
+    address public newOwner;
+
+    constructor(
+        uint256 _presaleLimit,
+        uint256 _minPerUser,
+        uint256 _maxPerUser,
+        uint256 _presaleEnd,
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    /**
+     * @notice Allows users to contribute ETH to the presale.
+     */
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 amount = balances[msg.sender] + msg.value;
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+
+        balances[msg.sender] = amount;
+
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    /**
+     * @notice Starts the presale, allowing users to contribute.
+     */
+    function start() external {
+        require(msg.sender == owner, "Not owner");
+        require(!presaleStarted, "Already started");
+        presaleStarted = true;
+    }
+
+    /**
+     * @notice Returns the balance of a specific user.
+     */
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    /**
+     * @notice Returns the balance of the caller.
+     */
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    /**
+     * @notice Returns the total amount of ETH collected in the presale.
+     */
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    /**
+     * @notice Allows withdrawal of funds based on presale status.
+     */
+    function withdraw() external returns (bool) {
+        // not started => no action
+        if (!presaleStarted) {
+            return false;
+        }
+
+        // if time passed failSafe and not ended, mark failed
+        if (!presaleEnded && block.timestamp > presaleEnd + failSafeTime) {
+            presaleFailed = true;
+            presaleEnded = true;
+        }
+
+        // still not ended => no action
+        if (!presaleEnded) {
+            return false;
+        }
+
+        // presale failed => users withdraw their contributions
+        if (presaleFailed) {
+            uint256 userAmount = balances[msg.sender];
+            if (userAmount == 0) {
+                return false;
+            }
+            balances[msg.sender] = 0;
+            send(msg.sender, userAmount);
+            return true;
+        }
+
+        // presale succeeded => only owner withdraws all
+        if (msg.sender != owner) {
+            return false;
+        }
+        uint256 total = address(this).balance;
+        if (total == 0) {
+            return false;
+        }
+        send(owner, total);
+        return true;
+    }
+
+    /**
+     * @notice Sends ETH from the contract to a specified address.
+     */
+    function send(address user, uint256 amount) private {
+        // .send returns false on failure, but we do not revert
+        payable(user).send(amount);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw any ERC20 tokens accidentally sent to the contract.
+     */
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Not owner");
+        uint256 bal = token.balanceOf(address(this));
+        if (bal > 0) {
+            token.transfer(owner, bal);
+        }
+    }
+
+    /**
+     * @notice Allows the current owner to delegate ownership to a new address.
+     */
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Not owner");
+        newOwner = _newOwner;
+    }
+
+    /**
+     * @notice Allows the new owner to accept the ownership of the contract.
+     */
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Not new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}

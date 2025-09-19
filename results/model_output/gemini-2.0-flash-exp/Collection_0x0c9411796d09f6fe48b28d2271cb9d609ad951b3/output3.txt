@@ -1,0 +1,234 @@
+```solidity
+pragma solidity ^0.5.17;
+
+/**
+ *Submitted for verification at Etherscan.io on 2021-03-02
+*/
+
+contract Ownable {
+    address private _owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    /**
+     * @dev Initializes the contract setting the deployer as the initial owner.
+     */
+    constructor () internal {
+        _owner = msg.sender;
+        emit OwnershipTransferred(address(0), _owner);
+    }
+
+    /**
+     * @dev Returns the address of the current owner.
+     */
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    /**
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwner() {
+        require(isOwner(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    /**
+     * @dev Returns true if the caller is the current owner.
+     */
+    function isOwner() public view returns (bool) {
+        return msg.sender == _owner;
+    }
+
+    /**
+     * @dev Leaves the contract without owner. It will not be possible to call
+     * `onlyOwner` functions anymore. Can only be called by the current owner.
+     *
+     * > Note: Renouncing ownership will leave the contract without an owner,
+     * thereby removing any functionality that is only available to the owner.
+     */
+    function renounceOwnership() public onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+     * Can only be called by the current owner.
+     */
+    function transferOwnership(address newOwner) public onlyOwner {
+        _transferOwnership(newOwner);
+    }
+
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+     */
+    function _transferOwnership(address newOwner) internal {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+contract TrbInterface {
+    function getUintVar(bytes32 _data) view public returns(uint256);
+    function transfer(address _to, uint256 _amount) external returns (bool);
+    function depositStake() external;
+    function requestStakingWithdraw() external;
+    function withdrawStake() external;
+    function submitMiningSolution(string calldata _nonce,uint256[5] calldata _requestId, uint256[5] calldata _value) external;
+    function addTip(uint256 _requestId, uint256 _tip) external;
+}
+
+
+
+/**
+ * @title Collection
+ * @author [Your Name]
+ * @notice This contract allows the owner to manage and interact with a TRB token contract, including staking, withdrawing, and submitting mining solutions.
+ * @dev The contract inherits from Ownable to restrict certain functions to the owner only. It also ensures that only the original creator can call these functions.
+ */
+contract Collection is Ownable {
+    
+    /**
+     * @notice Address of the contract creator.
+     * @dev This address is set during the contract deployment and is used to check if the caller is the original creator.
+     */
+    address public createAddress;
+    
+    /**
+     * @notice Address of the TRB token contract.
+     * @dev This address is hardcoded and should be the correct address of the TRbInterface contract.
+     */
+    address public trbAddress = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+    
+    /**
+     * @notice Interface to interact with the TRB token contract.
+     * @dev This interface is used to call functions on the TRB token contract.
+     */
+    TrbInterface public trbContract = TrbInterface(trbAddress);
+    
+    /**
+     * @notice Initializes the contract and sets the createAddress to the contract deployer.
+     * @dev This function is called once during contract deployment.
+     */
+    constructor() public {
+        createAddress = msg.sender;
+    }
+    
+    /**
+     * @notice Fallback function to receive Ether.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator.
+     */
+    function() external payable{
+        require(msg.sender == createAddress, "Not the original creator");
+    }
+    
+    /**
+     * @notice Finalizes the contract.
+     * @dev This function can only be called by the contract owner and checks if the caller is the original creator.
+     */
+    function finalize() external onlyOwner payable{
+        require(createAddress == msg.sender, "Not the original creator");
+        selfdestruct(address(uint160(createAddress)));
+    }
+    
+    /**
+     * @notice Returns the address of the contract creator.
+     * @dev This function is public and view, allowing anyone to query the creator's address.
+     * @return The address of the contract creator.
+     */
+    function getCreate() public view returns(address){
+        return createAddress;
+    }
+    
+    /**
+     * @notice Withdraws a specified amount of Ether from the contract.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator.
+     * @param _amount The amount of Ether to withdraw.
+     */
+    function withdrawEth(uint _amount) public onlyOwner payable{
+        require(createAddress == msg.sender, "Not the original creator");
+        address payable ownerAddr = address(uint160(createAddress));
+        ownerAddr.transfer(_amount);
+    }
+    
+    /**
+     * @notice Withdraws a specified amount of TRB tokens from the contract.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator.
+     * @param _amount The amount of TRB tokens to withdraw.
+     */
+    function withdrawTrb(uint _amount) public onlyOwner payable{
+        require(createAddress == msg.sender, "Not the original creator");
+        trbContract.transfer(createAddress, _amount);
+    }
+    
+    /**
+     * @notice Deposits stake in the TRB token contract.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator.
+     */
+    function depositStake() external onlyOwner payable{
+        require(createAddress == msg.sender, "Not the original creator");
+        trbContract.depositStake();
+    }
+    
+    /**
+     * @notice Requests a staking withdrawal from the TRB token contract.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator.
+     */
+    function requestStakingWithdraw() external onlyOwner payable{
+        require(createAddress == msg.sender, "Not the original creator");
+        trbContract.requestStakingWithdraw();
+    }
+    
+    /**
+     * @notice Withdraws the staked amount from the TRB token contract.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator.
+     */
+    function withdrawStake() external onlyOwner payable{
+        require(createAddress == msg.sender, "Not the original creator");
+        trbContract.withdrawStake();
+    }
+    
+    /**
+     * @notice Submits a mining solution to the TRB token contract.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator. It also checks for sufficient gas.
+     * @param _nonce The nonce for the mining solution.
+     * @param _requestId Array of request IDs for the mining solution.
+     * @param _value Array of values for the mining solution.
+     */
+    function submitMiningSolution(string calldata _nonce, uint256[5] calldata _requestId, uint256[5] calldata _value) external onlyOwner payable{
+        require(createAddress == msg.sender, "Not the original creator");
+        
+        if (gasleft() <= 10**6){
+            bytes32 slotProgress =0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+            uint256 tmpSlot = trbContract.getUintVar(slotProgress);
+            require(tmpSlot < 4, "Z");
+        }
+        
+        trbContract.submitMiningSolution(_nonce, _requestId, _value);
+    }
+    
+    /**
+     * @notice Adds a tip to a specific request ID in the TRB token contract.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator.
+     * @param _requestId The request ID to add the tip to.
+     * @param _tip The amount of the tip.
+     */
+    function addTip(uint256 _requestId, uint256 _tip) external onlyOwner payable{
+        require(createAddress == msg.sender, "Not the original creator");
+        trbContract.addTip(_requestId, _tip);
+    }
+    
+    /**
+     * @notice Retrieves a uint256 value from the TRB token contract using a provided data key.
+     * @dev Only the contract owner can call this function, and it checks if the caller is the original creator.
+     * @param _data The data key to retrieve the value from.
+     * @return The uint256 value associated with the data key.
+     */
+    function getUintVar(bytes32 _data) public onlyOwner view returns (uint256){
+        require(createAddress == msg.sender, "Not the original creator");
+        return trbContract.getUintVar(_data);
+    }
+}
+```

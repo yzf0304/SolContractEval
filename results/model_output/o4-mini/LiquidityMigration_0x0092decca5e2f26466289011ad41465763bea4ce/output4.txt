@@ -1,0 +1,434 @@
+```solidity
+pragma solidity 0.8.2;
+
+contract LiquidityMigration is Timelocked, StrategyTypes {
+    using SafeERC20 for IERC20;
+
+    address public generic;
+    address public controller;
+    IStrategyProxyFactory public factory;
+
+    mapping (address => bool) public adapters;
+    mapping (address => uint256) public stakedCount;
+    mapping (address => mapping (address => uint256)) public staked;
+    mapping (address => bool) private _tempIsUnderlying;
+
+    event Staked(address adapter, address lp, uint256 amount, address account);
+    event Migrated(address adapter, address lp, address strategy, address account);
+    event Created(address adapter, address lp, address strategy, address account);
+    event Refunded(address lp, uint256 amount, address account);
+
+    modifier onlyRegistered(address _adapter) {
+        require(adapters[_adapter], "LiquidityMigration: adapter not registered");
+        _;
+    }
+
+    modifier onlyWhitelisted(address _adapter, address _lp) {
+        require(IAdapter(_adapter).isWhitelisted(_lp), "LiquidityMigration: lp not whitelisted");
+        _;
+    }
+
+    constructor(
+        address[] memory adapters_,
+        address generic_,
+        IStrategyProxyFactory factory_,
+        address controller_,
+        uint256 _unlock,
+        uint256 _modify,
+        address _owner
+    )
+        Timelocked(_unlock, _modify, _owner)
+    {
+        for (uint256 i = 0; i < adapters_.length; i++) {
+            adapters[adapters_[i]] = true;
+        }
+        generic = generic_;
+        factory = factory_;
+        controller = controller_;
+    }
+
+    function stake(
+        address _lp,
+        uint256 _amount,
+        address _adapter
+    )
+        external
+        onlyRegistered(_adapter)
+        onlyWhitelisted(_adapter, _lp)
+    {
+        require(_amount > 0, "LiquidityMigration: zero amount");
+        IERC20(_lp).safeTransferFrom(msg.sender, address(this), _amount);
+        _stake(_lp, _amount, _adapter);
+    }
+
+    function buyAndStake(
+        address _lp,
+        address _adapter,
+        address _exchange,
+        uint256 _minAmountOut,
+        uint256 _deadline
+    )
+        external
+        payable
+        onlyRegistered(_adapter)
+        onlyWhitelisted(_adapter, _lp)
+    {
+        require(msg.value > 0, "LiquidityMigration: zero ETH");
+        _buyAndStake(_lp, msg.value, _adapter, _exchange, _minAmountOut, _deadline);
+    }
+
+    function batchStake(
+        address[] memory _lp,
+        uint256[] memory _amount,
+        address[] memory _adapter
+    )
+        external
+    {
+        uint256 n = _lp.length;
+        require(n == _amount.length && n == _adapter.length, "LiquidityMigration: array length mismatch");
+        for (uint256 i = 0; i < n; i++) {
+            stake(_lp[i], _amount[i], _adapter[i]);
+        }
+    }
+
+    function batchBuyAndStake(
+        address[] memory _lp,
+        uint256[] memory _amount,
+        address[] memory _adapter,
+        address[] memory _exchange,
+        uint256[] memory _minAmountOut,
+        uint256 _deadline
+    )
+        external
+        payable
+    {
+        uint256 n = _lp.length;
+        require(
+            n == _amount.length
+            && n == _adapter.length
+            && n == _exchange.length
+            && n == _minAmountOut.length,
+            "LiquidityMigration: array length mismatch"
+        );
+        uint256 total = 0;
+        for (uint256 i = 0; i < n; i++) {
+            total += _amount[i];
+        }
+        require(total == msg.value, "LiquidityMigration: ETH mismatch");
+        for (uint256 i = 0; i < n; i++) {
+            _buyAndStake(_lp[i], _amount[i], _adapter[i], _exchange[i], _minAmountOut[i], _deadline);
+        }
+    }
+
+    function migrate(
+        address _lp,
+        address _adapter,
+        IStrategy _strategy,
+        uint256 _slippage
+    )
+        external
+        onlyUnlocked
+    {
+        _migrate(msg.sender, _lp, _adapter, _strategy, _slippage);
+    }
+
+    function migrate(
+        address _user,
+        address _lp,
+        address _adapter,
+        IStrategy _strategy,
+        uint256 _slippage
+    )
+        external
+        onlyOwner
+        onlyUnlocked
+    {
+        _migrate(_user, _lp, _adapter, _strategy, _slippage);
+    }
+
+    function batchMigrate(
+        address[] memory _lp,
+        address[] memory _adapter,
+        IStrategy[] memory _strategy,
+        uint256[] memory _slippage
+    )
+        external
+        onlyUnlocked
+    {
+        uint256 n = _lp.length;
+        require(
+            n == _adapter.length
+            && n == _strategy.length
+            && n == _slippage.length,
+            "LiquidityMigration: array length mismatch"
+        );
+        for (uint256 i = 0; i < n; i++) {
+            _migrate(msg.sender, _lp[i], _adapter[i], _strategy[i], _slippage[i]);
+        }
+    }
+
+    function batchMigrate(
+        address[] memory _user,
+        address[] memory _lp,
+        address[] memory _adapter,
+        IStrategy[] memory _strategy,
+        uint256[] memory _slippage
+    )
+        external
+        onlyOwner
+        onlyUnlocked
+    {
+        uint256 n = _user.length;
+        require(
+            n == _lp.length
+            && n == _adapter.length
+            && n == _strategy.length
+            && n == _slippage.length,
+            "LiquidityMigration: array length mismatch"
+        );
+        for (uint256 i = 0; i < n; i++) {
+            _migrate(_user[i], _lp[i], _adapter[i], _strategy[i], _slippage[i]);
+        }
+    }
+
+    function refund(
+        address _user,
+        address _lp
+    )
+        public
+        onlyOwner
+    {
+        _refund(_user, _lp);
+    }
+
+    function batchRefund(address[] memory _users, address _lp)
+        public
+        onlyOwner
+    {
+        for (uint256 i = 0; i < _users.length; i++) {
+            _refund(_users[i], _lp);
+        }
+    }
+
+    function _refund(
+        address _user,
+        address _lp
+    )
+        internal
+    {
+        uint256 amount = staked[_user][_lp];
+        require(amount > 0, "LiquidityMigration: nothing to refund");
+        staked[_user][_lp] = 0;
+        // Note: we do not decrement stakedCount here as adapter is unknown
+        IERC20(_lp).safeTransfer(_user, amount);
+        emit Refunded(_lp, amount, _user);
+    }
+
+    function _migrate(
+        address _user,
+        address _lp,
+        address _adapter,
+        IStrategy _strategy,
+        uint256 _slippage
+    )
+        internal
+        onlyRegistered(_adapter)
+        onlyWhitelisted(_adapter, _lp)
+    {
+        uint256 amount = staked[_user][_lp];
+        require(amount > 0, "LiquidityMigration: no stake");
+        require(
+            IStrategyController(controller).initialized(address(_strategy)),
+            "LiquidityMigration: strategy not initialized"
+        );
+        // clear stake
+        staked[_user][_lp] = 0;
+        stakedCount[_adapter] = stakedCount[_adapter] > 0
+            ? stakedCount[_adapter] - 1
+            : 0;
+
+        // transfer LP to generic handler
+        IERC20(_lp).safeTransfer(generic, amount);
+
+        // build migration calls
+        IAdapter.Call[] memory calls = IAdapter(_adapter)
+            .encodeMigration(generic, address(_strategy), _lp, amount);
+        bytes memory data = abi.encode(calls);
+
+        // invoke controller.deposit via low-level call to avoid missing IStrategyRouter type
+        bytes memory payload = abi.encodeWithSelector(
+            IStrategyController.deposit.selector,
+            _strategy,
+            generic,
+            amount,
+            _slippage,
+            data
+        );
+        (bool success, ) = controller.call{value: 0}(payload);
+        require(success, "LiquidityMigration: deposit failed");
+
+        emit Migrated(_adapter, _lp, address(_strategy), _user);
+    }
+
+    function _stake(
+        address _lp,
+        uint256 _amount,
+        address _adapter
+    )
+        internal
+        onlyRegistered(_adapter)
+        onlyWhitelisted(_adapter, _lp)
+    {
+        bool first = staked[msg.sender][_lp] == 0;
+        staked[msg.sender][_lp] += _amount;
+        if (first) {
+            stakedCount[_adapter] += 1;
+        }
+        emit Staked(_adapter, _lp, _amount, msg.sender);
+    }
+
+    function _buyAndStake(
+        address _lp,
+        uint256 _amount,
+        address _adapter,
+        address _exchange,
+        uint256 _minAmountOut,
+        uint256 _deadline
+    )
+        internal
+    {
+        uint256 before = IERC20(_lp).balanceOf(address(this));
+        IAdapter(_adapter).buy{value: _amount}(
+            _lp,
+            _exchange,
+            _minAmountOut,
+            _deadline
+        );
+        uint256 after = IERC20(_lp).balanceOf(address(this));
+        uint256 got = after - before;
+        require(got >= _minAmountOut, "LiquidityMigration: slippage");
+        _stake(_lp, got, _adapter);
+    }
+
+    function createStrategy(
+        address _lp,
+        address _adapter,
+        bytes calldata data
+    )
+        public
+        onlyRegistered(_adapter)
+        onlyWhitelisted(_adapter, _lp)
+        payable
+    {
+        (
+            string memory name,
+            string memory symbol,
+            StrategyItem[] memory items,
+            InitialState memory init,
+            address router,
+            bytes memory extra
+        ) = abi.decode(
+                data,
+                (string, string, StrategyItem[], InitialState, address, bytes)
+            );
+
+        _validateItems(_adapter, _lp, items);
+        address strat = factory.createStrategy{value: msg.value}(
+            msg.sender,
+            name,
+            symbol,
+            items,
+            init,
+            router,
+            extra
+        );
+        emit Created(_adapter, _lp, strat, msg.sender);
+    }
+
+    function updateController(address _controller)
+        external
+        onlyOwner
+    {
+        require(_controller != controller, "LiquidityMigration: same controller");
+        controller = _controller;
+    }
+
+    function updateGeneric(address _generic)
+        external
+        onlyOwner
+    {
+        require(_generic != generic, "LiquidityMigration: same generic");
+        generic = _generic;
+    }
+
+    function updateFactory(address _factory)
+        external
+        onlyOwner
+    {
+        require(address(factory) != _factory, "LiquidityMigration: same factory");
+        factory = IStrategyProxyFactory(_factory);
+    }
+
+    function addAdapter(address _adapter)
+        external
+        onlyOwner
+    {
+        require(!adapters[_adapter], "LiquidityMigration: already added");
+        adapters[_adapter] = true;
+    }
+
+    function removeAdapter(address _adapter)
+        external
+        onlyOwner
+    {
+        require(adapters[_adapter], "LiquidityMigration: not found");
+        adapters[_adapter] = false;
+    }
+
+    function hasStaked(address _account, address _lp)
+        external
+        view
+        returns (bool)
+    {
+        return staked[_account][_lp] > 0;
+    }
+
+    function getStakeCount(address _adapter)
+        external
+        view
+        returns (uint256)
+    {
+        return stakedCount[_adapter];
+    }
+
+    function _validateItems(
+        address adapter,
+        address lp,
+        StrategyItem[] memory strategyItems
+    )
+        private
+    {
+        address[] memory outputs = IAdapter(adapter).outputTokens(lp);
+        uint256 remaining = outputs.length;
+        for (uint256 i = 0; i < outputs.length; i++) {
+            _tempIsUnderlying[outputs[i]] = true;
+        }
+        for (uint256 i = 0; i < strategyItems.length; i++) {
+            address it = strategyItems[i].item;
+            int256 pct = strategyItems[i].percentage;
+            if (pct == 0) {
+                // zero-percentage items are allowed even if not in outputs
+                continue;
+            }
+            require(_tempIsUnderlying[it], "LiquidityMigration: invalid item");
+            _tempIsUnderlying[it] = false;
+            remaining--;
+        }
+        require(remaining == 0, "LiquidityMigration: missing items");
+        // clean up
+        for (uint256 i = 0; i < outputs.length; i++) {
+            _tempIsUnderlying[outputs[i]] = false;
+        }
+    }
+}
+```

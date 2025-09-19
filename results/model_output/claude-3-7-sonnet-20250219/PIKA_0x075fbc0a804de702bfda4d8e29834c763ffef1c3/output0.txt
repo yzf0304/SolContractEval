@@ -1,0 +1,358 @@
+I'll complete the PIKA token contract based on the provided context. Here's the implementation:
+
+```solidity
+/**
+ * @title PIKA Token Contract
+ * @notice This contract implements the ERC223 token standard with additional features such as tax fees, swapping, and liquidity management.
+ * @dev The contract is designed to handle token transfers, fee calculations, and interactions with Uniswap for liquidity and swapping.
+ */
+contract PIKA is Context, Owned, ERC20 {
+    using SafeMath for uint256;
+
+    uint256 public _taxFee;
+    uint256 public totalSupply;
+    string public symbol;
+    string public name;
+    uint8 public decimals;
+    uint256 private _taxFeepercent = 225;
+    IUniswapV2Router02 public immutable uniswapV2Router;
+    address public immutable uniswapV2Pair;
+    mapping (address => bool) private _isExcludedFromFee;
+    uint256 public ContractDeployed;
+    address oldPika = 0xE09fB60E8D6e7E1CEbBE821bD5c3FC67a40F86bF;
+    uint256 public oldPika_amount;
+    uint256 private minamountTakenOut = 1000000 * 10**9 * 10 **9;  
+    uint256 private MinimumSupply = 100000000 * 10**9 * 10**9;
+
+    mapping (address => uint256) balances;
+    mapping (address => mapping (address => uint256)) allowed;
+
+    event TransferFee(address indexed _from, address indexed _to, uint256 _value);
+
+    /**
+     * @notice Returns the balance of a specific address.
+     * @param _owner The address to query the balance of.
+     * @return The balance of the specified address.
+     */
+    function balanceOf(address _owner) view public override returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice Transfers tokens from the sender to a recipient.
+     * @param _to The recipient address.
+     * @param _amount The amount of tokens to transfer.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function transfer(address _to, uint256 _amount) public override returns (bool success) {
+        _transfer(_msgSender(), _to, _amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another, using an allowance mechanism.
+     * @param sender The address to transfer tokens from.
+     * @param recipient The address to transfer tokens to.
+     * @param amount The amount of tokens to transfer.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool success) {
+        _transfer(sender, recipient, amount);
+        _approve(sender, _msgSender(), allowed[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance"));
+        return true;
+    }
+
+    /**
+     * @notice Internal function to handle the actual transfer of tokens.
+     * @param sender The address to transfer tokens from.
+     * @param recipient The address to transfer tokens to.
+     * @param amount The amount of tokens to transfer.
+     */
+    function _transfer(address sender, address recipient, uint256 amount) internal virtual {
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+        require(amount > 0, "Transfer amount must be greater than zero");
+
+        bool takeFee = true;
+
+        if (_isExcludedFromFee[sender] || _isExcludedFromFee[recipient]) {
+            takeFee = false;
+        }
+
+        if (takeFee) {
+            uint256 taxAmount = amount.mul(_taxFeepercent).div(10000);
+            uint256 sendAmount = amount.sub(taxAmount);
+            
+            balances[sender] = balances[sender].sub(amount);
+            balances[recipient] = balances[recipient].add(sendAmount);
+            balances[address(this)] = balances[address(this)].add(taxAmount);
+            _taxFee = _taxFee.add(taxAmount);
+            
+            emit Transfer(sender, recipient, sendAmount);
+            emit TransferFee(sender, address(this), taxAmount);
+        } else {
+            balances[sender] = balances[sender].sub(amount);
+            balances[recipient] = balances[recipient].add(amount);
+            emit Transfer(sender, recipient, amount);
+        }
+    }
+
+    /**
+     * @notice Approves a spender to transfer a certain amount of tokens on behalf of the owner.
+     * @param spender The address that will be approved to spend tokens.
+     * @param amount The amount of tokens to approve.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function approve(address spender, uint256 amount) public virtual override returns (bool) {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
+
+    /**
+     * @notice Internal function to set the allowance of a spender.
+     * @param owner The address that owns the tokens.
+     * @param spender The address that will be approved to spend tokens.
+     * @param amount The amount of tokens to approve.
+     */
+    function _approve(address owner, address spender, uint256 amount) internal virtual {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+
+        allowed[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    /**
+     * @notice Returns the remaining allowance of a spender.
+     * @param _owner The address that owns the tokens.
+     * @param _spender The address that is allowed to spend tokens.
+     * @return The remaining allowance of the spender.
+     */
+    function allowance(address _owner, address _spender) view public override returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    /**
+     * @notice Burns a specified amount of tokens from an account.
+     * @param account The address to burn tokens from.
+     * @param amount The amount of tokens to burn.
+     */
+    function _burn(address account, uint256 amount) internal virtual {
+        require(account != address(0), "ERC20: burn from the zero address");
+        require(totalSupply.sub(amount) >= MinimumSupply, "Cannot burn below minimum supply");
+
+        balances[account] = balances[account].sub(amount, "ERC20: burn amount exceeds balance");
+        totalSupply = totalSupply.sub(amount);
+        emit Transfer(account, address(0), amount);
+    }
+
+    /**
+     * @notice Swaps tokens for ETH using Uniswap.
+     * @param tokenAmount The amount of tokens to swap.
+     */
+    function swapTokensForEth(uint256 tokenAmount) private {
+        // Generate the uniswap pair path of token -> weth
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = uniswapV2Router.WETH();
+
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+
+        // Make the swap
+        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0, // Accept any amount of ETH
+            path,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    /**
+     * @notice Returns the minimum amount of tokens that can be taken out.
+     * @return The minimum amount of tokens that can be taken out.
+     */
+    function viewMinExtractAmt() public view returns (uint256) {
+        return minamountTakenOut;
+    }
+
+    /**
+     * @notice Sets the minimum amount of tokens that can be taken out.
+     * @param _amount The new minimum amount of tokens that can be taken out.
+     */
+    function setMinExtractAmt(uint256 _amount) public onlyOwner() {
+        minamountTakenOut = _amount;
+    }
+
+    /**
+     * @notice Returns the current tax fee percentage.
+     * @return The current tax fee percentage.
+     */
+    function viewFee() public view returns (uint256) {
+        return _taxFeepercent;
+    }
+
+    /**
+     * @dev Exchanges Pika tokens with bonus rewards based on swap tier.
+     * Requirements:
+     * - Contract must have sufficient Pika tokens in reserve
+     * - User must approve token transfer
+     * - Swap must occur within 4 days of contract deployment
+     * Bonus Tiers:
+     * - < 1 trillion: 500% bonus
+     * - 1-10 trillion: 250% bonus
+     * - ≥ 10 trillion: 100% bonus
+     * @param tokens Amount of old Pika tokens to exchange
+     * @return None
+     * @notice Updates oldPika_amount with swapped tokens
+     * @dev Uses calSwapToken() to calculate bonus amount
+     */
+    function exchnagePika(uint256 tokens) external {
+        require(block.timestamp <= ContractDeployed + 4 days, "Swap period has ended");
+        require(tokens > 0, "Cannot swap 0 tokens");
+        
+        uint256 swapAmount;
+        
+        if (tokens < 1000000000000 * 10**9) {
+            // < 1 trillion: 500% bonus
+            swapAmount = calSwapToken(tokens, 500);
+        } else if (tokens < 10000000000000 * 10**9) {
+            // 1-10 trillion: 250% bonus
+            swapAmount = calSwapToken(tokens, 250);
+        } else {
+            // ≥ 10 trillion: 100% bonus
+            swapAmount = calSwapToken(tokens, 100);
+        }
+        
+        require(balances[owner] >= swapAmount, "Insufficient tokens for swap");
+        
+        ERC20(oldPika).transferFrom(msg.sender, address(this), tokens);
+        oldPika_amount = oldPika_amount.add(tokens);
+        
+        balances[owner] = balances[owner].sub(swapAmount);
+        balances[msg.sender] = balances[msg.sender].add(swapAmount);
+        
+        emit Transfer(owner, msg.sender, swapAmount);
+    }
+
+    /**
+     * @dev Allows the owner to withdraw all accumulated old Pika tokens.
+     * @notice Transfers the entire balance of old Pika tokens from the contract
+     *         to the owner's account and resets the stored amount to zero.
+     * @dev Requires the caller to be the contract owner.
+     * @dev Uses the ERC20 transfer function for the withdrawal.
+     */
+    function extractOldPIKA() external onlyOwner() {
+        uint256 amount = oldPika_amount;
+        oldPika_amount = 0;
+        ERC20(oldPika).transfer(owner, amount);
+    }
+
+    /**
+     * @dev Allows the owner to extract accumulated fees.
+     * @notice Transfers the current tax fee balance to the owner's account
+     *         and resets the tax fee counter to zero.
+     * @dev Can only be called by the contract owner.
+     */
+    function extractfee() external onlyOwner() {
+        require(_taxFee >= minamountTakenOut, "Below minimum extraction amount");
+        uint256 amount = _taxFee;
+        _taxFee = 0;
+        
+        balances[address(this)] = balances[address(this)].sub(amount);
+        balances[owner] = balances[owner].add(amount);
+        
+        emit Transfer(address(this), owner, amount);
+    }
+
+    /**
+     * @notice Calculates the swap token amount based on a custom percentage.
+     * @param _tokens The amount of tokens to calculate the swap for.
+     * @param cust The custom percentage to apply.
+     * @return The calculated swap token amount.
+     */
+    function calSwapToken(uint256 _tokens, uint256 cust) internal virtual returns (uint256) {
+        return _tokens.mul(cust.add(100)).div(100);
+    }
+
+    /**
+     * @notice Burns a specified amount of tokens from the caller's account.
+     * @param value The amount of tokens to burn.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function burn(uint256 value) public returns (bool flag) {
+        _burn(_msgSender(), value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the minimum supply of tokens.
+     * @return The minimum supply of tokens.
+     */
+    function viewMinSupply() public view returns (uint256) {
+        return MinimumSupply;
+    }
+
+    /**
+     * @notice Changes the minimum supply of tokens.
+     * @param newMinSupply The new minimum supply of tokens.
+     */
+    function changeMinSupply(uint256 newMinSupply) onlyOwner() public {
+        MinimumSupply = newMinSupply;
+    }
+
+    /**
+     * @dev Adds liquidity to Uniswap V2 pool.
+     * @param tokenAmount Amount of tokens to add as liquidity
+     * @notice
+     * - Approves token transfer to Uniswap router
+     * - Adds ETH and tokens as liquidity
+     * - Uses msg.value for ETH amount
+     * - Sets slippage parameters to 0 (no minimums)
+     * - Transaction must be sent by contract owner
+     * @dev
+     * - Automatically approves maximum token amount
+     * - Liquidity will be added at current price
+     * - No slippage protection (may fail if price changes)
+     */
+    function addLiquidity(uint256 tokenAmount) public payable onlyOwner() {
+        // Approve token transfer to cover all possible scenarios
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+
+        // Add the liquidity
+        uniswapV2Router.addLiquidityETH{value: msg.value}(
+            address(this),
+            tokenAmount,
+            0, // slippage is unavoidable
+            0, // slippage is unavoidable
+            owner,
+            block.timestamp
+        );
+    }
+
+    constructor() {
+        symbol = "PIKA";
+        name = "PIKA";
+        decimals = 18;
+        totalSupply = 50000000000000 * 10**9 * 10**9; //50 trillion
+        owner = _msgSender();
+        balances[owner] = totalSupply;
+        _isExcludedFromFee[owner] = true;
+        _isExcludedFromFee[address(this)] = true;
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+        uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
+        uniswapV2Router = _uniswapV2Router;
+        ContractDeployed = block.timestamp;
+    }
+
+    /**
+     * @notice Fallback function to receive ETH.
+     */
+    receive() payable external {
+        require(msg.value > 0);
+        owner.transfer(msg.value);
+    }
+}
+```
+
+Note: I noticed that the interface `IUniswapV2Router01` is referenced but not provided in the context. Since this is required for `IUniswapV2Router02` to inherit from, the contract might not compile as is. In a real implementation, you would need to include the `IUniswapV2Router01` interface or import it from the appropriate Uniswap library.

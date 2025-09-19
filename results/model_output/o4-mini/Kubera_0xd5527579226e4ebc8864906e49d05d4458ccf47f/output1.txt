@@ -1,0 +1,174 @@
+```solidity
+pragma solidity ^0.4.11;
+
+contract SafeMath {
+    //internals
+    function safeMul(uint a, uint b) internal returns (uint) {
+        uint c = a * b;
+        Assert(a == 0 || c / a == b);
+        return c;
+    }
+
+    function safeSub(uint a, uint b) internal returns (uint) {
+        Assert(b <= a);
+        return a - b;
+    }
+
+    function safeAdd(uint a, uint b) internal returns (uint) {
+        uint c = a + b;
+        Assert(c >= a && c >= b);
+        return c;
+    }
+
+    function Assert(bool assertion) internal {
+        if (!assertion) {
+            revert();
+        }
+    }
+}
+
+contract Kubera is SafeMath {
+    /* Public variables of the token */
+    string public standard     = 'ERC20';
+    string public name         = 'Kubera token';
+    string public symbol       = 'KBR';
+    uint8  public decimals     = 0;
+    uint256 public totalSupply;
+    address public owner;
+
+    uint public tokensSoldToInvestors = 0;
+    uint public maxGoalInICO          = 2100000000;
+
+    /* From this time on tokens may be transferred (after ICO 23h59 10/11/2017)*/
+    uint256 public startTime = 1510325999;
+
+    /* Tells if tokens have been burned already */
+    bool public burned;
+
+    /* This wallet will hold tokens after ICO */
+    address public tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+
+    /* Balances and allowances */
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    /* Events */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+    event Burned(uint amount);
+
+    /**
+     * @notice Initializes the contract with initial supply tokens to the creator of the contract.
+     */
+    function Kubera() {
+        owner                = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        balanceOf[owner]     = 2205000000;
+        totalSupply          = 2205000000;
+    }
+
+    /**
+     * @notice Send some of your tokens to a given address.
+     */
+    function transfer(address _to, uint256 _value) returns (bool success) {
+        if (now < startTime) {
+            // During ICO period only owner may distribute tokens to investors
+            require(msg.sender == owner);
+
+            // Respect ICO cap
+            uint remaining = safeSub(maxGoalInICO, tokensSoldToInvestors);
+            uint amount    = _value;
+            if (amount > remaining) {
+                amount = remaining;
+            }
+
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, amount);
+            balanceOf[owner]      = safeSub(balanceOf[owner], amount);
+            balanceOf[_to]        = safeAdd(balanceOf[_to], amount);
+
+            Transfer(owner, _to, amount);
+            return true;
+        } else {
+            // Post-ICO: free transfers
+            require(balanceOf[msg.sender] >= _value);
+
+            balanceOf[msg.sender] = safeSub(balanceOf[msg.sender], _value);
+            balanceOf[_to]        = safeAdd(balanceOf[_to], _value);
+
+            Transfer(msg.sender, _to, _value);
+            return true;
+        }
+    }
+
+    /**
+     * @notice Allow another contract or person to spend some tokens in your behalf.
+     */
+    function approve(address _spender, uint256 _value) returns (bool success) {
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @dev Transfers tokens with ICO restrictions and validations.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) returns (bool success) {
+        if (now < startTime) {
+            // During ICO only owner-approved contracts may distribute
+            require(_from == owner);
+            require(allowance[_from][msg.sender] >= _value);
+
+            uint remaining = safeSub(maxGoalInICO, tokensSoldToInvestors);
+            uint amount    = _value;
+            if (amount > remaining) {
+                amount = remaining;
+            }
+
+            tokensSoldToInvestors              = safeAdd(tokensSoldToInvestors, amount);
+            balanceOf[_from]                   = safeSub(balanceOf[_from], amount);
+            balanceOf[_to]                     = safeAdd(balanceOf[_to], amount);
+            allowance[_from][msg.sender]       = safeSub(allowance[_from][msg.sender], amount);
+
+            Transfer(_from, _to, amount);
+            return true;
+        } else {
+            // Post-ICO normal transferFrom
+            require(balanceOf[_from] >= _value);
+            require(allowance[_from][msg.sender] >= _value);
+
+            balanceOf[_from]                 = safeSub(balanceOf[_from], _value);
+            balanceOf[_to]                   = safeAdd(balanceOf[_to], _value);
+            allowance[_from][msg.sender]     = safeSub(allowance[_from][msg.sender], _value);
+
+            Transfer(_from, _to, _value);
+            return true;
+        }
+    }
+
+    /**
+     * @notice Burns the remaining tokens of the owner after the ICO ends.
+     * @dev Transfers a fixed amount to the tokensHolder, burns the rest.
+     */
+    function burn() returns (bool success) {
+        require(now >= startTime);
+        require(!burned);
+
+        uint ownerBalance = balanceOf[owner];
+        // Reserved tokens for the holder = totalSupply – ICO cap
+        uint reserved     = safeSub(totalSupply, maxGoalInICO);
+        require(ownerBalance >= reserved);
+
+        // Transfer reserved to tokensHolder
+        balanceOf[owner]              = safeSub(balanceOf[owner], reserved);
+        balanceOf[tokensHolder]       = safeAdd(balanceOf[tokensHolder], reserved);
+        Transfer(owner, tokensHolder, reserved);
+
+        // Burn the rest
+        uint burnAmount = safeSub(ownerBalance, reserved);
+        totalSupply     = safeSub(totalSupply, burnAmount);
+        burned          = true;
+
+        Burned(burnAmount);
+        return true;
+    }
+}
+```

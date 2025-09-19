@@ -1,0 +1,101 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
+
+/**
+ * @title ProxyRegistry
+ * @notice A registry for managing proxy contracts and their permissions.
+ * @dev This contract allows the owner to grant and revoke access to specific contracts, and users to register their own proxy contracts.
+ */
+
+contract ProxyRegistry is Ownable {
+    /* DelegateProxy implementation contract. Must be initialized. */
+    address public delegateProxyImplementation;
+
+    /* Authenticated proxies by user. */
+    mapping(address => OwnableDelegateProxy) public proxies;
+
+    /* Contracts pending access. */
+    mapping(address => uint256) public pending;
+
+    /* Contracts allowed to call those proxies. */
+    mapping(address => bool) public contracts;
+
+    /* Delay period for adding an authenticated contract. */
+    uint256 public constant DELAY_PERIOD = 7 days;
+
+    // Events
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool opt);
+
+    /**
+     * @notice Start the process to enable access for a specified contract. Subject to a delay period.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function startGrantAuthentication(address addr) public onlyOwner {
+        require(addr != address(0), "ProxyRegistry: invalid address");
+        require(pending[addr] == 0, "ProxyRegistry: address already pending");
+        pending[addr] = block.timestamp + DELAY_PERIOD;
+    }
+
+    /**
+     * @notice End the process to enable access for a specified contract after the delay period has passed.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function endGrantAuthentication(address addr) public onlyOwner {
+        require(addr != address(0), "ProxyRegistry: invalid address");
+        require(pending[addr] != 0, "ProxyRegistry: address not pending");
+        require(block.timestamp >= pending[addr], "ProxyRegistry: delay period not passed");
+
+        pending[addr] = 0;
+        contracts[addr] = true;
+
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice Revoke access for a specified contract. Can be done instantly.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address of which to revoke permissions
+     */
+    function revokeAuthentication(address addr) public onlyOwner {
+        require(addr != address(0), "ProxyRegistry: invalid address");
+        require(contracts[addr], "ProxyRegistry: address not authenticated");
+
+        contracts[addr] = false;
+
+        emit AuthenticationOperation(addr, false);
+    }
+
+    /**
+     * @notice Register a proxy contract with this registry.
+     * @dev Must be called by the user for whom the proxy is being created. Creates a new AuthenticatedProxy.
+     * @return proxy New AuthenticatedProxy contract
+     */
+    function registerProxy() public returns (OwnableDelegateProxy proxy) {
+        require(proxies[msg.sender] == OwnableDelegateProxy(address(0)), "ProxyRegistry: proxy already exists");
+
+        proxy = new OwnableDelegateProxy(msg.sender, delegateProxyImplementation);
+
+        proxies[msg.sender] = proxy;
+
+        emit RegisterProxy(msg.sender, address(proxy));
+    }
+}
+
+/**
+ * @title OwnableDelegateProxy
+ * @notice A proxy contract that is owned by the user and delegates execution to a delegate implementation.
+ * @dev Proxy contract used in conjunction with the ProxyRegistry.
+ */
+contract OwnableDelegateProxy is Ownable {
+    address public delegate;
+
+    constructor(address owner_, address delegate_) Ownable() {
+        transferOwnership(owner_);
+        delegate = delegate_;
+    }
+}
+```

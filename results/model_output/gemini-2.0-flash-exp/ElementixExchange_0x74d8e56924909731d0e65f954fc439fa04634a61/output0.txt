@@ -1,0 +1,193 @@
+```solidity
+pragma solidity ^0.8.4;
+
+// File: dependencies/openzeppelin/contracts/utils/Context.sol
+/*
+ * @dev Provides information about the current execution context, including the
+ * sender of the transaction and its data. While these are generally available
+ * via msg.sender and msg.data, they should not be accessed in such a direct
+ * manner, since when dealing with meta-transactions the account sending and
+ * paying for execution may not be the actual sender (as far as an application
+ * is concerned).
+ *
+ * This contract is only required for intermediate, library-like contracts.
+ */
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+
+    function _msgData() internal view virtual returns (bytes calldata) {
+        this; // silence state mutability warning without generating bytecode - see https://github.com/ethereum/solidity/issues/2691
+        return msg.data;
+    }
+}
+
+// File: dependencies/openzeppelin/contracts/access/Ownable.sol
+/**
+ * @dev Contract module which provides a basic access control mechanism, where
+ * there is an account (an owner) that can be granted exclusive access to
+ * specific functions.
+ *
+ * By default, the owner account will be the one that deploys the contract. This
+ * can later be changed with {transferOwnership}.
+ *
+ * This module is used through inheritance. It will make available the modifier
+ * `onlyOwner`, which can be applied to your functions to restrict their use to
+ * the owner.
+ */
+
+abstract contract Ownable is Context {
+    address private _owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    /**
+     * @dev Initializes the contract setting the deployer as the initial owner.
+     */
+    constructor () {
+        address msgSender = _msgSender();
+        _owner = msgSender;
+        emit OwnershipTransferred(address(0), msgSender);
+    }
+
+    /**
+     * @dev Returns the address of the current owner.
+     */
+    function owner() public view virtual returns (address) {
+        return _owner;
+    }
+
+    /**
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    /**
+     * @dev Leaves the contract without owner. It will not be possible to call
+     * `onlyOwner` functions anymore. Can only be called by the current owner.
+     *
+     * NOTE: Renouncing ownership will leave the contract without an owner,
+     * thereby removing any functionality that is only available to the owner.
+     */
+    function renounceOwnership() public virtual onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+     * Can only be called by the current owner.
+     */
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+// File: contracts/ProxyRegistry.sol
+
+/**
+ * @title ProxyRegistry
+ * @notice A registry for managing proxy contracts and their permissions.
+ * @dev This contract allows the owner to grant and revoke access to specific contracts, and users to register their own proxy contracts.
+ */
+contract ProxyRegistry is Ownable {
+
+    /* DelegateProxy implementation contract. Must be initialized. */
+    address public delegateProxyImplementation;
+
+    /* Authenticated proxies by user. */
+    mapping(address => OwnableDelegateProxy) public proxies;
+
+    /* Contracts pending access. */
+    mapping(address => uint256) public pending;
+
+    /* Contracts allowed to call those proxies. */
+    mapping(address => bool) public contracts;
+
+    /* Delay period for adding an authenticated contract.
+       This mitigates a particular class of potential attack on the Elementix DAO (which owns this registry) - if at any point the value of assets held by proxy contracts exceeded the value of half the ELT supply (votes in the DAO),
+       a malicious but rational attacker could buy half the Elementix and grant themselves access to all the proxy contracts. A delay period renders this attack nonthreatening - given one weeks, if that happened, users would have
+       plenty of time to notice and transfer their assets.
+    */
+    uint256 public DELAY_PERIOD = 7 days;
+
+    // event
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool opt);
+
+    constructor(address _delegateProxyImplementation) {
+        delegateProxyImplementation = _delegateProxyImplementation;
+    }
+
+    /**
+     * @notice Start the process to enable access for a specified contract. Subject to a delay period.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function startGrantAuthentication (address addr)
+        public
+        onlyOwner
+    {
+        require(!contracts[addr], "ProxyRegistry: Address already authenticated");
+        require(pending[addr] == 0, "ProxyRegistry: Authentication already pending");
+        pending[addr] = block.timestamp + DELAY_PERIOD;
+    }
+
+    /**
+     * @notice End the process to enable access for a specified contract after the delay period has passed.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function endGrantAuthentication (address addr)
+        public
+        onlyOwner
+    {
+        require(pending[addr] != 0, "ProxyRegistry: Authentication not pending");
+        require(pending[addr] <= block.timestamp, "ProxyRegistry: Delay period not passed");
+        contracts[addr] = true;
+        emit AuthenticationOperation(addr, true);
+        delete pending[addr];
+    }
+
+    /**
+     * @notice Revoke access for a specified contract. Can be done instantly.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address of which to revoke permissions
+     */
+    function revokeAuthentication (address addr)
+        public
+        onlyOwner
+    {
+        require(contracts[addr], "ProxyRegistry: Address not authenticated");
+        contracts[addr] = false;
+        emit AuthenticationOperation(addr, false);
+    }
+
+    /**
+     * @notice Register a proxy contract with this registry.
+     * @dev Must be called by the user for whom the proxy is being created. Creates a new AuthenticatedProxy.
+     * @return proxy New AuthenticatedProxy contract
+     */
+    function registerProxy()
+        public
+        returns (OwnableDelegateProxy proxy)
+    {
+        require(proxies[msg.sender] == OwnableDelegateProxy(address(0)), "ProxyRegistry: Proxy already registered for this address");
+        proxy = new OwnableDelegateProxy(delegateProxyImplementation, msg.sender);
+        proxies[msg.sender] = proxy;
+        emit RegisterProxy(msg.sender, address(proxy));
+    }
+}
+
+// Dummy OwnableDelegateProxy contract for compilation
+contract OwnableDelegateProxy {
+    constructor(address _delegate, address _owner) {}
+}
+```

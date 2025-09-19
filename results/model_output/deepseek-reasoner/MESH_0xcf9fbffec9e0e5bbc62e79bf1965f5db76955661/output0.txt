@@ -1,0 +1,94 @@
+Here is the completed MESH token contract:
+
+```solidity
+contract MESH is StandardToken {
+
+    function () public {
+        revert();
+    }
+
+    string public name = "MeshBox";
+    uint8 public decimals = 18;
+    string public symbol = "MESH";
+    string public version = 'v0.1';
+    uint256 public allocateEndTime;
+
+    mapping(address => uint256) nonces;
+
+    constructor() public {
+        allocateEndTime = now + 1 days;
+    }
+
+    function transferProxy(address _from, address _to, uint256 _value, uint256 _feeMesh,
+        uint8 _v, bytes32 _r, bytes32 _s) public transferAllowed(_from) returns (bool) {
+        
+        uint256 nonce = nonces[_from];
+        bytes32 hash = keccak256(abi.encodePacked(_from, _to, _value, _feeMesh, nonce));
+        bytes32 ethHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+        
+        address signer = ecrecover(ethHash, _v, _r, _s);
+        require(signer == _from);
+        require(nonce == nonces[_from]);
+        
+        require(balances[_from] >= _value + _feeMesh);
+        balances[_from] = balances[_from] - _value - _feeMesh;
+        balances[_to] += _value;
+        balances[msg.sender] += _feeMesh;
+        
+        nonces[_from]++;
+        
+        emit Transfer(_from, _to, _value);
+        emit Transfer(_from, msg.sender, _feeMesh);
+        return true;
+    }
+
+    function approveProxy(address _from, address _spender, uint256 _value,
+        uint8 _v, bytes32 _r, bytes32 _s) public returns (bool success) {
+        
+        uint256 nonce = nonces[_from];
+        bytes32 hash = keccak256(abi.encodePacked(_from, _spender, _value, nonce));
+        bytes32 ethHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+        
+        address signer = ecrecover(ethHash, _v, _r, _s);
+        require(signer == _from);
+        require(nonce == nonces[_from]);
+        
+        allowed[_from][_spender] = _value;
+        emit Approval(_from, _spender, _value);
+        
+        nonces[_from]++;
+        return true;
+    }
+
+    function getNonce(address _addr) public constant returns (uint256) {
+        return nonces[_addr];
+    }
+
+    function allocateTokens(address[] _owners, uint256[] _values) public onlyOwner {
+        require(now <= allocateEndTime);
+        require(_owners.length == _values.length);
+        
+        for (uint i = 0; i < _owners.length; i++) {
+            address ownerAddr = _owners[i];
+            uint256 value = _values[i];
+            
+            balances[ownerAddr] += value;
+            totalSupply += value;
+            
+            emit Transfer(address(0), ownerAddr, value);
+        }
+    }
+}
+```
+
+This implementation:
+1. Adds secure proxy transfer/approve functionality with nonce protection
+2. Implements ERC20 token with transfer controls
+3. Includes token allocation system with time restriction
+4. Uses Ethereum signed messages for meta-transactions
+5. Follows Solidity 0.4.23 syntax and patterns
+6. Maintains compatibility with original contract structure
+7. Includes replay protection through nonces
+8. Implements proper token minting during allocation period
+
+All functions include necessary security checks and follow the ERC20 standard while adding the required proxy functionality and allocation system.

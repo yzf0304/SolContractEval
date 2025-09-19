@@ -1,0 +1,166 @@
+pragma solidity 0.4.23;
+
+contract PlusCoin {
+    address public owner; // Token owner address
+    mapping (address => uint256) public balances;
+    mapping (address => mapping (address => uint256)) allowed;
+
+    string public standard = "PlusCoin 2.0";
+    string public constant name = "PlusCoin";
+    string public constant symbol = "PLCN";
+    uint   public constant decimals = 18;
+    uint public totalSupply;
+
+    address public allowed_contract;
+
+    //
+    // Events
+
+    event Sent(address from, address to, uint amount);
+    event Buy(address indexed sender, uint eth, uint fbt);
+    event Withdraw(address indexed sender, address to, uint eth);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+
+    //
+    // Modifiers
+
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    modifier onlyAllowedContract() {
+        require(msg.sender == allowed_contract);
+        _;
+    }
+
+    //
+    // Constructor
+
+    constructor() public {
+        owner = msg.sender;
+        totalSupply = 28272323624 * 10**uint(decimals);
+        balances[owner] = totalSupply;
+    }
+
+    //
+    // Ownership
+
+    /**
+     * @notice Allows the current owner to transfer control of the contract to a new owner.
+     * @param newOwner The address to transfer ownership to.
+     */
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    //
+    // Safe Math
+
+    function safeMul(uint a, uint b) internal pure returns (uint) {
+        uint c = a * b;
+        require(a == 0 || c / a == b);
+        return c;
+    }
+
+    function safeSub(uint a, uint b) internal pure returns (uint) {
+        require(b <= a);
+        return a - b;
+    }
+
+    function safeAdd(uint a, uint b) internal pure returns (uint) {
+        uint c = a + b;
+        require(c >= a);
+        return c;
+    }
+
+    //
+    // Owner-only
+
+    /**
+     * @notice Sets the allowed contract address.
+     * @param _contract_address The address of the allowed contract.
+     * @return success True if operation succeeded.
+     */
+    function setAllowedContract(address _contract_address) public onlyOwner returns (bool success) {
+        allowed_contract = _contract_address;
+        return true;
+    }
+
+    /**
+     * @notice Transfers the contract's Ether balance to the specified address.
+     * @param _to The address to transfer the Ether to.
+     */
+    function withdrawEther(address _to) public onlyOwner {
+        uint balance = address(this).balance;
+        require(balance > 0);
+        _to.transfer(balance);
+        emit Withdraw(msg.sender, _to, balance);
+    }
+
+    //
+    // ERC-20
+
+    /**
+     * @notice Transfers tokens from caller to another account.
+     * @param _to Recipient address.
+     * @param _value Amount to transfer.
+     * @return success True if transfer succeeded.
+     */
+    function transfer(address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0));
+        balances[msg.sender] = safeSub(balances[msg.sender], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens approved by one address to another.
+     * @param _from Source address.
+     * @param _to Recipient address.
+     * @param _value Amount to transfer.
+     * @return success True if transfer succeeded.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0));
+        balances[_from] = safeSub(balances[_from], _value);
+        allowed[_from][msg.sender] = safeSub(allowed[_from][msg.sender], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the token balance of the specified address.
+     * @param _owner Address to query.
+     * @return balance Token balance.
+     */
+    function balanceOf(address _owner) public view returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice Approves a spender to spend tokens on behalf of the caller.
+     * @param _spender Address authorized to spend.
+     * @param _value Amount they are allowed to spend.
+     * @return success True if approval succeeded.
+     */
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns remaining allowance a spender has from an owner.
+     * @param _owner Token owner.
+     * @param _spender Authorized spender.
+     * @return remaining Remaining allowance.
+     */
+    function allowance(address _owner, address _spender) public view returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+}

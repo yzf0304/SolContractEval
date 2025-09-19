@@ -1,0 +1,224 @@
+Below is the completed `BALC` contract based on the provided context, ensuring all functions and features as described are correctly implemented. This contract is compatible with Solidity version `0.5.1`.
+
+```solidity
+pragma solidity ^0.5.1;
+
+/**
+ * @title BALC - A basic token contract with pausable functionality
+ * @notice This contract implements a simple ERC20-like token with the ability to pause and unpause transfers.
+ * @dev The contract uses SafeMath for arithmetic operations, and it is Ownable, meaning only the owner can pause and unpause the contract.
+ */
+contract BALC is Ownable {
+
+	using SafeMath for uint256; // Use SafeMath library for uint256 type
+
+	string private name_; // Token name
+	string private symbol_; // Token symbol, similar to a currency symbol
+	uint256 private decimals_; // Number of decimal places
+	uint256 private totalSupply_; // Total supply of tokens
+	bool private paused_; // Whether the contract is paused
+
+	mapping(address => uint256) internal balances; // Mapping of address to balance
+	mapping(address => mapping(address => uint256)) internal allowed; // Mapping of address to spender to allowance
+
+	event Transfer(address indexed from, address indexed to, uint256 value); // Event for token transfer
+	event Approval(address indexed owner, address indexed spender, uint256 value); // Event for allowance approval
+	event Pause(); // Event for contract pause
+	event Unpause(); // Event for contract unpause
+
+	/**
+	 * @dev Constructor: Initializes the contract with a name, symbol, decimals, total supply, and owner.
+	 * @param _name The name of the token.
+	 * @param _symbol The symbol of the token.
+	 * @param _decimals The number of decimal places for the token.
+	 * @param _totalSupply The initial total supply of the token (before considering decimals).
+	 * @param _owner The address of the contract owner.
+	 */
+	constructor(string memory _name, string memory _symbol, uint256 _decimals, uint256 _totalSupply, address _owner) public {
+		name_ = _name;
+		symbol_ = _symbol;
+		decimals_ = _decimals;
+		totalSupply_ = _totalSupply.mul(10 ** decimals_);
+		paused_ = false;
+		owner_ = _owner;
+		balances[_owner] = totalSupply_;
+	}
+
+	/**
+	 * @dev Gets the name of the token.
+	 * @return string memory The name of the token.
+	 */
+	function name() public view returns (string memory) {
+		return name_;
+	}
+
+	/**
+	 * @dev Gets the symbol of the token.
+	 * @return string memory The symbol of the token.
+	 */
+	function symbol() public view returns (string memory) {
+		return symbol_;
+	}
+
+	/**
+	 * @dev Gets the number of decimal places for the token.
+	 * @return uint256 The number of decimal places.
+	 */
+	function decimals() public view returns (uint256) {
+		return decimals_;
+	}
+
+	/**
+	 * @dev Gets the total supply of tokens.
+	 * @return uint256 The total supply of tokens.
+	 */
+	function totalSupply() public view returns (uint256) {
+		return totalSupply_;
+	}
+
+	/**
+	 * @dev Checks if the contract is paused.
+	 * @return bool True if the contract is paused, false otherwise.
+	 */
+	function isPaused() public view returns (bool) {
+		return paused_;
+	}
+
+	/**
+	 * @dev Modifier to allow function execution only when the contract is not paused.
+	 */
+	modifier whenNotPaused() {
+		require(!paused_);
+		_;
+	}
+
+	/**
+	 * @dev Modifier to allow function execution only when the contract is paused.
+	 */
+	modifier whenPaused() {
+		require(paused_);
+		_;
+	}
+
+	/**
+	 * @dev Transfers tokens from the caller (`msg.sender`) to a specified address.
+	 * Can only be executed when the contract is not paused.
+	 * @param _to The address to transfer tokens to.
+	 * @param _value The amount of tokens to transfer.
+	 * @return bool True if the transfer was successful.
+	 */
+	function transfer(address _to, uint256 _value) public whenNotPaused returns (bool) {
+		require(_to != address(0));
+		balances[msg.sender] = balances[msg.sender].sub(_value);
+		balances[_to] = balances[_to].add(_value);
+		emit Transfer(msg.sender, _to, _value);
+		return true;
+	}
+
+	/**
+	 * @dev Gets the token balance of a specific account.
+	 * @param _account The address of the account to query.
+	 * @return uint256 The token balance of the account.
+	 */
+	function balanceOf(address _account) public view returns (uint256) {
+		return balances[_account];
+	}
+
+	/**
+	 * @dev Approves a spender to withdraw a specific amount of tokens from the caller's (`msg.sender`) account.
+	 * Can only be executed when the contract is not paused.
+	 * @param _spender The address of the account to approve.
+	 * @param _value The amount of tokens to approve.
+	 * @return bool True if the approval was successful.
+	 */
+	function approve(address _spender, uint256 _value) public whenNotPaused returns (bool) {
+		allowed[msg.sender][_spender] = _value;
+		emit Approval(msg.sender, _spender, _value);
+		return true;
+	}
+
+	/**
+	 * @dev Transfers tokens from one address to another using the allowance mechanism.
+	 * The caller (`msg.sender`) must have been approved to spend tokens on behalf of the `_from` address.
+	 * Can only be executed when the contract is not paused.
+	 * The amount transferred cannot exceed the `_from` address's balance or allowance.
+	 * @param _from The address to transfer tokens from.
+	 * @param _to The address to transfer tokens to.
+	 * @param _value The amount of tokens to transfer.
+	 * @return bool True if the transfer was successful.
+	 */
+	function transferFrom(address _from, address _to, uint256 _value) public whenNotPaused returns (bool) {
+		require(_to != address(0));
+		balances[_from] = balances[_from].sub(_value);
+		balances[_to] = balances[_to].add(_value);
+		allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+		emit Transfer(_from, _to, _value);
+		return true;
+	}
+
+	/**
+	 * @dev Checks the amount of tokens that an owner allowed a spender to withdraw.
+	 * @param _owner The address of the token owner.
+	 * @param _spender The address of the spender.
+	 * @return uint256 The amount of tokens the spender is allowed to withdraw.
+	 */
+	function allowance(address _owner, address _spender) public view returns (uint256) {
+		return allowed[_owner][_spender];
+	}
+
+	/**
+	 * @dev Increases the allowance granted to a spender by the caller (`msg.sender`).
+	 * Can only be executed when the contract is not paused.
+	 * @param _spender The address of the spender.
+	 * @param _addedValue The amount to increase the allowance by.
+	 * @return bool True if the allowance increase was successful.
+	 */
+	function increaseApproval(address _spender, uint256 _addedValue) public whenNotPaused returns (bool) {
+		allowed[msg.sender][_spender] = allowed[msg.sender][_spender].add(_addedValue);
+		emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+		return true;
+	}
+
+	/**
+	 * @dev Decreases the allowance granted to a spender by the caller (`msg.sender`).
+	 * Can only be executed when the contract is not paused.
+	 * @param _spender The address of the spender.
+	 * @param _subtractedValue The amount to decrease the allowance by.
+	 * @return bool True if the allowance decrease was successful.
+	 */
+	function decreaseApproval(address _spender, uint256 _subtractedValue) public whenNotPaused returns (bool) {
+		uint256 oldValue = allowed[msg.sender][_spender];
+		if (_subtractedValue > oldValue) {
+			allowed[msg.sender][_spender] = 0;
+		} else {
+			allowed[msg.sender][_spender] = oldValue.sub(_subtractedValue);
+		}
+		emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+		return true;
+	}
+
+	/**
+	 * @dev Pauses the contract. Only the contract owner can call this function.
+	 * Can only be executed when the contract is not paused.
+	 * @return bool True if pausing was successful.
+	 */
+	function pause() onlyOwner whenNotPaused public returns (bool) {
+		paused_ = true;
+		emit Pause();
+		return true;
+	}
+
+	/**
+	 * @dev Unpauses the contract. Only the contract owner can call this function.
+	 * Can only be executed when the contract is paused.
+	 * @return bool True if unpausing was successful.
+	 */
+	function unpause() onlyOwner whenPaused public returns (bool) {
+		paused_ = false;
+		emit Unpause();
+		return true;
+	}
+}
+```
+
+This contract includes all necessary functionalities such as token transfer, approval management, and pause/unpause capabilities, following the provided specifications and using Solidity version 0.5.1.

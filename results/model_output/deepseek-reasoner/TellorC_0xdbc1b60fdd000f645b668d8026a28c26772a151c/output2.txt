@@ -1,0 +1,95 @@
+Here is the completed `TellorC` contract:
+
+```solidity
+contract TellorC {
+    address private tellor = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+
+    bytes32 constant slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+    address private owner;
+    address private miner;
+    
+    constructor () public {
+        owner = msg.sender;
+    }
+    
+    function changeMiner(address _addr) external {
+        require(msg.sender == owner, "Only owner");
+        miner = _addr;
+    }
+
+    function withdrawTrb(uint256 _amount) external {
+        require(msg.sender == owner, "Only owner");
+        require(TellorWrapper(tellor).transfer(owner, _amount), "Transfer failed");
+    }
+
+    function withdrawEth(uint256 _amount) external {
+        require(msg.sender == owner, "Only owner");
+        require(address(this).balance >= _amount, "Insufficient ETH");
+        payable(owner).transfer(_amount);
+    }
+
+    function depositStake() external {
+        require(msg.sender == owner, "Only owner");
+        (bool success, ) = tellor.call(abi.encodeWithSignature("depositStake()"));
+        require(success, "Deposit failed");
+    }
+
+    function requestStakingWithdraw() external {
+        require(msg.sender == owner, "Only owner");
+        (bool success, ) = tellor.call(abi.encodeWithSignature("requestStakingWithdraw()"));
+        require(success, "Request failed");
+    }
+
+    function withdrawStake() external {
+        require(msg.sender == owner, "Only owner");
+        TellorWrapper(tellor).withdrawStake();
+    }
+
+    function finalize() external {
+        require(msg.sender == owner, "Only owner");
+        TellorWrapper(tellor).withdrawStake();
+        uint256 trbBalance = TellorWrapper(tellor).balanceOf(address(this));
+        if (trbBalance > 0) {
+            require(TellorWrapper(tellor).transfer(owner, trbBalance), "TRB transfer failed");
+        }
+        selfdestruct(payable(owner));
+    }
+
+    function submitMiningSolution(string calldata _nonce, uint256[5] calldata _requestId, uint256[5] calldata _value) external {
+        require(msg.sender == miner || msg.sender == owner, "Unauthorized");
+        (bool success, ) = tellor.call(abi.encodeWithSignature("submitMiningSolution(string,uint256[5],uint256[5])", _nonce, _requestId, _value));
+        require(success, "Submit failed");
+    }
+
+    function() external {
+        require(msg.sender == address(0), "Not allowed");
+        
+        address addr = tellor;
+        bytes memory _calldata = msg.data;
+        assembly {
+            let result := call(not(0), addr, 0, add(_calldata, 0x20), mload(_calldata), 0, 0)
+            let size := returndatasize
+            let ptr := mload(0x40)
+            returndatacopy(ptr, 0, size)
+            switch result
+                case 0 {
+                    revert(ptr, size)
+                }
+                default {
+                    return(ptr, size)
+                }
+        }
+    }
+}
+```
+
+This implementation:
+1. Enforces owner-only access for sensitive operations
+2. Uses low-level calls to interact with the Tellor contract
+3. Integrates with the TellorWrapper interface for TRB transfers and stake management
+4. Implements proper authorization checks for mining operations
+5. Handles both TRB and ETH withdrawals securely
+6. Maintains compatibility with the required compiler version (0.5.17)
+7. Preserves the original fallback function behavior for view call forwarding
+
+All functions include proper access control and error handling while maintaining compatibility with the Tellor system's expected interface.

@@ -1,0 +1,152 @@
+Here's the complete implementation of the `FORMLESS` smart contract according to the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+/**
+ * @title FORMLESS NFT Contract
+ * @author [Your Name]
+ * @notice This contract allows for the creation, minting, and management of a collection of NFTs.
+ * @dev The contract uses ERC721A for efficient batch minting, ReentrancyGuard to prevent reentrancy attacks, and Ownable for access control.
+ */
+contract FORMLESS is Ownable, ERC721A, ReentrancyGuard {
+    using Strings for uint256;
+
+    uint256 public MAX_PER_Transtion = 1; // Maximum number of NFTs per transaction
+    uint256 public MAX_PER_Address = 1;  // Maximum NFTs per address
+    uint256 public PRICE = 0.069 ether;  // Mint price
+    uint256 private TotalCollectionSize_ = 500; // Total collection size
+    uint256 private constant MaxMintPerBatch_ = 1; // Maximum NFTs per batch
+    mapping(address => bool) private whitelistedAddressesForMint; // Whitelist mapping
+    string private _baseTokenURI; // Base URI
+    uint public status = 0; // 0 - paused, 1 - whitelist sale, 2 - public sale
+
+    constructor() ERC721A("FORMLESS", "FORMLESS", MaxMintPerBatch_, TotalCollectionSize_) {
+        _baseTokenURI = "https://gateway.pinata.cloud/ipfs/QmWT2u6UEeXJs5MWcSTQhHFyYC9wKevQNjXC4J3k67ymtQ/";
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function mint(uint256 quantity) external payable callerIsUser {
+        require(status > 0, "Sale is not active");
+        require(quantity > 0, "Quantity must be greater than zero");
+        require(totalSupply() + quantity <= TotalCollectionSize_, "Exceeds total supply");
+        require(quantity <= MAX_PER_Transtion, "Exceeds max per transaction");
+        require(numberMinted(msg.sender) + quantity <= MAX_PER_Address, "Exceeds max per address");
+        require(msg.value >= PRICE * quantity, "Insufficient payment");
+
+        if (status == 1) {
+            require(whitelistedAddressesForMint[msg.sender], "Not whitelisted");
+        }
+
+        _safeMint(msg.sender, quantity);
+    }
+
+    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+        require(_exists(tokenId), "Query for nonexistent token");
+        string memory baseURI = _baseURI();
+        return bytes(baseURI).length > 0 ? string(abi.encodePacked(baseURI, tokenId.toString())) : "";
+    }
+
+    function isWhitelistedForMint(address _user) public view returns (bool) {
+        return whitelistedAddressesForMint[_user];
+    }
+
+    function addNewWhitelistUserForMint(address[] calldata _users) public onlyOwner {
+        for (uint256 i = 0; i < _users.length; i++) {
+            whitelistedAddressesForMint[_users[i]] = true;
+        }
+    }
+
+    function setBaseURI(string memory baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return ownershipOf(tokenId);
+    }
+
+    function withdrawMoney() external onlyOwner nonReentrant {
+        (bool success, ) = payable(msg.sender).call{value: address(this).balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function changeMAX_PER_Address(uint256 q) external onlyOwner {
+        MAX_PER_Address = q;
+    }
+
+    function reserve(address _address, uint256 quantity) public onlyOwner {
+        require(totalSupply() + quantity <= TotalCollectionSize_, "Exceeds total supply");
+        _safeMint(_address, quantity);
+    }
+
+    function changeMintPrice(uint256 _newPrice) external onlyOwner {
+        PRICE = _newPrice;
+    }
+
+    function changeCollectionSize(uint256 _collectionSize) external onlyOwner {
+        require(_collectionSize >= totalSupply(), "New size must exceed minted supply");
+        TotalCollectionSize_ = _collectionSize;
+    }
+
+    function changeMAX_PER_Transtion(uint256 q) external onlyOwner {
+        MAX_PER_Transtion = q;
+    }
+
+    function giveaway(address a, uint256 q) public onlyOwner {
+        require(totalSupply() + q <= TotalCollectionSize_, "Exceeds total supply");
+        _safeMint(a, q);
+    }
+
+    function setStatus(uint256 s) external onlyOwner {
+        require(s <= 2, "Invalid status");
+        status = s;
+    }
+
+    function getStatus() public view returns (uint) {
+        return status;
+    }
+
+    function getcollectionSize() public view returns (uint) {
+        return TotalCollectionSize_;
+    }
+}
+```
+
+### Explanation:
+1. **Minting**:
+   - Users can mint NFTs based on the current sale status (`status`).
+   - Enforces max-per-transaction and max-per-address limits.
+   - Handles whitelist rules during whitelist sales.
+
+2. **Whitelist Management**:
+   - Adds multiple addresses to the whitelist in a single transaction.
+
+3. **Sale Status**:
+   - Supports paused (`status = 0`), whitelist sale (`status = 1`), and public sale (`status = 2`).
+
+4. **Dynamic Configuration**:
+   - Allows the owner to change parameters like price, max per transaction/address, collection size, and base URI.
+
+5. **Token Metadata**:
+   - Constructs token URIs using a base URI.
+
+6. **Reserve/Giveaway**:
+   - Allows the owner to reserve or give away NFTs.
+
+7. **Withdraw**:
+   - Securely withdraws funds using `nonReentrant`.
+
+All functions strictly adhere to the provided context and requirements.

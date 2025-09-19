@@ -1,0 +1,191 @@
+contract PlusCoin {
+    address public owner; // Token owner address
+    mapping (address => uint256) public balances;
+    mapping (address => mapping (address => uint256)) allowed;
+
+    string public standard = 'PlusCoin 2.0';
+    string public constant name = "PlusCoin";
+    string public constant symbol = "PLCN";
+    uint   public constant decimals = 18;
+    uint public totalSupply;
+
+    address public allowed_contract;
+
+    //
+    // Events
+    // This generates a public event on the blockchain that will notify clients
+
+    event Sent(address from, address to, uint amount);
+    event Buy(address indexed sender, uint eth, uint fbt);
+    event Withdraw(address indexed sender, address to, uint eth);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+
+    //
+    // Modifiers
+
+    /**
+     * @dev Ensures that only the owner of the contract can call the function.
+     */
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    /**
+     * @dev Ensures that only the allowed contract can call the function.
+     */
+    modifier onlyAllowedContract() {
+        require(msg.sender == allowed_contract);
+        _;
+    }
+
+    //
+    // Constructor
+    constructor() public {
+        owner = msg.sender;
+        totalSupply = 28272323624 * 1000000000000000000;
+        balances[owner] = totalSupply;
+    }
+
+    /**
+     * @notice Allows the current owner to transfer control of the contract to a new owner.
+     * @param newOwner The address to transfer ownership to.
+     * @dev This function can only be called by the current owner.
+     */
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    /**
+     * @dev Safely multiplies two numbers and checks for overflow.
+     * @param a First number to multiply.
+     * @param b Second number to multiply.
+     * @return The result of the multiplication.
+     */
+    function safeMul(uint a, uint b) internal pure returns (uint) {
+        if (a == 0) {
+            return 0;
+        }
+        uint c = a * b;
+        require(c / a == b);
+        return c;
+    }
+
+    /**
+     * @dev Safely subtracts one number from another and checks for underflow.
+     * @param a The number to subtract from.
+     * @param b The number to subtract.
+     * @return The result of the subtraction.
+     */
+    function safeSub(uint a, uint b) internal pure returns (uint) {
+        require(b <= a);
+        return a - b;
+    }
+
+    /**
+     * @dev Safely adds two numbers and checks for overflow.
+     * @param a First number to add.
+     * @param b Second number to add.
+     * @return The result of the addition.
+     */
+    function safeAdd(uint a, uint b) internal pure returns (uint) {
+        uint c = a + b;
+        require(c >= a);
+        return c;
+    }
+
+    /**
+     * @notice Sets the allowed contract address.
+     * @param _contract_address The address of the allowed contract.
+     * @return A boolean indicating if the operation was successful.
+     * @dev This function can only be called by the contract owner.
+     */
+    function setAllowedContract(address _contract_address) public onlyOwner returns (bool success) {
+        allowed_contract = _contract_address;
+        return true;
+    }
+
+    /**
+     * @notice Transfers the contract's Ether balance to the specified address.
+     * @param _to The address to transfer the Ether to.
+     * @dev This function can only be called by the contract owner.
+     */
+    function withdrawEther(address _to) public onlyOwner {
+        uint balance = address(this).balance;
+        require(balance > 0);
+        _to.transfer(balance);
+        emit Withdraw(msg.sender, _to, balance);
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from the caller's account to another account.
+     * @param _to The address to transfer the tokens to.
+     * @param _value The amount of tokens to transfer.
+     * @return A boolean indicating if the transfer was successful.
+     * @dev Emits a `Transfer` event.
+     */
+    function transfer(address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0));
+        balances[msg.sender] = safeSub(balances[msg.sender], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from one account to another, with approval.
+     * @param _from The address to transfer the tokens from.
+     * @param _to The address to transfer the tokens to.
+     * @param _value The amount of tokens to transfer.
+     * @return A boolean indicating if the transfer was successful.
+     * @dev Emits a `Transfer` event.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0));
+        uint256 allowanceAmt = allowed[_from][msg.sender];
+        balances[_from] = safeSub(balances[_from], _value);
+        allowed[_from][msg.sender] = safeSub(allowanceAmt, _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the balance of the specified address.
+     * @param _owner The address to check the balance of.
+     * @return The balance of the specified address.
+     */
+    function balanceOf(address _owner) public constant returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice Approves the spender to spend a specified amount of tokens on behalf of the caller.
+     * @param _spender The address of the spender.
+     * @param _value The amount of tokens to approve.
+     * @return A boolean indicating if the approval was successful.
+     * @dev Emits an `Approval` event.
+     */
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the remaining allowance of the spender for the owner.
+     * @param _owner The address of the owner.
+     * @param _spender The address of the spender.
+     * @return The remaining allowance.
+     */
+    function allowance(address _owner, address _spender) public constant returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    // Fallback function to accept Ether
+    function() public payable {
+        // intentionally left blank
+    }
+}

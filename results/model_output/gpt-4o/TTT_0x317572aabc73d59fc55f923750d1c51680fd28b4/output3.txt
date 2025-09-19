@@ -1,0 +1,143 @@
+Below is the complete and functional implementation of the TTT smart contract based on the provided context and description, adhering strictly to the requirements:
+
+```solidity
+pragma solidity ^0.4.24;
+
+import "./SafeMath.sol"; // Ensure SafeMath library is available before deployment
+
+/**
+ * @title TTT
+ * @notice This contract implements a token that is ERC20 and ERC223 compliant, allowing for basic token operations such as transfer, approval, and allowance.
+ * @dev The contract uses SafeMath to prevent overflows and underflows. It also includes the ability to transfer tokens with additional data, as per the ERC223 standard.
+ */
+contract TTT is ERC20, ERC223 {
+    using SafeMath for uint256;
+
+    string internal _name;
+    string internal _symbol;
+    uint8 internal _decimals;
+    uint256 internal _totalSupply;
+
+    mapping(address => uint256) internal balances;
+    mapping(address => mapping(address => uint256)) internal allowed;
+
+    /**
+     * @notice Initializes the token with a name, symbol, decimals, and total supply.
+     * @param name The name of the token.
+     * @param symbol The symbol of the token.
+     * @param decimals The number of decimals the token supports.
+     * @param totalSupply The total supply of the token.
+     */
+    constructor(string name, string symbol, uint8 decimals, uint256 totalSupply) public {
+        _name = name;
+        _symbol = symbol;
+        _decimals = decimals;
+        _totalSupply = totalSupply;
+        balances[msg.sender] = totalSupply;
+    }
+
+    function name() public view returns (string) {
+        return _name;
+    }
+
+    function symbol() public view returns (string) {
+        return _symbol;
+    }
+
+    function decimals() public view returns (uint8) {
+        return _decimals;
+    }
+
+    function totalSupply() public view returns (uint256) {
+        return _totalSupply;
+    }
+
+    function balanceOf(address _owner) public view returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _value) public returns (bool) {
+        require(_to != address(0));
+        require(_value <= balances[msg.sender]);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool) {
+        require(_to != address(0));
+        require(_value <= balances[_from]);
+        require(_value <= allowed[_from][msg.sender]);
+
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public view returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    function increaseApproval(address _spender, uint256 _addedValue) public returns (bool) {
+        allowed[msg.sender][_spender] = allowed[msg.sender][_spender].add(_addedValue);
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+
+    function decreaseApproval(address _spender, uint256 _subtractedValue) public returns (bool) {
+        uint256 oldValue = allowed[msg.sender][_spender];
+        if (_subtractedValue > oldValue) {
+            allowed[msg.sender][_spender] = 0;
+        } else {
+            allowed[msg.sender][_spender] = oldValue.sub(_subtractedValue);
+        }
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+
+    function transfer(address _to, uint256 _value, bytes _data) public {
+        require(_to != address(0));
+        require(_value <= balances[msg.sender]);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        emit Transfer(msg.sender, _to, _value);
+
+        if (isContract(_to)) {
+            ERC223ReceivingContract receiver = ERC223ReceivingContract(_to);
+            receiver.tokenFallback(msg.sender, _value, _data);
+        }
+    }
+
+    function isContract(address _addr) private view returns (bool is_contract) {
+        uint256 size;
+        assembly {
+            size := extcodesize(_addr)
+        }
+        return size > 0;
+    }
+}
+```
+
+### Explanation
+1. **SafeMath Usage**: All arithmetic operations use `SafeMath` to prevent overflow/underflow issues.
+2. **ERC20 Compliance**:
+   - Implements standard functions such as `transfer`, `approve`, `allowance`, `transferFrom`, etc.
+   - Emits relevant events (`Transfer`, `Approval`).
+3. **ERC223 Compliance**:
+   - Adds the ability to transfer tokens with additional data via `transfer(address _to, uint256 _value, bytes _data)`.
+   - Includes `isContract()` function to check if the recipient is a contract and call its `tokenFallback` function.
+4. **Data Encapsulation**:
+   - The `name`, `symbol`, `decimals`, and `totalSupply` variables are accessible via getters (`name()`, `symbol()`, `decimals()`, `totalSupply()`).
+
+Ensure you verify and deploy the contract with Solidity compiler version `0.4.24`.

@@ -1,0 +1,116 @@
+Here's the completed `MintHelper` contract according to the provided context and description:
+
+```solidity
+contract MintHelper is Ownable {
+    using SafeMath for uint;
+
+    string public name;
+    address public mintableToken;
+    mapping(bytes32 => bool) successfulPayments;
+
+    constructor(address mToken, string memory mName)
+    public
+    {
+      mintableToken = mToken;
+      name = mName;
+    }
+
+    /**
+     * @notice Allows the owner to set the mintable token address.
+     * @dev Only the owner can call this function. Updates the `mintableToken` state variable.
+     * @param mToken The address of the mintable token.
+     * @return A boolean indicating the success of the operation.
+     */
+    function setMintableToken(address mToken)
+    public onlyOwner
+    returns (bool)
+    {
+        mintableToken = mToken;
+        return true;
+    }
+
+    /**
+     * @notice Checks if a payment with a given ID was successful.
+     * @dev Uses the `successfulPayments` mapping to check the status of the payment.
+     * @param paymentId The unique identifier for the payment.
+     * @return A boolean indicating whether the payment was successful.
+     */
+    function paymentSuccessful(bytes32 paymentId) public view returns (bool) {
+        return successfulPayments[paymentId];
+    }
+
+    /**
+     * @notice Proxies the minting of a token using the provided nonce and challenge digest.
+     * @dev Calls the `mint` function on the `mintableToken` contract. Requires that the minting is successful.
+     * @param nonce The nonce used in the minting process.
+     * @param challenge_digest The challenge digest used in the minting process.
+     * @return A boolean indicating the success of the minting operation.
+     */
+    function proxyMint(uint256 nonce, bytes32 challenge_digest)
+    public
+    returns (bool)
+    {
+        require(ERC918Interface(mintableToken).mint(nonce, challenge_digest), "Minting failed");
+        return true;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw any ETH held by the contract.
+     * @dev Only the owner can call this function. Transfers the entire balance of the contract to the owner.
+     */
+    function withdraw()
+    public onlyOwner
+    {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    /**
+     * @notice Sends a specified amount of tokens to a destination address.
+     * @dev Only the owner can call this function. Uses the ERC20 `transfer` function to send tokens.
+     * @param _tokenAddr The address of the ERC20 token to send.
+     * @param dest The destination address to receive the tokens.
+     * @param value The amount of tokens to send.
+     * @return A boolean indicating the success of the transfer.
+     */
+    function send(address _tokenAddr, address dest, uint value)
+    public onlyOwner
+    returns (bool)
+    {
+        return ERC20Interface(_tokenAddr).transfer(dest, value);
+    }
+
+    /**
+     * @notice Sends tokens to multiple destination addresses in a single transaction.
+     * @dev Only the owner can call this function. Ensures that the payment ID is unique and not already marked as successful. Uses the ERC20 `transfer` function to send tokens to each destination.
+     * @param _tokenAddr The address of the ERC20 token to send.
+     * @param paymentId The unique identifier for the payment.
+     * @param dests An array of destination addresses.
+     * @param values An array of token amounts corresponding to each destination address.
+     * @return The number of successful transfers.
+     */
+    function multisend(address _tokenAddr, bytes32 paymentId, address[] memory dests, uint256[] memory values)
+    public onlyOwner
+    returns (uint256)
+    {
+        require(!successfulPayments[paymentId], "Payment ID already used");
+        require(dests.length == values.length, "Arrays must have same length");
+        
+        uint256 successCount = 0;
+        ERC20Interface token = ERC20Interface(_tokenAddr);
+        
+        for (uint256 i = 0; i < dests.length; i++) {
+            if (token.transfer(dests[i], values[i])) {
+                successCount = successCount.add(1);
+            }
+        }
+        
+        if (successCount > 0) {
+            successfulPayments[paymentId] = true;
+        }
+        
+        return successCount;
+    }
+}
+```
+
+This implementation completes all the required functions according to the specifications provided. The contract enables the owner to manage tokens, proxy minting operations, and handle token transfers to multiple addresses efficiently while maintaining a record of successful payments.

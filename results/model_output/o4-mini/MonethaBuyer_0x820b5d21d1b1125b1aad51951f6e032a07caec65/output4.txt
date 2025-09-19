@@ -1,0 +1,134 @@
+pragma solidity ^0.4.15;
+
+contract ERC20 {
+  function transfer(address _to, uint256 _value) returns (bool success);
+  function balanceOf(address _owner) constant returns (uint256 balance);
+}
+
+contract MonethaBuyer {
+  mapping (address => uint256) public balances;
+  uint256 public buy_bounty;
+  uint256 public withdraw_bounty;
+  bool public bought_tokens;
+  uint256 public contract_eth_value;
+  bool public kill_switch;
+  
+  bytes32 password_hash = 0x8223cba4d8b54dc1e03c41c059667f6adb1a642a0a07bef5a9d11c18c4f14612;
+  uint256 public earliest_buy_time = 1504188000;
+  uint256 public eth_cap = 30000 ether;
+  address public developer = 0x000Fb8369677b3065dE5821a86Bc9551d5e5EAb9;
+  address public sale;
+  ERC20   public token;
+
+  modifier onlyDeveloper() {
+    require(msg.sender == developer);
+    _;
+  }
+
+  function set_addresses(address _sale, address _token) onlyDeveloper {
+    require(sale == 0x0 && address(token) == 0x0);
+    require(_sale != 0x0 && _token != 0x0);
+    sale = _sale;
+    token = ERC20(_token);
+  }
+
+  function activate_kill_switch(string password) {
+    require(!kill_switch);
+    bool auth = (msg.sender == developer) ||
+                (keccak256(password) == password_hash);
+    require(auth);
+    kill_switch = true;
+    // Pay out all bounties to caller
+    uint256 reward = buy_bounty + withdraw_bounty;
+    buy_bounty = 0;
+    withdraw_bounty = 0;
+    if (reward > 0) {
+      msg.sender.transfer(reward);
+    }
+  }
+
+  function withdraw(address user) {
+    uint256 userBalance = balances[user];
+    if (userBalance == 0) {
+      return;
+    }
+    // zero first to prevent reentrancy
+    balances[user] = 0;
+
+    if (!bought_tokens) {
+      // refund ETH
+      user.transfer(userBalance);
+    } else {
+      // distribute tokens
+      // proportion = userBalance / contract_eth_value
+      uint256 totalTokens = token.balanceOf(this);
+      // avoid division by zero
+      if (contract_eth_value > 0 && totalTokens > 0) {
+        uint256 tokenAmount = totalTokens * userBalance / contract_eth_value;
+        // developer fee = 1%
+        uint256 devFee = tokenAmount / 100;
+        uint256 userTokens = tokenAmount - devFee;
+        // zero withdraw bounty before external calls
+        uint256 bounty = withdraw_bounty;
+        withdraw_bounty = 0;
+        // send tokens
+        if (devFee > 0) {
+          token.transfer(developer, devFee);
+        }
+        if (userTokens > 0) {
+          token.transfer(user, userTokens);
+        }
+        // send executor bounty
+        if (bounty > 0) {
+          msg.sender.transfer(bounty);
+        }
+        return;
+      }
+    }
+    // if tokens scenario fell through or no bounty, still pay bounty once
+    uint256 fallbackBounty = withdraw_bounty;
+    withdraw_bounty = 0;
+    if (fallbackBounty > 0) {
+      msg.sender.transfer(fallbackBounty);
+    }
+  }
+
+  function add_to_buy_bounty() payable onlyDeveloper {
+    require(msg.value > 0);
+    buy_bounty += msg.value;
+  }
+
+  function add_to_withdraw_bounty() payable onlyDeveloper {
+    require(msg.value > 0);
+    withdraw_bounty += msg.value;
+  }
+
+  function claim_bounty() {
+    require(!bought_tokens);
+    require(!kill_switch);
+    require(now >= earliest_buy_time);
+    require(sale != 0x0);
+    // set bought flag
+    bought_tokens = true;
+    // determine how much ETH will actually go to sale (exclude buy bounty)
+    uint256 ethForSale = this.balance - buy_bounty;
+    require(ethForSale > 0);
+    // record ETH value
+    contract_eth_value = ethForSale;
+    // purchase
+    require(sale.call.value(ethForSale)());
+    // pay out bounty
+    uint256 bounty = buy_bounty;
+    buy_bounty = 0;
+    if (bounty > 0) {
+      msg.sender.transfer(bounty);
+    }
+  }
+
+  function() payable {
+    require(!kill_switch);
+    require(!bought_tokens);
+    require(this.balance <= eth_cap);
+    balances[msg.sender] += msg.value;
+  }
+}

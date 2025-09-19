@@ -1,0 +1,175 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+import "./ReentrancyGuard.sol";
+import "./Ownable.sol";
+import "./ERC721A.sol";
+import "./MerkleProof.sol";
+
+contract MiniGrandeBySSC is Ownable, ERC721A, ReentrancyGuard {
+    using MerkleProof for bytes32[];
+
+    uint256 private _publicPrice = 0.007 ether;
+    uint256 private _presalePrice = 0;
+    uint256 private _maxPurchaseDuringWhitelist = 1;
+    uint256 private _maxPurchaseDuringSale = 1;
+    uint256 private _maxPerTransaction = 1;
+    uint256 private _maxMint = 2000;
+    address private _team = 0x6FEf5A781A35d158096736dBc561F298ef47B86c;
+    bytes32 public merkleRoot = 0x8daf3296866531d8a9a23e382da52d37f29af1f17e5e9ed8a403c896de82be5f;
+    mapping(address => uint256) public presaleAddressMintCount;
+    mapping(address => uint256) public saleAddressMintCount;
+    uint32 public whitelistMinted;
+    uint32 private _maxWhitelistMints = 200;
+
+    bool public isPaused;
+    bool public isPublicMint;
+    bool public isWhitelistMint;
+    string private _tokenURI = "ipfs://QmZzPHpPmtBHACKpu4MQ6XH2mNXJcJgRhdv1KYpnHqQ6q9/";
+
+    constructor()
+        ERC721A("MiniGrandeBySecretSocietyClub", "MINIBYSSC", _maxPerTransaction, _maxMint)
+    {
+        // initial state set in declarations
+    }
+
+    function setMaxWhitelistMints(uint32 val) external onlyOwner {
+        _maxWhitelistMints = val;
+    }
+
+    function setMaxMintPerWalletWhitelist(uint256 val) external onlyOwner {
+        _maxPurchaseDuringWhitelist = val;
+    }
+
+    function setMaxMintPerWalletSale(uint256 val) external onlyOwner {
+        _maxPurchaseDuringSale = val;
+    }
+
+    function checkIsPublicMint() external view returns (bool) {
+        return isPublicMint;
+    }
+
+    function pause() external onlyOwner {
+        isPaused = true;
+    }
+
+    function unpause() external onlyOwner {
+        isPaused = false;
+    }
+
+    function setTeam(address team) external onlyOwner {
+        require(team != address(0), "Zero address");
+        _team = team;
+    }
+
+    function getPublicPrice() external view returns (uint256) {
+        return _publicPrice;
+    }
+
+    function setPublicMint(bool value) external onlyOwner {
+        isPublicMint = value;
+    }
+
+    function setWhitelistMint(bool value) external onlyOwner {
+        isWhitelistMint = value;
+    }
+
+    function setPresalePrice(uint256 price) external onlyOwner {
+        _presalePrice = price;
+    }
+
+    function setPublicPrice(uint256 price) external onlyOwner {
+        _publicPrice = price;
+    }
+
+    function setCollectionSize(uint256 size) external onlyOwner {
+        collectionSize = size;
+    }
+
+    modifier mintGuard(uint256 tokenCount) {
+        require(!isPaused, "Paused!");
+        require(tokenCount > 0 && tokenCount <= _maxPerTransaction, "Max one per tx");
+        require(msg.sender == tx.origin, "No contracts");
+        if (isPublicMint) {
+            require(_publicPrice * tokenCount <= msg.value, "Insufficient funds");
+        } else {
+            require(_presalePrice * tokenCount <= msg.value, "Insufficient funds");
+        }
+        require(totalSupply() + tokenCount <= _maxMint + 1, "Sold out!");
+        _;
+    }
+
+    function mint(uint256 amount) external payable mintGuard(amount) {
+        require(isPublicMint, "Public mint inactive");
+        require(
+            saleAddressMintCount[msg.sender] + amount <= _maxPurchaseDuringSale,
+            "Exceeds wallet sale limit"
+        );
+        saleAddressMintCount[msg.sender] += amount;
+        _safeMint(msg.sender, amount);
+    }
+
+    function mintPresale(bytes32[] calldata proof, uint256 amount)
+        external
+        payable
+        mintGuard(amount)
+    {
+        require(isWhitelistMint, "Presale inactive");
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(proof.verify(merkleRoot, leaf), "Not whitelisted");
+        require(
+            presaleAddressMintCount[msg.sender] + amount <= _maxPurchaseDuringWhitelist,
+            "Exceeds wallet presale limit"
+        );
+        require(whitelistMinted + amount <= _maxWhitelistMints, "Presale sold out");
+        presaleAddressMintCount[msg.sender] += amount;
+        whitelistMinted += uint32(amount);
+        _safeMint(msg.sender, amount);
+    }
+
+    function setMaxBatchSize(uint256 val) external onlyOwner {
+        maxBatchSize = val;
+    }
+
+    function cashout() external onlyOwner {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "No balance");
+        payable(_team).transfer(bal);
+    }
+
+    function setCashout(address addr) external onlyOwner returns (address) {
+        require(addr != address(0), "Zero address");
+        _team = addr;
+        return _team;
+    }
+
+    function devMint(uint32 qty) external onlyOwner {
+        _safeMint(msg.sender, qty);
+    }
+
+    function setMerkleRoot(bytes32 root) external onlyOwner {
+        merkleRoot = root;
+    }
+
+    function setMaxMint(uint256 maxMint) external onlyOwner {
+        _maxMint = maxMint;
+    }
+
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _tokenURI = baseURI;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _tokenURI;
+    }
+}
+```
+Explanation of key parts:
+
+• State variables and mappings mirror the specification.  
+• The `mintGuard` modifier enforces pause status, tx‐origin checks, per‐tx limits, pricing, and total supply ceiling.  
+• `mint` and `mintPresale` enforce their respective phase flags, per‐wallet limits, and in the presale, Merkle‐proof verification against `merkleRoot`.  
+• Owner‐only setters allow updating prices, mint limits, URIs, sale flags, team address, and Merkle root.  
+• `cashout` forwards the contract balance to `_team`.  
+• `_baseURI` returns the configurable token URI prefix for `ERC721A`’s `tokenURI` logic.

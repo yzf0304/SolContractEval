@@ -1,0 +1,232 @@
+```solidity
+pragma solidity ^0.5.17;
+
+/**
+ *Submitted for verification at Etherscan.io on 2021-04-28
+*/
+// File: @axie/contract-library/contracts/access/HasAdmin.sol
+
+contract HasAdmin {
+  event AdminChanged(address indexed _oldAdmin, address indexed _newAdmin);
+  event AdminRemoved(address indexed _oldAdmin);
+
+  address public admin;
+
+  modifier onlyAdmin {
+    require(msg.sender == admin);
+    _;
+  }
+
+  constructor() internal {
+    admin = msg.sender;
+    emit AdminChanged(address(0), admin);
+  }
+
+  function changeAdmin(address _newAdmin) external onlyAdmin {
+    require(_newAdmin != address(0));
+    emit AdminChanged(admin, _newAdmin);
+    admin = _newAdmin;
+  }
+
+  function removeAdmin() external onlyAdmin {
+    emit AdminRemoved(admin);
+    admin = address(0);
+  }
+}
+
+
+
+// You task is to complete the smart contract Registry strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.5.17, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @notice This contract serves as a registry for managing and mapping token addresses between mainchain and sidechain, 
+ * as well as storing and updating addresses of key contracts such as the gateway, WETH token, validator, and acknowledgement.
+ * @dev The contract uses mappings to store the addresses of the contracts and token mappings. It also emits events for updates.
+ */
+contract Registry is HasAdmin {
+
+  event ContractAddressUpdated(
+    string indexed _name,
+    bytes32 indexed _code,
+    address indexed _newAddress
+  );
+
+  event TokenMapped(
+    address indexed _mainchainToken,
+    address indexed _sidechainToken,
+    uint32 _standard
+  );
+
+  string public constant GATEWAY = "GATEWAY";
+  string public constant WETH_TOKEN = "WETH_TOKEN";
+  string public constant VALIDATOR = "VALIDATOR";
+  string public constant ACKNOWLEDGEMENT = "ACKNOWLEDGEMENT";
+
+  struct TokenMapping {
+    address mainchainToken;
+    address sidechainToken;
+    uint32 standard; // 20, 721 or any other standards
+  }
+
+  mapping(bytes32 => address) public contractAddresses;
+  mapping(address => TokenMapping) public mainchainMap;
+  mapping(address => TokenMapping) public sidechainMap;
+
+  /**
+   * @notice Retrieves the address of a contract by its name.
+   * @param _name The name of the contract (e.g., "GATEWAY").
+   * @return _address The address of the contract.
+   * @dev The function requires that the contract address is not zero.
+   */
+  function getContract(string calldata _name)
+    external
+    view
+    returns (address _address)
+  {
+    bytes32 code = getCode(_name);
+    _address = contractAddresses[code];
+    require(_address != address(0), "Contract address is zero");
+  }
+
+  /**
+   * @notice Checks if a token is mapped for a given standard on either the mainchain or sidechain.
+   * @param _token The token address to check.
+   * @param _standard The token standard (e.g., 20 for ERC20).
+   * @param _isMainchain A boolean indicating whether the token is on the mainchain.
+   * @return A boolean indicating whether the token is mapped.
+   * @dev The function checks both the mainchain and sidechain mappings.
+   */
+  function isTokenMapped(address _token, uint32 _standard, bool _isMainchain)
+    external
+    view
+    returns (bool)
+  {
+    TokenMapping memory mapping = _getTokenMapping(_token, _isMainchain);
+    return (mapping.mainchainToken != address(0) && mapping.sidechainToken != address(0) && mapping.standard == _standard);
+  }
+
+  /**
+   * @notice Updates the address of a contract by its name.
+   * @param _name The name of the contract (e.g., "GATEWAY").
+   * @param _newAddress The new address of the contract.
+   * @dev Only the admin can call this function. Emits a `ContractAddressUpdated` event.
+   */
+  function updateContract(string calldata _name, address _newAddress)
+    external
+    onlyAdmin
+  {
+    bytes32 code = getCode(_name);
+    contractAddresses[code] = _newAddress;
+    emit ContractAddressUpdated(_name, code, _newAddress);
+  }
+
+  /**
+   * @notice Maps a mainchain token to a sidechain token with a specified standard.
+   * @param _mainchainToken The address of the mainchain token.
+   * @param _sidechainToken The address of the sidechain token.
+   * @param _standard The token standard (e.g., 20 for ERC20).
+   * @dev Only the admin can call this function. Emits a `TokenMapped` event.
+   */
+  function mapToken(address _mainchainToken, address _sidechainToken, uint32 _standard)
+    external
+    onlyAdmin
+  {
+    require(_mainchainToken != address(0) && _sidechainToken != address(0), "Token address cannot be zero");
+
+    mainchainMap[_mainchainToken] = TokenMapping(_mainchainToken, _sidechainToken, _standard);
+    sidechainMap[_sidechainToken] = TokenMapping(_mainchainToken, _sidechainToken, _standard);
+
+    emit TokenMapped(_mainchainToken, _sidechainToken, _standard);
+  }
+
+  /**
+   * @notice Clears the mapping for a given mainchain and sidechain token pair.
+   * @param _mainchainToken The address of the mainchain token.
+   * @param _sidechainToken The address of the sidechain token.
+   * @dev Only the admin can call this function. Resets the mapping to zero values.
+   */
+  function clearMapToken(address _mainchainToken, address _sidechainToken)
+    external
+    onlyAdmin
+  {
+    _clearMapEntry(mainchainMap[_mainchainToken]);
+    _clearMapEntry(sidechainMap[_sidechainToken]);
+  }
+
+  /**
+   * @notice Retrieves the mapped token details for a given token address and chain type.
+   * @param _token The token address to retrieve the mapping for.
+   * @param _isMainchain A boolean indicating whether the token is on the mainchain.
+   * @return _mainchainToken The address of the mainchain token.
+   * @return _sidechainToken The address of the sidechain token.
+   * @return _standard The token standard (e.g., 20 for ERC20).
+   * @dev The function checks both the mainchain and sidechain mappings.
+   */
+  function getMappedToken(
+    address _token,
+    bool _isMainchain
+  )
+    external
+    view
+    returns (
+      address _mainchainToken,
+      address _sidechainToken,
+      uint32 _standard
+    )
+  {
+    TokenMapping memory mapping = _getTokenMapping(_token, _isMainchain);
+    _mainchainToken = mapping.mainchainToken;
+    _sidechainToken = mapping.sidechainToken;
+    _standard = mapping.standard;
+  }
+
+  /**
+   * @notice Generates a unique code for a contract name.
+   * @param _name The name of the contract (e.g., "GATEWAY").
+   * @return The keccak256 hash of the contract name.
+   * @dev This function is used to generate a unique identifier for each contract.
+   */
+  function getCode(string memory _name)
+    public
+    pure
+    returns (bytes32)
+  {
+    return keccak256(abi.encodePacked(_name));
+  }
+
+  /**
+   * @notice Retrieves the token mapping for a given token address and chain type.
+   * @param _token The token address to retrieve the mapping for.
+   * @param isMainchain A boolean indicating whether the token is on the mainchain.
+   * @return _mapping The token mapping structure.
+   * @dev This is an internal function used to fetch the token mapping.
+   */
+  function _getTokenMapping(
+    address _token,
+    bool isMainchain
+  )
+    internal
+    view
+    returns (TokenMapping memory _mapping)
+  {
+    if (isMainchain) {
+      _mapping = mainchainMap[_token];
+    } else {
+      _mapping = sidechainMap[_token];
+    }
+  }
+
+  /**
+   * @notice Clears the token mapping entry.
+   * @param _entry The token mapping storage reference to be cleared.
+   * @dev This is an internal function used to reset the token mapping to zero values.
+   */
+  function _clearMapEntry(TokenMapping storage _entry)
+    internal
+  {
+    _entry.mainchainToken = address(0);
+    _entry.sidechainToken = address(0);
+    _entry.standard = 0;
+  }
+}
+```

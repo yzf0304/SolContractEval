@@ -1,0 +1,131 @@
+```solidity
+pragma solidity 0.5.17;
+
+contract Registry is HasAdmin {
+
+  event ContractAddressUpdated(
+    string indexed _name,
+    bytes32 indexed _code,
+    address indexed _newAddress
+  );
+
+  event TokenMapped(
+    address indexed _mainchainToken,
+    address indexed _sidechainToken,
+    uint32 _standard
+  );
+
+  string public constant GATEWAY = "GATEWAY";
+  string public constant WETH_TOKEN = "WETH_TOKEN";
+  string public constant VALIDATOR = "VALIDATOR";
+  string public constant ACKNOWLEDGEMENT = "ACKNOWLEDGEMENT";
+
+  struct TokenMapping {
+    address mainchainToken;
+    address sidechainToken;
+    uint32 standard;
+  }
+
+  mapping(bytes32 => address) public contractAddresses;
+  mapping(address => TokenMapping) public mainchainMap;
+  mapping(address => TokenMapping) public sidechainMap;
+
+  function getContract(string calldata _name)
+    external
+    view
+    returns (address _address)
+  {
+    bytes32 code = getCode(_name);
+    _address = contractAddresses[code];
+    require(_address != address(0), "Contract address not set");
+  }
+
+  function isTokenMapped(address _token, uint32 _standard, bool _isMainchain)
+    external
+    view
+    returns (bool)
+  {
+    TokenMapping memory tokenMapping = _getTokenMapping(_token, _isMainchain);
+    return tokenMapping.standard == _standard;
+  }
+
+  function updateContract(string calldata _name, address _newAddress)
+    external
+    onlyAdmin
+  {
+    require(_newAddress != address(0), "New address cannot be zero");
+    bytes32 code = getCode(_name);
+    contractAddresses[code] = _newAddress;
+    emit ContractAddressUpdated(_name, code, _newAddress);
+  }
+
+  function mapToken(address _mainchainToken, address _sidechainToken, uint32 _standard)
+    external
+    onlyAdmin
+  {
+    require(_mainchainToken != address(0) && _sidechainToken != address(0), "Invalid token address");
+
+    mainchainMap[_mainchainToken] = TokenMapping(_mainchainToken, _sidechainToken, _standard);
+    sidechainMap[_sidechainToken] = TokenMapping(_mainchainToken, _sidechainToken, _standard);
+
+    emit TokenMapped(_mainchainToken, _sidechainToken, _standard);
+  }
+
+  function clearMapToken(address _mainchainToken, address _sidechainToken)
+    external
+    onlyAdmin
+  {
+    _clearMapEntry(mainchainMap[_mainchainToken]);
+    _clearMapEntry(sidechainMap[_sidechainToken]);
+  }
+
+  function getMappedToken(
+    address _token,
+    bool _isMainchain
+  )
+    external
+    view
+    returns (
+      address _mainchainToken,
+      address _sidechainToken,
+      uint32 _standard
+    )
+  {
+    TokenMapping memory tokenMapping = _getTokenMapping(_token, _isMainchain);
+    _mainchainToken = tokenMapping.mainchainToken;
+    _sidechainToken = tokenMapping.sidechainToken;
+    _standard = tokenMapping.standard;
+  }
+
+  function getCode(string memory _name)
+    public
+    pure
+    returns (bytes32)
+  {
+    return keccak256(abi.encodePacked(_name));
+  }
+
+  function _getTokenMapping(
+    address _token,
+    bool _isMainchain
+  )
+    internal
+    view
+    returns (TokenMapping memory _mapping)
+  {
+    if (_isMainchain) {
+      _mapping = mainchainMap[_token];
+    } else {
+      _mapping = sidechainMap[_token];
+    }
+  }
+
+  function _clearMapEntry(TokenMapping storage _entry)
+    internal
+  {
+    _entry.mainchainToken = address(0);
+    _entry.sidechainToken = address(0);
+    _entry.standard = 0;
+  }
+}
+```

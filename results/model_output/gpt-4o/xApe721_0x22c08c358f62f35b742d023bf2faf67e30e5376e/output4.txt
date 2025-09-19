@@ -1,0 +1,148 @@
+Certainly! Below is the complete implementation of the `xApe721` contract according to the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: AGPL-3.0-only
+pragma solidity ^0.8.10;
+
+import "./Ownable.sol";
+import "./IERC721.sol";
+import "./Strings.sol";
+import "./ERC721.sol";
+
+contract xApe721 is Ownable, ERC721 {
+  using Strings for uint256;
+
+  uint256 public constant TOTAL_SUPPLY = 10_000;
+  uint256 public constant PRICE_PER_MINT = 0.05 ether;
+  uint256 public constant MAX_MINT_PER_TX = 20;
+
+  bool public mintActive;
+
+  uint256 public totalSupply;
+
+  uint256 internal nextMintableId = 10038;
+
+  string public baseURI;
+
+  IERC721 public oldContract = IERC721(0x090b1DE324fEA5f0A0B4226101Db645819102629);
+
+  address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+  constructor(
+    string memory name,
+    string memory symbol,
+    string memory _baseURI,
+    address _oldContract,
+    address[] memory recipients,
+    uint256[] memory tokens
+  ) payable ERC721(name, symbol) {
+    require(recipients.length == tokens.length, "Airdrop lengths");
+    baseURI = _baseURI;
+
+    if (_oldContract != address(0)) {
+      oldContract = IERC721(_oldContract);
+    }
+
+    uint256 length = tokens.length;
+
+    for (uint i; i < length; ++i) {
+      _mint(recipients[i], tokens[i]);
+      totalSupply++;
+    }
+  }
+
+  modifier onlyTeamWallet() {
+    require(msg.sender == teamWallet, "Not callable except by team wallet");
+    _;
+  }
+
+  function mint(uint16 amount) external payable {
+    require(mintActive, "Minting is paused");
+    require(amount <= MAX_MINT_PER_TX, "Mint amount exceeds max per transaction");
+    require(totalSupply + amount <= TOTAL_SUPPLY, "Exceeds total supply");
+    require(msg.value >= PRICE_PER_MINT * amount, "Insufficient payment");
+
+    for (uint256 i = 0; i < amount; i++) {
+      uint256 tokenId = _getNextUnusedID();
+      _mint(msg.sender, tokenId);
+      totalSupply++;
+    }
+  }
+
+  function claim(uint256 tokenId) external payable {
+    require(_ownsOldToken(msg.sender, tokenId), "Not owner of old token");
+    require(totalSupply < TOTAL_SUPPLY, "Exceeds total supply");
+
+    _mint(msg.sender, tokenId);
+    totalSupply++;
+  }
+
+  function claimAll() external payable {
+    uint256[] memory tokenIds = oldContract.getPhunksBelongingToOwner(msg.sender);
+    require(tokenIds.length > 0, "No tokens to claim");
+    require(totalSupply + tokenIds.length <= TOTAL_SUPPLY, "Exceeds total supply");
+
+    for (uint256 i = 0; i < tokenIds.length; i++) {
+      if (_ownsOldToken(msg.sender, tokenIds[i])) {
+        _mint(msg.sender, tokenIds[i]);
+        totalSupply++;
+      }
+    }
+  }
+
+  function _ownsOldToken(address account, uint256 tokenId) internal view returns(bool) {
+    return oldContract.ownerOf(tokenId) == account;
+  }
+
+  function _getNextUnusedID() internal returns (uint256) {
+    while (ownerOf[nextMintableId] != address(0) || oldContract.ownerOf(nextMintableId) != address(0)) {
+      nextMintableId++;
+    }
+    return nextMintableId++;
+  }
+
+  function tokenURI(uint256 id) public view override returns (string memory) {
+    require(ownerOf[id] != address(0), "Token does not exist");
+    return string(abi.encodePacked(baseURI, id.toString()));
+  }
+
+  function withdraw() external onlyTeamWallet() {
+    SafeTransferLib.safeTransferETH(teamWallet, address(this).balance);
+  }
+
+  function pauseMint() external onlyOwner {
+    mintActive = false;
+  }
+
+  function startMint() external onlyOwner {
+    mintActive = true;
+  }
+
+  function setBaseURI(string memory _baseURI) external onlyOwner {
+    baseURI = _baseURI;
+  }
+
+  function supportsInterface(bytes4 interfaceId)
+    public
+    pure
+    override
+    returns (bool)
+  {
+    return
+      interfaceId == 0x01ffc9a7 || // ERC165
+      interfaceId == 0x80ac58cd || // ERC721
+      interfaceId == 0x5b5e139f;   // ERC721 Metadata
+  }
+
+  function onERC721Received(
+      address operator,
+      address from,
+      uint256 tokenId,
+      bytes calldata data
+  ) external returns (bytes4) {
+    return ERC721TokenReceiver.onERC721Received.selector;
+  }
+}
+```
+
+This implementation is aligned with your provided description and context. It includes all the necessary functionalities of minting, claiming from an old contract, and managing the token collection. The contract utilizes the provided `Ownable` contract, integrates with the old contract interface `IERC721`, and implements metadata management with a base URI.

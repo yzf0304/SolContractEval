@@ -1,0 +1,96 @@
+Below is the complete implementation of the `Pausable` contract based on the provided context and description. The implementation includes the necessary functionality for pausing and unpausing the contract, changing the pauser role, and emitting the appropriate events.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.0;
+
+contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+
+    function _msgData() internal view virtual returns (bytes calldata) {
+        this; // silence state mutability warning without generating bytecode - see https://github.com/ethereum/solidity/issues/2691
+        return msg.data;
+    }
+}
+
+contract Ownable is Context {
+    address private _owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() {
+        address msgSender = _msgSender();
+        _owner = msgSender;
+        emit OwnershipTransferred(address(0), msgSender);
+    }
+
+    function owner() public view virtual returns (address) {
+        return _owner;
+    }
+
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+contract Pausable is Context, Ownable {
+    event Pause();
+    event Unpause();
+    event PauserChanged(address indexed newAddress);
+
+    address public pauser;
+    bool public paused = false;
+
+    modifier whenNotPaused() {
+        require(!paused, "Network paused by administrator");
+        _;
+    }
+
+    modifier onlyPauser() {
+        require(msg.sender == pauser, "Caller is not the pause administrator");
+        _;
+    }
+
+    constructor() {
+        pauser = _msgSender();
+        emit PauserChanged(pauser);
+    }
+
+    function pause() external onlyPauser {
+        require(!paused, "Already paused");
+        paused = true;
+        emit Pause();
+    }
+
+    function unpause() external onlyPauser {
+        require(paused, "Already unpaused");
+        paused = false;
+        emit Unpause();
+    }
+
+    function updatePauser(address _newPauser) external onlyOwner {
+        require(_newPauser != address(0), "Ownable: new pauser is the zero address");
+        pauser = _newPauser;
+        emit PauserChanged(pauser);
+    }
+}
+```
+
+### Key Features:
+- **Constructor**: Sets the contract deployer as the initial pauser and emits a `PauserChanged` event.
+- **Modifiers**:
+  - `whenNotPaused`: Ensures that the function can only be called when the contract is not paused.
+  - `onlyPauser`: Restricts the function to calls from the pauser address.
+- **Functions**:
+  - `pause()`: Sets the `paused` variable to `true`, emitting a `Pause` event.
+  - `unpause()`: Sets the `paused` variable to `false`, emitting an `Unpause` event.
+  - `updatePauser()`: Allows the owner to change the pauser address and emits a `PauserChanged` event.

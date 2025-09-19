@@ -1,0 +1,109 @@
+Below is the implementation of the `CZRLocker` contract based on your provided context and description. This contract includes the logic for adding, removing, and unlocking CZR token locks as well as functionality to withdraw ETH.
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract owned {
+    address public owner;
+
+    function owned() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        owner = newOwner;
+    }
+}
+
+interface token { 
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success); 
+}
+
+/**
+ * @notice A smart contract to manage and control the locking and unlocking of CZR tokens.
+ * @dev This contract allows the owner to add, remove, and unlock CZR token locks. It also includes functionality to withdraw ETH.
+ */
+contract CZRLocker is owned {
+
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+    event RemoveLock(address addr, uint index);
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    address public tokenAddr;
+    address public unlocker;
+
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length);
+        LockedCZR storage lc = lockedCZRMap[addr][index];
+        lc.startLockTime = 0;
+        lc.lockMonth = 0;
+        lc.lockedAmount = 0;
+        lc.unlockedAmount = 0;
+        emit RemoveLock(addr, index);
+    }
+
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        require(amount > 0 && lockMonth > 0);
+        lockedCZRMap[addr].push(LockedCZR({
+            startLockTime: startLockTime,
+            lockMonth: lockMonth,
+            lockedAmount: amount,
+            unlockedAmount: 0
+        }));
+        uint index = lockedCZRMap[addr].length - 1;
+        emit AddLock(addr, index, startLockTime, lockMonth, amount);
+    }
+
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker);
+        LockedCZR[] storage lcArray = lockedCZRMap[addr];
+        uint processedCount = 0;
+        for(uint i = 0; i < lcArray.length; i++) {
+            LockedCZR storage lc = lcArray[i];
+            if(lc.lockedAmount > lc.unlockedAmount) {
+                uint monthsPassed = (now - lc.startLockTime) / 30 days;
+                uint unlockableMonths = monthsPassed < lc.lockMonth ? monthsPassed : lc.lockMonth;
+                uint unlockableAmount = lc.lockedAmount / lc.lockMonth * unlockableMonths - lc.unlockedAmount;
+                if(unlockableAmount > 0) {
+                    require(token(tokenAddr).transferFrom(address(this), addr, unlockableAmount));
+                    lc.unlockedAmount += unlockableAmount;
+                    emit Unlock(addr, i, unlockableAmount);
+                }
+            }
+            processedCount++;
+            if(limit > 0 && processedCount >= limit) {
+                break;
+            }
+        }
+    }
+
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        require(to != address(0));
+        to.transfer(value);
+    }
+
+    function() payable public {
+    }
+}
+```
+
+This contract should meet all the requirements as per your description, including the correct implementation for adding, removing, and unlocking CZR locks. It uses the `now` keyword for getting the current timestamp, which is deprecated in newer Solidity versions but suitable for your requested compiler version 0.4.18.

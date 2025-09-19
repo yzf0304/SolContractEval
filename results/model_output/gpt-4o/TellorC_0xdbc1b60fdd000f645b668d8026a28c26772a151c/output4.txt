@@ -1,0 +1,171 @@
+Here’s the completed `TellorC` smart contract strictly following the provided context and description. It adheres to the instructions, focuses only on the necessary functionality, and is tailored for deployment with Solidity version `0.5.17`.
+
+```solidity
+pragma solidity 0.5.17;
+
+contract TellorC {
+    address private tellor = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+    bytes32 constant slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a; // keccak256("slotProgress")
+
+    address private owner;
+    address private miner;
+
+    /**
+     * @notice Initializes the contract, setting the deployer as the owner.
+     */
+    constructor () public {
+        owner = msg.sender;
+    }
+
+    /**
+     * @notice Modifier to restrict functions to only the owner.
+     */
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this function");
+        _;
+    }
+
+    /**
+     * @notice Modifier to restrict functions to only the owner or miner.
+     */
+    modifier onlyMinerOrOwner() {
+        require(msg.sender == miner || msg.sender == owner, "Only miner or owner can call this function");
+        _;
+    }
+
+    /**
+     * @notice Allows the owner to change the designated miner.
+     * @param _addr The new miner's address.
+     */
+    function changeMiner(address _addr) external onlyOwner {
+        require(_addr != address(0), "Invalid miner address");
+        miner = _addr;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw TRB tokens from the Tellor contract.
+     * @param _amount The amount of TRB to withdraw.
+     */
+    function withdrawTrb(uint256 _amount) external onlyOwner {
+        require(_amount > 0, "Amount must be greater than zero");
+        (bool success, bytes memory data) = tellor.call(
+            abi.encodeWithSignature("transfer(address,uint256)", owner, _amount)
+        );
+        require(success && (data.length == 0 || abi.decode(data, (bool))), "TRB transfer failed");
+    }
+
+    /**
+     * @notice Allows the owner to withdraw ETH from the contract.
+     * @param _amount The amount of ETH to withdraw.
+     */
+    function withdrawEth(uint256 _amount) external onlyOwner {
+        require(address(this).balance >= _amount, "Insufficient ETH balance");
+        msg.sender.transfer(_amount);
+    }
+
+    /**
+     * @notice Allows the owner to deposit a stake in the Tellor contract.
+     */
+    function depositStake() external onlyOwner {
+        (bool success, ) = tellor.call(abi.encodeWithSignature("depositStake()"));
+        require(success, "Stake deposit failed");
+    }
+
+    /**
+     * @notice Allows the owner to request a staking withdrawal from the Tellor contract.
+     */
+    function requestStakingWithdraw() external onlyOwner {
+        (bool success, ) = tellor.call(abi.encodeWithSignature("requestStakingWithdraw()"));
+        require(success, "Stake withdrawal request failed");
+    }
+
+    /**
+     * @notice Allows the owner to withdraw their stake from the Tellor contract.
+     */
+    function withdrawStake() external onlyOwner {
+        (bool success, ) = tellor.call(abi.encodeWithSignature("withdrawStake()"));
+        require(success, "Stake withdrawal failed");
+    }
+
+    /**
+     * @notice Finalizes the contract, withdrawing the stake and transferring all TRB to the owner before self-destructing.
+     */
+    function finalize() external onlyOwner {
+        // Withdraw stake
+        (bool stakeSuccess, ) = tellor.call(abi.encodeWithSignature("withdrawStake()"));
+        require(stakeSuccess, "Stake withdrawal failed");
+
+        // Transfer all TRB to owner
+        uint256 balance = getTrbBalance();
+        if (balance > 0) {
+            (bool trbSuccess, bytes memory data) = tellor.call(
+                abi.encodeWithSignature("transfer(address,uint256)", owner, balance)
+            );
+            require(trbSuccess && (data.length == 0 || abi.decode(data, (bool))), "TRB transfer failed");
+        }
+
+        // Self-destruct and send remaining ETH to owner
+        selfdestruct(address(uint160(owner)));
+    }
+
+    /**
+     * @notice Submits a mining solution to the Tellor contract.
+     * @param _nonce The nonce used for the mining solution.
+     * @param _requestId Array of request IDs.
+     * @param _value Array of values corresponding to the request IDs.
+     */
+    function submitMiningSolution(string calldata _nonce, uint256[5] calldata _requestId, uint256[5] calldata _value) external onlyMinerOrOwner {
+        (bool success, ) = tellor.call(
+            abi.encodeWithSignature(
+                "submitMiningSolution(string,uint256[5],uint256[5])",
+                _nonce,
+                _requestId,
+                _value
+            )
+        );
+        require(success, "Mining solution submission failed");
+    }
+
+    /**
+     * @notice Fallback function that forwards calls to the Tellor contract.
+     */
+    function() external {
+        require(msg.sender == address(0), "Not allowed"); // Don't allow actual calls, only views
+
+        address addr = tellor;
+        bytes memory _calldata = msg.data;
+        assembly {
+            let result := call(not(0), addr, 0, add(_calldata, 0x20), mload(_calldata), 0, 0)
+            let size := returndatasize
+            let ptr := mload(0x40)
+            returndatacopy(ptr, 0, size)
+            switch result
+                case 0 {
+                    revert(ptr, size)
+                }
+                default {
+                    return(ptr, size)
+                }
+        }
+    }
+
+    /**
+     * @notice Returns the balance of TRB tokens held by this contract.
+     */
+    function getTrbBalance() public view returns (uint256) {
+        (bool success, bytes memory data) = tellor.staticcall(
+            abi.encodeWithSignature("balanceOf(address)", address(this))
+        );
+        require(success, "Failed to get TRB balance");
+        return abi.decode(data, (uint256));
+    }
+}
+```
+
+### Key Features Implemented:
+1. **Owner and Miner Management:** Only the owner can perform administrative tasks like changing miners or finalizing the contract, while miners or owners can submit mining solutions.
+2. **Stake Management:** Functions to deposit, withdraw, and request stake withdrawals from the Tellor system.
+3. **TRB & ETH Transfers:** Owner can withdraw TRB and ETH from the contract.
+4. **Mining Solution Submission:** Supports submitting mining solutions.
+5. **Fallback Function:** Forwards calls to the Tellor contract with view-only restriction.
+6. **Finalization:** Allows the owner to cleanly finalize the contract by withdrawing all assets and self-destructing.

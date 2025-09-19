@@ -1,0 +1,152 @@
+Below is the completed `OdinToken` contract strictly following the given context and description. The implementation focuses on basic ERC20 token functionalities while adding the described airdrop restrictions and whitelist mechanisms.
+
+```solidity
+pragma solidity ^0.4.21;
+
+/**
+ * OdinToken - ERC20 token with airdrop restrictions and owner-controlled whitelisting.
+ */
+contract OdinToken is ERC20Interface, Owned {
+    using SafeMath for uint256;
+
+    string public symbol;
+    string public name;
+    uint8 public decimals;
+    uint private _totalSupply;
+    bool private _whitelistAll;
+
+    struct balanceData {
+        bool locked;
+        uint balance;
+        uint airDropQty;
+    }
+
+    mapping(address => balanceData) balances;
+    mapping(address => mapping(address => uint)) allowed;
+
+    /**
+     * @dev Constructor initializes the contract with specified values.
+     */
+    function OdinToken() public {
+        owner = msg.sender;
+        symbol = "ODIN";
+        name = "ODIN Token";
+        decimals = 18;
+        _whitelistAll = false;
+        _totalSupply = 100000000000000000000000; // 100,000 tokens in smallest units
+        balances[owner].balance = _totalSupply;
+
+        emit Transfer(address(0), msg.sender, _totalSupply);
+    }
+
+    function totalSupply() constant public returns (uint256) {
+        return _totalSupply;
+    }
+
+    function whitelistAddress(address to) onlyOwner public returns (bool) {
+        require(to != address(0));
+        balances[to].airDropQty = 0; // Whitelist an address by resetting airdrop quantity
+        return true;
+    }
+
+    function whitelistAllAddresses() onlyOwner public returns (bool) {
+        _whitelistAll = true; // Allow all addresses for airdrops
+        return true;
+    }
+
+    function balanceOf(address tokenOwner) public constant returns (uint balance) {
+        return balances[tokenOwner].balance;
+    }
+
+    function transfer(address to, uint tokens) public returns (bool success) {
+        require(to != address(0)); // Prevent transferring to zero address
+        require(to != msg.sender); // Prevent self-transfer
+        require(tokens <= balances[msg.sender].balance); // Ensure sender has enough balance
+
+        if (!_whitelistAll && balances[msg.sender].airDropQty > 0) {
+            uint restrictionAmount = airDropRestriction(msg.sender);
+            require(tokens.sub(balances[msg.sender].balance.sub(balances[msg.sender].airDropQty)) <= restrictionAmount);
+        }
+
+        balances[msg.sender].balance = balances[msg.sender].balance.sub(tokens);
+        balances[to].balance = balances[to].balance.add(tokens);
+
+        emit Transfer(msg.sender, to, tokens);
+        return true;
+    }
+
+    function airDropRestriction(address addr) internal view returns (uint) {
+        uint allowedPercentage = 0;
+        uint currentTime = now;
+
+        if (currentTime < 1535760000) { // Before Sep 1, 2018
+            allowedPercentage = 0;
+        } else if (currentTime < 1538352000) { // Sep 1 - Sep 30, 2018
+            allowedPercentage = 10;
+        } else if (currentTime < 1546300800) { // Oct 1 - Dec 31, 2018
+            allowedPercentage = 25;
+        } else if (currentTime < 1554076800) { // Jan 1 - Mar 31, 2019
+            allowedPercentage = 50;
+        } else if (currentTime < 1561939200) { // Apr 1 - Jun 30, 2019
+            allowedPercentage = 75;
+        } else { // After Jun 30, 2019
+            allowedPercentage = 100;
+        }
+
+        return balances[addr].airDropQty.mul(allowedPercentage).div(100);
+    }
+
+    function approve(address spender, uint tokens) public returns (bool success) {
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint tokens) public returns (bool success) {
+        require(to != address(0));
+        require(tokens <= balances[from].balance);
+        require(tokens <= allowed[from][msg.sender]);
+
+        balances[from].balance = balances[from].balance.sub(tokens);
+        balances[to].balance = balances[to].balance.add(tokens);
+        allowed[from][msg.sender] = allowed[from][msg.sender].sub(tokens);
+
+        emit Transfer(from, to, tokens);
+        return true;
+    }
+
+    function allowance(address tokenOwner, address spender) public constant returns (uint remaining) {
+        return allowed[tokenOwner][spender];
+    }
+
+    function approveAndCall(address spender, uint tokens, bytes data) public returns (bool success) {
+        approve(spender, tokens);
+        require(spender.call(data));
+        return true;
+    }
+
+    function burn(uint256 tokens) onlyOwner public returns (bool) {
+        require(tokens <= balances[owner].balance);
+
+        balances[owner].balance = balances[owner].balance.sub(tokens);
+        _totalSupply = _totalSupply.sub(tokens);
+
+        emit Burn(tokens);
+        return true;
+    }
+
+    function () public {
+        revert(); // Prevent ETH from being sent to this contract
+    }
+}
+```
+
+### Key Features:
+1. **ERC20 Implementation**: Implements essential ERC20 functions and events (`totalSupply`, `balanceOf`, `transfer`, `approve`, etc.).
+2. **Airdrop Restrictions**: Limits the transferability of air-dropped tokens based on predefined periods.
+3. **Owner Whitelisting**: Allows the owner to whitelist specific addresses or enable whitelisting for all.
+4. **Burn Functionality**: Owner can burn tokens to reduce the total supply.
+
+### Notes:
+- Use compiler version `0.4.21` for deployment.
+- The contract strictly adheres to the provided description and context without introducing unrelated features.

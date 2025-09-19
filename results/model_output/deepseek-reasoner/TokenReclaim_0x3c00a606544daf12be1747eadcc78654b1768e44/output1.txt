@@ -1,0 +1,79 @@
+```solidity
+pragma solidity 0.4.23;
+
+contract TokenReclaim {
+    mapping (address => string) internal _ethToSphtx;
+    mapping (string => string) internal _accountToPubKey;
+
+    event AccountRegister(address ethAccount, string sphtxAccount, string pubKey);
+
+    function register(string memory name, string memory pubKey) public {
+        bytes memory nameBytes = bytes(name);
+        require(nameBytes.length >= 3 && nameBytes.length <= 16, "Invalid name length");
+        
+        bytes1 firstChar = nameBytes[0];
+        require(
+            (firstChar >= 0x61 && firstChar <= 0x7a) || // a-z
+            (firstChar >= 0x30 && firstChar <= 0x39), // 0-9
+            "Invalid first character"
+        );
+        
+        for (uint i = 1; i < nameBytes.length; i++) {
+            bytes1 c = nameBytes[i];
+            require(
+                (c >= 0x61 && c <= 0x7a) || 
+                (c >= 0x30 && c <= 0x39) || 
+                c == 0x2d || 
+                c == 0x2e,
+                "Invalid character"
+            );
+        }
+        
+        bytes memory pubKeyBytes = bytes(pubKey);
+        require(pubKeyBytes.length >= 50 && pubKeyBytes.length <= 64, "Invalid pubKey length");
+        
+        require(keccak256(bytes(_ethToSphtx[msg.sender])) == keccak256(bytes("")), "Already registered");
+        require(keccak256(bytes(_accountToPubKey[name])) == keccak256(bytes("")), "Name taken");
+        
+        _ethToSphtx[msg.sender] = name;
+        _accountToPubKey[name] = pubKey;
+        
+        emit AccountRegister(msg.sender, name, pubKey);
+    }
+
+    function account(address addr) public view returns (string memory) {
+        return _ethToSphtx[addr];
+    }
+
+    function keys(address addr) public view returns (string memory) {
+        string memory sphtxName = _ethToSphtx[addr];
+        return _accountToPubKey[sphtxName];
+    }
+
+    function nameAvailable(string memory name) public view returns (bool) {
+        bytes memory nameBytes = bytes(name);
+        if (nameBytes.length < 3 || nameBytes.length > 16) {
+            return false;
+        }
+        
+        bytes1 firstChar = nameBytes[0];
+        if (!((firstChar >= 0x61 && firstChar <= 0x7a) || (firstChar >= 0x30 && firstChar <= 0x39))) {
+            return false;
+        }
+        
+        for (uint i = 1; i < nameBytes.length; i++) {
+            bytes1 c = nameBytes[i];
+            if (!(
+                (c >= 0x61 && c <= 0x7a) || 
+                (c >= 0x30 && c <= 0x39) || 
+                c == 0x2d || 
+                c == 0x2e
+            )) {
+                return false;
+            }
+        }
+        
+        return keccak256(bytes(_accountToPubKey[name])) == keccak256(bytes(""));
+    }
+}
+```

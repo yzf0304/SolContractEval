@@ -1,0 +1,137 @@
+Certainly! Below is the complete and functional `Registry` contract based on the provided context and description, using Solidity compiler version 0.5.17:
+
+```solidity
+pragma solidity 0.5.17;
+
+/**
+ * @notice This contract serves as a registry for managing and mapping token addresses between mainchain and sidechain, 
+ * as well as storing and updating addresses of key contracts such as the gateway, WETH token, validator, and acknowledgement.
+ * @dev The contract uses mappings to store the addresses of the contracts and token mappings. It also emits events for updates.
+ */
+contract Registry is HasAdmin {
+
+  event ContractAddressUpdated(
+    string indexed _name,
+    bytes32 indexed _code,
+    address indexed _newAddress
+  );
+
+  event TokenMapped(
+    address indexed _mainchainToken,
+    address indexed _sidechainToken,
+    uint32 _standard
+  );
+
+  string public constant GATEWAY = "GATEWAY";
+  string public constant WETH_TOKEN = "WETH_TOKEN";
+  string public constant VALIDATOR = "VALIDATOR";
+  string public constant ACKNOWLEDGEMENT = "ACKNOWLEDGEMENT";
+
+  struct TokenMapping {
+    address mainchainToken;
+    address sidechainToken;
+    uint32 standard; // 20, 721 or any other standards
+  }
+
+  mapping(bytes32 => address) public contractAddresses;
+  mapping(address => TokenMapping) public mainchainMap;
+  mapping(address => TokenMapping) public sidechainMap;
+
+  function getContract(string calldata _name)
+    external
+    view
+    returns (address _address)
+  {
+    _address = contractAddresses[getCode(_name)];
+    require(_address != address(0), "Contract address not set");
+  }
+
+  function isTokenMapped(address _token, uint32 _standard, bool _isMainchain)
+    external
+    view
+    returns (bool)
+  {
+    TokenMapping memory mappingInfo = _getTokenMapping(_token, _isMainchain);
+    return (mappingInfo.standard == _standard && mappingInfo.standard != 0);
+  }
+
+  function updateContract(string calldata _name, address _newAddress)
+    external
+    onlyAdmin
+  {
+    require(_newAddress != address(0), "New address is zero");
+    bytes32 code = getCode(_name);
+    contractAddresses[code] = _newAddress;
+    emit ContractAddressUpdated(_name, code, _newAddress);
+  }
+
+  function mapToken(address _mainchainToken, address _sidechainToken, uint32 _standard)
+    external
+    onlyAdmin
+  {
+    require(_mainchainToken != address(0) && _sidechainToken != address(0), "Token addresses cannot be zero");
+    mainchainMap[_mainchainToken] = TokenMapping(_mainchainToken, _sidechainToken, _standard);
+    sidechainMap[_sidechainToken] = TokenMapping(_mainchainToken, _sidechainToken, _standard);
+    emit TokenMapped(_mainchainToken, _sidechainToken, _standard);
+  }
+
+  function clearMapToken(address _mainchainToken, address _sidechainToken)
+    external
+    onlyAdmin
+  {
+    _clearMapEntry(mainchainMap[_mainchainToken]);
+    _clearMapEntry(sidechainMap[_sidechainToken]);
+  }
+
+  function getMappedToken(
+    address _token,
+    bool _isMainchain
+  )
+    external
+    view
+    returns (
+      address _mainchainToken,
+      address _sidechainToken,
+      uint32 _standard
+    )
+  {
+    TokenMapping memory mappingInfo = _getTokenMapping(_token, _isMainchain);
+    _mainchainToken = mappingInfo.mainchainToken;
+    _sidechainToken = mappingInfo.sidechainToken;
+    _standard = mappingInfo.standard;
+  }
+
+  function getCode(string memory _name)
+    public
+    pure
+    returns (bytes32)
+  {
+    return keccak256(abi.encodePacked(_name));
+  }
+
+  function _getTokenMapping(
+    address _token,
+    bool isMainchain
+  )
+    internal
+    view
+    returns (TokenMapping memory _mapping)
+  {
+    if (isMainchain) {
+      _mapping = mainchainMap[_token];
+    } else {
+      _mapping = sidechainMap[_token];
+    }
+  }
+
+  function _clearMapEntry(TokenMapping storage _entry)
+    internal
+  {
+    _entry.mainchainToken = address(0);
+    _entry.sidechainToken = address(0);
+    _entry.standard = 0;
+  }
+}
+```
+
+This `Registry` contract effectively manages and maps token addresses between the mainchain and sidechain, and stores and updates key contract addresses. It uses events to log updates, and the mappings are updated and cleared by an admin.

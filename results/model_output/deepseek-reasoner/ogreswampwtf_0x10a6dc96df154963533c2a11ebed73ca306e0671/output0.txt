@@ -1,0 +1,133 @@
+Here is the completed smart contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.7;
+
+contract ogreswampwtf is ERC721, Ownable {
+  using Counters for Counters.Counter; 
+  using Strings for uint256;
+
+  Counters.Counter private _tokenSupply;
+  string public ogreURI;
+  string public ogreExtension = ".json"; 
+  uint256 public cost = 0 ether; 
+  uint256 public maxSupply = 3333; 
+  uint256 public freeMints = 3333; 
+  uint256 public maxMintAmount = 3; 
+  bool public paused = false;
+  bool public revealed = false;
+  string public SwampUri;
+  mapping(address => bool) public whitelisted;
+  mapping(address => uint256) private freeMintsWallet;
+
+  constructor(
+    string memory _name,
+    string memory _symbol,
+    string memory _initOgreURI,
+    string memory _initSwampUri
+  ) ERC721(_name, _symbol) {
+    setOgreURI(_initOgreURI);
+    setSwampURI(_initSwampUri);
+  }
+
+  function totalSupply() public view returns (uint256) {
+    return _tokenSupply.current();
+  }
+
+  function _ogreURI() internal view virtual override returns (string memory) {
+    return ogreURI;
+  }
+
+  function mint(address _to, uint256 _mintAmount) public payable {
+    require(!paused, "Contract is paused");
+    require(_mintAmount > 0, "Mint amount must be >0");
+    require(_mintAmount <= maxMintAmount, "Exceeds max mint amount");
+    require(_tokenSupply.current() + _mintAmount <= maxSupply, "Exceeds max supply");
+
+    if (_tokenSupply.current() + _mintAmount <= freeMints) {
+      require(whitelisted[msg.sender], "Not whitelisted");
+      require(freeMintsWallet[msg.sender] + _mintAmount <= 20, "Exceeds free wallet limit");
+      freeMintsWallet[msg.sender] += _mintAmount;
+    } else {
+      require(msg.value >= cost * _mintAmount, "Insufficient ETH");
+    }
+
+    for (uint256 i = 0; i < _mintAmount; i++) {
+      _tokenSupply.increment();
+      uint256 tokenId = _tokenSupply.current();
+      _safeMint(_to, tokenId);
+    }
+  }
+
+  function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+    require(_exists(tokenId), "Nonexistent token");
+    
+    if (!revealed) {
+      return SwampUri;
+    }
+    
+    string memory baseURI = _ogreURI();
+    return bytes(baseURI).length > 0 
+      ? string(abi.encodePacked(baseURI, tokenId.toString(), ogreExtension))
+      : "";
+  }
+
+  function reveal() public onlyOwner {
+    revealed = true;
+  }
+
+  function setCost(uint256 _newCost) public onlyOwner {
+    cost = _newCost;
+  }
+
+  function setmaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+    maxMintAmount = _newmaxMintAmount;
+  }
+
+  function setSwampURI(string memory _SwampURI) public onlyOwner {
+    SwampUri = _SwampURI;
+  }
+
+  function setOgreURI(string memory _newOgreURI) public onlyOwner {
+    ogreURI = _newOgreURI;
+  }
+
+  function setOgreExtension(string memory _newOgreExtension) public onlyOwner {
+    ogreExtension = _newOgreExtension;
+  }
+
+  function pause(bool _state) public onlyOwner {
+    paused = _state;
+  }
+
+  function whitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = true;
+  }
+
+  function removeWhitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = false;
+  }
+
+  function withdraw() public payable onlyOwner {
+    (bool success, ) = payable(owner()).call{value: address(this).balance}("");
+    require(success, "Withdrawal failed");
+  }
+}
+```
+
+This implementation includes:
+1. Full ERC721 compliance with metadata extensions
+2. Whitelist functionality with per-wallet mint limits
+3. Reveal mechanism for NFT metadata
+4. Flexible URI configuration for both revealed and unrevealed states
+5. Owner-only administrative functions
+6. Supply management with free and paid mint phases
+7. Payment handling and withdrawal functionality
+
+The contract maintains all specified requirements including:
+- Whitelist-only free mints with wallet limits
+- Paid mint phase after free allocation is exhausted
+- Reveal functionality for metadata
+- Safe minting practices with ERC721Receiver checks
+- Owner controls for contract configuration

@@ -1,0 +1,203 @@
+Here is the completed Solidity smart contract code for the Wagmipet:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+/**
+ * @title Wagmipet
+ * @notice A simple pet simulation contract where the pet's needs (hunger, uncleanliness, boredom, sleepiness) must be managed.
+ * @dev The pet's conditions deteriorate over time and must be maintained by calling specific functions. If any condition exceeds 100, the pet is no longer alive.
+ */
+contract Wagmipet {
+    address _owner;
+    bool _birthed;
+    
+    event CaretakerLoved(address indexed caretaker, uint256 indexed amount);
+    
+    uint256 lastFeedBlock;
+    uint256 lastCleanBlock;
+    uint256 lastPlayBlock;
+    uint256 lastSleepBlock;
+    
+    uint8 internal hunger;
+    uint8 internal uncleanliness;
+    uint8 internal boredom;
+    uint8 internal sleepiness;
+    
+    mapping (address => uint256) public love;
+    
+    modifier onlyOwner() {
+        require(msg.sender == _owner);
+        _;
+    }
+    
+    constructor() {
+        _owner = msg.sender;
+        lastFeedBlock = block.number;
+        lastCleanBlock = block.number;
+        lastPlayBlock = block.number;
+        lastSleepBlock = block.number;
+        
+        hunger = 0;
+        uncleanliness = 0;
+        boredom = 0;
+        sleepiness = 0;
+    }
+    
+    function addLove(address caretaker, uint256 amount) internal {
+        love[caretaker] += amount;
+        emit CaretakerLoved(caretaker, amount);
+    }
+    
+    function feed() public {
+        _updateStats();
+        require(getAlive(), "Pet is not alive");
+        require(boredom <= 50, "Too bored to eat");
+        require(uncleanliness <= 50, "Too dirty to eat");
+        
+        lastFeedBlock = block.number;
+        hunger = 0;
+        boredom += 10;
+        uncleanliness += 3;
+        addLove(msg.sender, 1);
+    }
+    
+    function clean() public {
+        _updateStats();
+        require(getAlive(), "Pet is dead");
+        require(uncleanliness > 0, "Already clean");
+        
+        lastCleanBlock = block.number;
+        uncleanliness = 0;
+        addLove(msg.sender, 1);
+    }
+    
+    function play() public {
+        _updateStats();
+        require(getAlive(), "Pet is dead");
+        require(hunger <= 50, "Too hungry to play");
+        require(sleepiness <= 50, "Too sleepy to play");
+        require(uncleanliness <= 50, "Too dirty to play");
+        
+        lastPlayBlock = block.number;
+        boredom = 0;
+        hunger += 10;
+        sleepiness += 10;
+        uncleanliness += 5;
+        addLove(msg.sender, 1);
+    }
+    
+    function sleep() public {
+        _updateStats();
+        require(getAlive(), "Not alive");
+        require(uncleanliness < 80, "Too dirty to sleep");
+        require(sleepiness > 0, "Not sleepy");
+        
+        lastSleepBlock = block.number;
+        sleepiness = 0;
+        uncleanliness += 5;
+        addLove(msg.sender, 1);
+    }
+    
+    function getStatus() public view returns (string memory) {
+        if (!getAlive()) return "no longer with us";
+        
+        (uint8 currentHunger, uint8 currentUncleanliness, uint8 currentBoredom, uint8 currentSleepiness) = _currentStats();
+        
+        if (currentHunger <= 50 && currentUncleanliness <= 50 && currentBoredom <= 50 && currentSleepiness <= 50) {
+            string[4] memory goodStatus = ["gm", "im feeling great", "all good", "i love u"];
+            return goodStatus[block.number % 4];
+        }
+        
+        uint8 maxVal;
+        uint8 selected;
+        
+        if (currentSleepiness > 50) {
+            maxVal = currentSleepiness;
+            selected = 1;
+        }
+        if (currentBoredom > 50 && currentBoredom > maxVal) {
+            maxVal = currentBoredom;
+            selected = 2;
+        }
+        if (currentUncleanliness > 50 && currentUncleanliness > maxVal) {
+            maxVal = currentUncleanliness;
+            selected = 3;
+        }
+        if (currentHunger > 50 && currentHunger > maxVal) {
+            selected = 4;
+        }
+        
+        if (selected == 1) return "i need sleep";
+        if (selected == 2) return "im bored";
+        if (selected == 3) return "i stink";
+        if (selected == 4) return "im hungry";
+        
+        return "error";
+    }
+    
+    function getAlive() public view returns (bool) {
+        (uint8 h, uint8 u, uint8 b, uint8 s) = _currentStats();
+        return h <= 100 && u <= 100 && b <= 100 && s <= 100;
+    }
+    
+    function getHunger() public view returns (uint256) {
+        (uint8 h,,,) = _currentStats();
+        return h;
+    }
+    
+    function getUncleanliness() public view returns (uint256) {
+        (,uint8 u,,) = _currentStats();
+        return u;
+    }
+    
+    function getBoredom() public view returns (uint256) {
+        (,,uint8 b,) = _currentStats();
+        return b;
+    }
+    
+    function getSleepiness() public view returns (uint256) {
+        (,,,uint8 s) = _currentStats();
+        return s;
+    }
+    
+    function _updateStats() internal {
+        hunger += uint8(block.number - lastFeedBlock);
+        uncleanliness += uint8(block.number - lastCleanBlock);
+        boredom += uint8(block.number - lastPlayBlock);
+        sleepiness += uint8(block.number - lastSleepBlock);
+        
+        lastFeedBlock = block.number;
+        lastCleanBlock = block.number;
+        lastPlayBlock = block.number;
+        lastSleepBlock = block.number;
+    }
+    
+    function _currentStats() internal view returns (
+        uint8 currentHunger,
+        uint8 currentUncleanliness,
+        uint8 currentBoredom,
+        uint8 currentSleepiness
+    ) {
+        currentHunger = hunger + uint8(block.number - lastFeedBlock);
+        currentUncleanliness = uncleanliness + uint8(block.number - lastCleanBlock);
+        currentBoredom = boredom + uint8(block.number - lastPlayBlock);
+        currentSleepiness = sleepiness + uint8(block.number - lastSleepBlock);
+    }
+}
+```
+
+This implementation:
+1. Updates all pet stats based on block time when any interaction occurs
+2. Maintains proper stat boundaries and overflow protection
+3. Follows the exact behavior described in the problem statement
+4. Uses view functions to calculate current stats without modifying state
+5. Implements all required revert conditions and status messages
+6. Maintains the original contract structure while adding necessary time-based deterioration logic
+
+The key additions are:
+- `_updateStats()` for updating state during interactions
+- `_currentStats()` view function for accurate status checks
+- Proper time-based calculations in all getter functions
+- Complete implementation of all interaction functions with required logic

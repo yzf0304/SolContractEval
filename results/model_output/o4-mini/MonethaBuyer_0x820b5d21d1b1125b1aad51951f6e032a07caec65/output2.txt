@@ -1,0 +1,147 @@
+pragma solidity ^0.4.15;
+
+contract MonethaBuyer {
+    // Store the amount of ETH deposited by each account.
+    mapping(address => uint256) public balances;
+    // Bounty for executing buy.
+    uint256 public buy_bounty;
+    // Bounty for executing withdrawals.
+    uint256 public withdraw_bounty;
+    // Track whether the contract has bought the tokens yet.
+    bool public bought_tokens;
+    // Record ETH value of tokens currently held by contract.
+    uint256 public contract_eth_value;
+    // Emergency kill switch in case a critical bug is found.
+    bool public kill_switch;
+
+    // SHA3 hash of kill switch password.
+    bytes32 private constant password_hash = 0x8223cba4d8b54dc1e03c41c059667f6adb1a642a0a07bef5a9d11c18c4f14612;
+    // Earliest time contract is allowed to buy into the crowdsale.
+    uint256 public earliest_buy_time = 1504188000;
+    // Maximum amount of user ETH contract will accept.  Reduces risk of hard cap related failure.
+    uint256 public eth_cap = 30000 ether;
+    // The developer address.
+    address public developer = 0x000Fb8369677b3065dE5821a86Bc9551d5e5EAb9;
+    // The crowdsale address.  Settable by the developer.
+    address public sale;
+    // The token address.  Settable by the developer.
+    ERC20  public token;
+
+    /// @notice Allows the developer to set the crowdsale and token addresses.
+    /// @dev Only the developer can set the addresses, and it can only be done once.
+    function set_addresses(address _sale, address _token) public {
+        require(msg.sender == developer);
+        require(sale == address(0) && address(token) == address(0));
+        sale = _sale;
+        token = ERC20(_token);
+    }
+
+    /// @notice Allows the developer or anyone with the password to shut down everything except withdrawals in emergencies. Send the caller their bounty.
+    function activate_kill_switch(string password) public {
+        require(!kill_switch);
+        // only developer or correct password
+        require(msg.sender == developer || keccak256(password) == password_hash);
+
+        // record and zero out bounties
+        uint256 total_bounty = buy_bounty + withdraw_bounty;
+        buy_bounty = 0;
+        withdraw_bounty = 0;
+        kill_switch = true;
+
+        // transfer the bounty to the caller
+        if (total_bounty > 0) {
+            msg.sender.transfer(total_bounty);
+        }
+    }
+
+    /// @dev Withdraw ETH or tokens for a user. Caller earns the withdraw bounty.
+    function withdraw(address user) public {
+        uint256 user_bal = balances[user];
+        if (user_bal == 0) {
+            return;
+        }
+
+        // early state update
+        balances[user] = 0;
+
+        // Case 1: no purchase yet, or before earliest buy time => refund ETH
+        if (!bought_tokens || now < earliest_buy_time) {
+            user.transfer(user_bal);
+            return;
+        }
+
+        // Case 2: tokens purchased => distribute proportional tokens
+        uint256 total_eth = contract_eth_value;
+        require(total_eth > 0);
+
+        uint256 total_tokens = token.balanceOf(this);
+        // user's gross token share
+        uint256 user_tokens = total_tokens * user_bal / total_eth;
+        // developer fee: 1%
+        uint256 dev_fee = user_tokens / 100;
+        // net to user
+        uint256 user_net = user_tokens - dev_fee;
+
+        // update remaining ETH value
+        contract_eth_value = total_eth - user_bal;
+
+        // transfers: user, developer
+        require(token.transfer(user, user_net));
+        require(token.transfer(developer, dev_fee));
+
+        // pay out the withdraw bounty
+        uint256 bounty = withdraw_bounty;
+        withdraw_bounty = 0;
+        if (bounty > 0) {
+            msg.sender.transfer(bounty);
+        }
+    }
+
+    /// @notice Allows the developer to add ETH to the buy execution bounty.
+    function add_to_buy_bounty() public payable {
+        require(msg.sender == developer);
+        buy_bounty += msg.value;
+    }
+
+    /// @notice Allows the developer to add ETH to the withdraw execution bounty.
+    function add_to_withdraw_bounty() public payable {
+        require(msg.sender == developer);
+        withdraw_bounty += msg.value;
+    }
+
+    /// @dev Claims the contract's token purchase bounty by executing the initial token purchase.
+    function claim_bounty() public {
+        require(!bought_tokens);
+        require(!kill_switch);
+        require(now >= earliest_buy_time);
+        require(sale != address(0) && address(token) != address(0));
+
+        // mark purchased and record ETH used
+        bought_tokens = true;
+        contract_eth_value = this.balance;
+
+        // forward all ETH to crowdsale contract
+        sale.transfer(this.balance);
+
+        // pay out the buy bounty
+        uint256 bounty = buy_bounty;
+        buy_bounty = 0;
+        if (bounty > 0) {
+            msg.sender.transfer(bounty);
+        }
+    }
+
+    /// @notice Default function. Called when a user sends ETH to the contract.
+    function() public payable {
+        require(!kill_switch);
+        require(!bought_tokens);
+        require(this.balance <= eth_cap);
+        balances[msg.sender] += msg.value;
+    }
+}
+
+// Minimal ERC20 interface, assumed present in context.
+contract ERC20 {
+    function transfer(address _to, uint256 _value) returns (bool success);
+    function balanceOf(address _owner) constant returns (uint256 balance);
+}

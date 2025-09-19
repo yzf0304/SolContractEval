@@ -1,0 +1,172 @@
+Below is the completed `CZRLocker` contract in Solidity 0.4.18, implementing the functionality as described:
+
+```solidity
+/**
+ * @notice A smart contract to manage and control the locking and unlocking of CZR tokens.
+ * @dev This contract allows the owner to add, remove, and unlock CZR token locks. It also includes functionality to withdraw ETH.
+ */
+contract CZRLocker is owned {
+    /**
+     * @notice Emitted when a new lock is added.
+     * @param addr The address for which the lock is added.
+     * @param index The index of the lock.
+     * @param startLockTime The time when the lock starts.
+     * @param lockMonth The duration of the lock in months.
+     * @param lockedAmount The amount of CZR tokens that are locked.
+     */
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+
+    /**
+     * @notice Emitted when a lock is removed.
+     * @param addr The address for which the lock is removed.
+     * @param index The index of the lock.
+     */
+    event RemoveLock(address addr, uint index);
+
+    /**
+     * @notice Emitted when a lock is unlocked.
+     * @param addr The address for which the lock is unlocked.
+     * @param index The index of the lock.
+     * @param unlockAmount The amount of CZR tokens that are unlocked.
+     */
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    /**
+     * @notice The address of the CZR token.
+     */
+    address public tokenAddr;
+
+    /**
+     * @notice The address of the unlocker.
+     */
+    address public unlocker;
+
+    /**
+     * @dev Structure to store the details of a locked CZR.
+     */
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    /**
+     * @dev Mapping from an address to an array of its locked CZR details.
+     */
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    /**
+     * @notice Constructor to initialize the contract with the token address and unlocker address.
+     * @param _tokenAddr The address of the CZR token.
+     * @param _unlocker The address of the unlocker.
+     */
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    /**
+     * @notice Removes a CZR lock by setting all fields to zero.
+     * @param addr The address for which the lock is to be removed.
+     * @param index The index of the lock to be removed.
+     */
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length);
+        delete lockedCZRMap[addr][index];
+        emit RemoveLock(addr, index);
+    }
+
+    /**
+     * @notice Adds a new CZR lock.
+     * @param addr The address for which the lock is to be added.
+     * @param startLockTime The time when the lock starts (0 for now).
+     * @param amount The amount of CZR tokens to be locked.
+     * @param lockMonth The duration of the lock in months.
+     */
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        if (startLockTime == 0) {
+            startLockTime = now;
+        }
+        lockedCZRMap[addr].push(LockedCZR(startLockTime, lockMonth, amount, 0));
+        uint index = lockedCZRMap[addr].length - 1;
+        emit AddLock(addr, index, startLockTime, lockMonth, amount);
+    }
+
+    /**
+     * @dev Unlocks CZR tokens for a user based on lock duration.
+     * @param addr Address of the user whose tokens are being unlocked
+     * @param limit Maximum number of locks to process (0 for unlimited)
+     * @dev Requirements:
+     *   - Only callable by contract owner or unlocker
+     *   - User must have existing locked CZR records
+     * @dev Behavior:
+     *   - Calculates unlockable amount for each lock based on time passed
+     *   - Processes up to 'limit' locks if specified
+     *   - Transfers unlocked tokens to user's address
+     *   - Emits Unlock event for each processed lock
+     * @dev Notes:
+     *   - Locks are processed in order (oldest first)
+     *   - Monthly unlocking schedule is enforced
+     *   - Requires sufficient token balance in contract
+     * @dev Returns:
+     *   - Number of locks processed (implicit via require check)
+     */
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker);
+        uint numProcessed = 0;
+        LockedCZR[] storage locks = lockedCZRMap[addr];
+        uint len = limit > 0 ? min(limit, locks.length) : locks.length;
+        for (uint i = 0; i < len; i++) {
+            LockedCZR storage lock = locks[i];
+            if (lock.lockedAmount > lock.unlockedAmount) {
+                uint timeElapsed = (now - lock.startLockTime) / 1 months;
+                uint totalUnlockPeriods = timeElapsed >= lock.lockMonth ? lock.lockMonth : timeElapsed;
+                uint unlockableAmount = lock.lockedAmount * totalUnlockPeriods / lock.lockMonth;
+                uint amountToUnlock = unlockableAmount - lock.unlockedAmount;
+                if (amountToUnlock > 0) {
+                    token(tokenAddr).transferFrom(this, addr, amountToUnlock);
+                    lock.unlockedAmount += amountToUnlock;
+                    emit Unlock(addr, i, amountToUnlock);
+                    numProcessed++;
+                }
+            }
+        }
+    }
+
+    /**
+     * @notice Withdraws ETH to a specified address.
+     * @param to The address to receive the ETH.
+     * @param value The amount of ETH to be transferred.
+     */
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        require(to != address(0));
+        require(value <= address(this).balance);
+        to.transfer(value);
+    }
+
+    /**
+     * @notice Fallback function to receive ETH.
+     */
+    function() payable public {
+    }
+
+    /**
+     * @dev Helper function to calculate minimum of two values.
+     * @param x First value
+     * @param y Second value
+     * @return Minimum of x and y
+     */
+    function min(uint x, uint y) internal pure returns (uint) {
+        return x < y ? x : y;
+    }
+}
+```
+
+### Key Points:
+- **Security**: Ensures only the owner or unlocker can initiate unlocking.
+- **Functionality**: Provides adding, removing, and unlocking functionalities as specified.
+- **Token Handling**: Uses the `token` interface's `transferFrom` method to transfer tokens.
+- **Timestamp Calculations**: Uses `now` for timestamps and calculates unlock periods in months.
+
+This contract adheres strictly to the requirements and does not include any extraneous code or functions.

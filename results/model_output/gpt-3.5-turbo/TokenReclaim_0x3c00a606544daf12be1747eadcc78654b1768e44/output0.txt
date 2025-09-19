@@ -1,0 +1,114 @@
+```solidity
+// Below are some contexts potentially relevant to contract code generation.
+
+// You task is to complete the smart contract TokenReclaim strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.4.23, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @notice This contract allows users to register an account with a public key and an SPHTX name.
+ * @dev The contract ensures that each Ethereum address can only register one unique SPHTX name, and each SPHTX name is unique across the system.
+ */
+contract TokenReclaim {
+    mapping (address => string) internal _ethToSphtx;
+    mapping (string => string) internal _accountToPubKey;
+
+    /**
+     * @notice Emitted when an account is registered.
+     * @param ethAccount The Ethereum address of the user.
+     * @param sphtxAccount The SPHTX name of the user.
+     * @param pubKey The public key associated with the user's SPHTX name.
+     */
+    event AccountRegister(address ethAccount, string sphtxAccount, string pubKey);
+
+    /**
+     * @notice Registers an SPHTX name and associates it with a public key for the caller.
+     * @param name The SPHTX name to be registered. Must meet specific formatting requirements.
+     * @param pubKey The public key to be associated with the SPHTX name. Must meet length requirements.
+     * @dev
+     * - The SPHTX name must:
+     *   - Be between 3 and 16 characters long
+     *   - Start with a lowercase letter (a-z) or digit (0-9)
+     *   - Only contain lowercase letters (a-z), digits (0-9), hyphens (-), and periods (.)
+     * - The public key must be between 50 and 64 characters long
+     * - The function performs the following validations:
+     *   1. Validates the name length and format
+     *   2. Validates the public key length
+     *   3. Ensures the caller's address is not already registered
+     *   4. Ensures the name is not already in use by another account
+     * - If all validations pass:
+     *   - Stores the name-to-public key mapping
+     *   - Stores the Ethereum address-to-SPHTX name mapping
+     *   - Emits an AccountRegister event
+     * @dev The function uses keccak256 hashes for comparison to prevent storage gas optimization attacks
+     * @notice This registration is a one-time operation per address - subsequent calls will fail if the address is already registered
+     * @dev The name format restrictions help maintain a consistent naming convention across the system
+     */
+    function register(string memory name, string memory pubKey) public {
+        require(bytes(name).length >= 3 && bytes(name).length <= 16, "Name length must be between 3 and 16 characters");
+        require(bytes(pubKey).length >= 50 && bytes(pubKey).length <= 64, "Public key length must be between 50 and 64 characters");
+        require(bytes(_ethToSphtx[msg.sender]).length == 0, "Address is already registered");
+        require(bytes(_accountToPubKey[name]).length == 0, "Name is already in use");
+
+        _accountToPubKey[name] = pubKey;
+        _ethToSphtx[msg.sender] = name;
+
+        emit AccountRegister(msg.sender, name, pubKey);
+    }
+
+    /**
+     * @notice Returns the SPHTX name associated with the given Ethereum address.
+     * @param addr The Ethereum address to query.
+     * @return The SPHTX name associated with the address.
+     * @dev If the address has not registered an SPHTX name, it returns an empty string.
+     */
+    function account(address addr) public view returns (string memory) {
+        return _ethToSphtx[addr];
+    }
+
+    /**
+     * @notice Returns the public key associated with the SPHTX name of the given Ethereum address.
+     * @param addr The Ethereum address to query.
+     * @return The public key associated with the SPHTX name.
+     * @dev If the address has not registered an SPHTX name, it returns an empty string.
+     */
+    function keys(address addr) public view returns (string memory) {
+        string memory name = _ethToSphtx[addr];
+        return _accountToPubKey[name];
+    }
+
+    /**
+     * @notice Checks if a SPHTX name is available for registration.
+     * @param name The SPHTX name to check availability for.
+     * @return bool True if the name is available, false otherwise.
+     * @dev
+     * - Returns false if the name is already mapped to a public key in _accountToPubKey
+     * - Validates name length (must be between 3 and 16 characters)
+     * - Validates name format:
+     *   - Must start with a lowercase letter (a-z) or digit (0-9)
+     *   - Subsequent characters can be lowercase letters, digits, hyphens (-), or periods (.)
+     * - Returns true only if all validation checks pass and the name is not in use
+     * @notice This function performs static checks without modifying state
+     */
+    function nameAvailable(string memory name) public view returns (bool) {
+        if (bytes(_accountToPubKey[name]).length > 0) {
+            return false;
+        }
+
+        if (bytes(name).length < 3 || bytes(name).length > 16) {
+            return false;
+        }
+
+        bytes memory b = bytes(name);
+        if ((b[0] < 97 || b[0] > 122) && (b[0] < 48 || b[0] > 57)) {
+            return false;
+        }
+
+        for (uint i = 1; i < b.length; i++) {
+            if (!((b[i] >= 97 && b[i] <= 122) || (b[i] >= 48 && b[i] <= 57) || b[i] == 45 || b[i] == 46)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+```

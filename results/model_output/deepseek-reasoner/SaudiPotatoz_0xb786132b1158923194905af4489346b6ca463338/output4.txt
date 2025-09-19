@@ -1,0 +1,125 @@
+Here is the complete and functional `SaudiPotatoz` contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract SaudiPotatoz is ERC721A, Ownable, ReentrancyGuard {
+
+  string public baseURI;
+  uint public price = 0 ether;
+  uint public maxPerTx = 1;
+  uint public maxPerWallet = 1;
+  uint public totalFree = 0;
+  uint public maxSupply = 5000;
+  uint public nextOwnerToExplicitlySet;
+  bool public mintEnabled;
+
+  constructor() ERC721A("SaudiPotatoz", "SaudiPotatoz"){}
+
+  modifier callerIsUser() {
+    require(tx.origin == msg.sender, "The caller is another contract");
+    _;
+  }
+
+  function freeMint(uint256 amt) external callerIsUser {
+    require(mintEnabled, "Minting not enabled");
+    require(totalSupply() + amt <= totalFree, "Exceeds free supply");
+    require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+    require(amt <= maxPerTx, "Exceeds max per transaction");
+    require(numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max per wallet");
+    _safeMint(msg.sender, amt);
+  }
+
+  function mint(uint256 amt) external payable callerIsUser {
+    require(mintEnabled, "Minting not enabled");
+    require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+    require(amt <= maxPerTx, "Exceeds max per transaction");
+    require(numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max per wallet");
+    require(msg.value == amt * price, "Incorrect payment");
+    _safeMint(msg.sender, amt);
+  }
+
+  function ownerBatchMint(uint256 amt) external onlyOwner {
+    require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+    _safeMint(msg.sender, amt);
+  }
+
+  function toggleMinting() external onlyOwner {
+    mintEnabled = !mintEnabled;
+  }
+
+  function numberMinted(address owner) public view returns (uint256) {
+    return _numberMinted(owner);
+  }
+
+  function setBaseURI(string calldata baseURI_) external onlyOwner {
+    baseURI = baseURI_;
+  }
+
+  function setPrice(uint256 price_) external onlyOwner {
+    price = price_;
+  }
+
+  function setTotalFree(uint256 totalFree_) external onlyOwner {
+    totalFree = totalFree_;
+  }
+
+  function setMaxPerTx(uint256 maxPerTx_) external onlyOwner {
+    maxPerTx = maxPerTx_;
+  }
+
+  function setMaxPerWallet(uint256 maxPerWallet_) external onlyOwner {
+    maxPerWallet = maxPerWallet_;
+  }
+
+  function setmaxSupply(uint256 maxSupply_) external onlyOwner {
+    maxSupply = maxSupply_;
+  }
+
+  function _baseURI() internal view virtual override returns (string memory) {
+    return baseURI;
+  }
+
+  function withdraw() external onlyOwner nonReentrant {
+    (bool success, ) = msg.sender.call{value: address(this).balance}("");
+    require(success, "Transfer failed");
+  }
+
+  function setOwnersExplicit(uint256 quantity) external onlyOwner nonReentrant {
+    _setOwnersExplicit(quantity);
+  }
+
+  function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+    return ownershipOf(tokenId);
+  }
+
+  function _setOwnersExplicit(uint256 quantity) internal {
+    require(quantity > 0, "quantity must be nonzero");
+    require(nextOwnerToExplicitlySet < currentIndex, "all ownerships have been set");
+
+    uint256 endIndex = nextOwnerToExplicitlySet + quantity - 1;
+    if (endIndex >= currentIndex) {
+      endIndex = currentIndex - 1;
+    }
+
+    for (uint256 i = nextOwnerToExplicitlySet; i <= endIndex; i++) {
+      if (_ownerships[i].addr == address(0)) {
+        TokenOwnership memory ownership = ownershipOf(i);
+        _ownerships[i].addr = ownership.addr;
+        _ownerships[i].startTimestamp = ownership.startTimestamp;
+      }
+    }
+    nextOwnerToExplicitlySet = endIndex + 1;
+  }
+}
+``` 
+
+This implementation:
+1. Uses ERC721A for efficient batch minting
+2. Implements both free and paid minting with configurable limits
+3. Includes reentrancy protection and user verification
+4. Provides owner controls for supply, pricing, and metadata
+5. Optimizes ownership tracking with explicit setting functionality
+6. Follows best practices for access control and withdrawal patterns
+7. Maintains full compliance with the ERC721 standard and extensions

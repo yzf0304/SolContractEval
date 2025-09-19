@@ -1,0 +1,316 @@
+pragma solidity 0.5.17;
+
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "SafeMath: subtraction underflow");
+        return a - b;
+    }
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) { return 0; }
+        uint256 c = a * b;
+        require(c / a == b, "SafeMath: multiplication overflow");
+        return c;
+    }
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "SafeMath: division by zero");
+        return a / b;
+    }
+}
+
+contract PSP {
+    using SafeMath for uint256;
+
+    string public constant name = "ParaSwap";
+    string public constant symbol = "PSP";
+    uint8 public constant decimals = 18;
+    uint256 public totalSupply = 2_000_000_000e18;
+    address public minter;
+    uint256 public mintingAllowedAfter;
+    uint32 public constant minimumTimeBetweenMints = 365 days;
+    uint8 public constant mintCap = 2;
+
+    mapping(address => mapping(address => uint96)) internal allowances;
+    mapping(address => uint96) internal balances;
+
+    mapping(address => address) public delegates;
+    struct Checkpoint { uint32 fromBlock; uint96 votes; }
+    mapping(address => mapping(uint32 => Checkpoint)) public checkpoints;
+    mapping(address => uint32) public numCheckpoints;
+
+    bytes32 public constant DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,uint256 chainId,address verifyingContract)"
+    );
+    bytes32 public constant DELEGATION_TYPEHASH = keccak256(
+        "Delegation(address delegatee,uint256 nonce,uint256 expiry)"
+    );
+    bytes32 public constant PERMIT_TYPEHASH = keccak256(
+        "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+    );
+    mapping(address => uint) public nonces;
+
+    event MinterChanged(address indexed previousMinter, address indexed newMinter);
+    event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
+    event DelegateVotesChanged(address indexed delegate, uint previousBalance, uint newBalance);
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+
+    constructor(address account, address minter_, uint256 mintingAllowedAfter_) public {
+        require(mintingAllowedAfter_ >= block.timestamp, "PSP::constructor: minting can only begin after deployment");
+        balances[account] = uint96(totalSupply);
+        emit Transfer(address(0), account, totalSupply);
+        minter = minter_;
+        emit MinterChanged(address(0), minter_);
+        mintingAllowedAfter = mintingAllowedAfter_;
+    }
+
+    function setMinter(address minter_) external {
+        require(msg.sender == minter, "PSP: only current minter can change");
+        emit MinterChanged(minter, minter_);
+        minter = minter_;
+    }
+
+    function mint(address dst, uint256 rawAmount) external {
+        require(msg.sender == minter, "PSP: only minter can mint");
+        require(block.timestamp >= mintingAllowedAfter, "PSP: minting not allowed yet");
+        require(dst != address(0), "PSP: cannot mint to zero address");
+
+        mintingAllowedAfter = block.timestamp.add(minimumTimeBetweenMints);
+
+        // cap rawAmount to mintCap% of totalSupply
+        uint256 maxMint = totalSupply.mul(mintCap).div(100);
+        require(rawAmount <= maxMint, "PSP: mint amount exceeds cap");
+
+        totalSupply = totalSupply.add(rawAmount);
+
+        uint96 amount = safe96(rawAmount, "PSP: amount exceeds 96 bits");
+        balances[dst] = balances[dst] + amount;
+
+        emit Transfer(address(0), dst, rawAmount);
+        _moveDelegates(address(0), delegates[dst], amount);
+    }
+
+    function allowance(address account, address spender) external view returns (uint256) {
+        return allowances[account][spender];
+    }
+
+    function approve(address spender, uint256 rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP: amount exceeds 96 bits");
+        allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, rawAmount);
+        return true;
+    }
+
+    function permit(
+        address owner,
+        address spender,
+        uint256 rawAmount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        require(block.timestamp <= deadline, "PSP: signature expired");
+        bytes32 domainSeparator = keccak256(abi.encode(
+            DOMAIN_TYPEHASH,
+            keccak256(bytes(name)),
+            getChainId(),
+            address(this)
+        ));
+        uint256 ownerNonce = nonces[owner];
+        bytes32 structHash = keccak256(abi.encode(
+            PERMIT_TYPEHASH,
+            owner,
+            spender,
+            rawAmount,
+            ownerNonce,
+            deadline
+        ));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        address recoveredAddress = ecrecover(digest, v, r, s);
+        require(recoveredAddress == owner, "PSP: invalid signature");
+        nonces[owner] = ownerNonce + 1;
+
+        uint96 amount = rawAmount == uint256(-1)
+            ? uint96(-1)
+            : safe96(rawAmount, "PSP: amount exceeds 96 bits");
+        allowances[owner][spender] = amount;
+        emit Approval(owner, spender, rawAmount);
+    }
+
+    function balanceOf(address account) external view returns (uint256) {
+        return balances[account];
+    }
+
+    function transfer(address dst, uint256 rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP: amount exceeds 96 bits");
+        _transferTokens(msg.sender, dst, amount);
+        return true;
+    }
+
+    function transferFrom(address src, address dst, uint256 rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP: amount exceeds 96 bits");
+        address spender = msg.sender;
+        uint96 currentAllowance = allowances[src][spender];
+        if (currentAllowance != uint96(-1)) {
+            require(currentAllowance >= amount, "PSP: transfer amount exceeds allowance");
+            allowances[src][spender] = currentAllowance - amount;
+            emit Approval(src, spender, allowances[src][spender]);
+        }
+        _transferTokens(src, dst, amount);
+        return true;
+    }
+
+    function delegate(address delegatee) public {
+        _delegate(msg.sender, delegatee);
+    }
+
+    function delegateBySig(
+        address delegatee,
+        uint256 nonce,
+        uint256 expiry,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) public {
+        require(block.timestamp <= expiry, "PSP: signature expired");
+        bytes32 domainSeparator = keccak256(abi.encode(
+            DOMAIN_TYPEHASH,
+            keccak256(bytes(name)),
+            getChainId(),
+            address(this)
+        ));
+        bytes32 structHash = keccak256(abi.encode(
+            DELEGATION_TYPEHASH,
+            delegatee,
+            nonce,
+            expiry
+        ));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        address signatory = ecrecover(digest, v, r, s);
+        require(signatory != address(0), "PSP: invalid signature");
+        require(nonce == nonces[signatory], "PSP: invalid nonce");
+        nonces[signatory] = nonces[signatory] + 1;
+        _delegate(signatory, delegatee);
+    }
+
+    function getCurrentVotes(address account) external view returns (uint96) {
+        uint32 nCheck = numCheckpoints[account];
+        return nCheck > 0 ? checkpoints[account][nCheck - 1].votes : 0;
+    }
+
+    function getPriorVotes(address account, uint256 blockNumber) public view returns (uint96) {
+        require(blockNumber < block.number, "PSP: block not yet mined");
+        uint32 nCheck = numCheckpoints[account];
+        if (nCheck == 0) {
+            return 0;
+        }
+        // latest checkpoint
+        if (checkpoints[account][nCheck - 1].fromBlock <= blockNumber) {
+            return checkpoints[account][nCheck - 1].votes;
+        }
+        // earliest checkpoint
+        if (checkpoints[account][0].fromBlock > blockNumber) {
+            return 0;
+        }
+        // binary search
+        uint32 low = 0;
+        uint32 high = nCheck - 1;
+        while (high > low) {
+            uint32 mid = uint32((uint256(high).add(uint256(low))).sub(1).div(2));
+            Checkpoint memory cp = checkpoints[account][mid];
+            if (cp.fromBlock == blockNumber) {
+                return cp.votes;
+            } else if (cp.fromBlock < blockNumber) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return checkpoints[account][low].fromBlock <= blockNumber
+            ? checkpoints[account][low].votes
+            : checkpoints[account][low - 1].votes;
+    }
+
+    function _delegate(address delegator, address delegatee) internal {
+        address current = delegates[delegator];
+        uint96 delegatorBalance = balances[delegator];
+        delegates[delegator] = delegatee;
+        emit DelegateChanged(delegator, current, delegatee);
+        _moveDelegates(current, delegatee, delegatorBalance);
+    }
+
+    function _transferTokens(address src, address dst, uint96 amount) internal {
+        require(src != address(0), "PSP: cannot transfer from zero address");
+        require(dst != address(0), "PSP: cannot transfer to zero address");
+
+        balances[src] = sub96(balances[src], amount, "PSP: transfer amount exceeds balance");
+        balances[dst] = add96(balances[dst], amount, "PSP: transfer amount overflows");
+        emit Transfer(src, dst, uint256(amount));
+        _moveDelegates(delegates[src], delegates[dst], amount);
+    }
+
+    function _moveDelegates(address srcRep, address dstRep, uint96 amount) internal {
+        if (srcRep != dstRep && amount > 0) {
+            if (srcRep != address(0)) {
+                uint32 srcRepNum = numCheckpoints[srcRep];
+                uint96 srcOld = srcRepNum > 0 ? checkpoints[srcRep][srcRepNum - 1].votes : 0;
+                uint96 srcNew = sub96(srcOld, amount, "PSP: vote amount underflows");
+                _writeCheckpoint(srcRep, srcRepNum, srcOld, srcNew);
+            }
+            if (dstRep != address(0)) {
+                uint32 dstRepNum = numCheckpoints[dstRep];
+                uint96 dstOld = dstRepNum > 0 ? checkpoints[dstRep][dstRepNum - 1].votes : 0;
+                uint96 dstNew = add96(dstOld, amount, "PSP: vote amount overflows");
+                _writeCheckpoint(dstRep, dstRepNum, dstOld, dstNew);
+            }
+        }
+    }
+
+    function _writeCheckpoint(
+        address delegatee,
+        uint32 nCheckpoints,
+        uint96 oldVotes,
+        uint96 newVotes
+    ) internal {
+        uint32 blockNumber = safe32(block.number, "PSP: block number exceeds 32 bits");
+        if (nCheckpoints > 0 && checkpoints[delegatee][nCheckpoints - 1].fromBlock == blockNumber) {
+            checkpoints[delegatee][nCheckpoints - 1].votes = newVotes;
+        } else {
+            checkpoints[delegatee][nCheckpoints] = Checkpoint(blockNumber, newVotes);
+            numCheckpoints[delegatee] = nCheckpoints + 1;
+        }
+        emit DelegateVotesChanged(delegatee, uint256(oldVotes), uint256(newVotes));
+    }
+
+    function safe32(uint256 n, string memory errorMessage) internal pure returns (uint32) {
+        require(n < 2**32, errorMessage);
+        return uint32(n);
+    }
+
+    function safe96(uint256 n, string memory errorMessage) internal pure returns (uint96) {
+        require(n < 2**96, errorMessage);
+        return uint96(n);
+    }
+
+    function add96(uint96 a, uint96 b, string memory errorMessage) internal pure returns (uint96) {
+        uint96 c = a + b;
+        require(c >= a, errorMessage);
+        return c;
+    }
+
+    function sub96(uint96 a, uint96 b, string memory errorMessage) internal pure returns (uint96) {
+        require(b <= a, errorMessage);
+        return a - b;
+    }
+
+    function getChainId() internal pure returns (uint256) {
+        uint256 id;
+        assembly { id := chainid() }
+        return id;
+    }
+}

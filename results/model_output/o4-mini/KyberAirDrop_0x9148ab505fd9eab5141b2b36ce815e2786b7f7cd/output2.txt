@@ -1,0 +1,99 @@
+pragma solidity 0.4.15;
+
+contract KyberGenesisToken is Ownable {
+    string  public constant name     = "Kyber Genesis Token";
+    string  public constant symbol   = "KGT";
+    uint    public constant decimals = 0;
+
+    uint                   public totalSupply = 0;
+    mapping(address => uint) public balanceOf;
+
+    /// @notice Emitted when tokens are transferred, including zero value transfers.
+    event Transfer(address indexed _from, address indexed _to, uint _value);
+    /// @notice Emitted once minting is permanently ended.
+    event EndMinting(uint timestamp);
+
+    /**
+     * @notice Initializes the token and hands ownership to the designated minter.
+     * @param minter Address that will be allowed to mint.
+     */
+    function KyberGenesisToken(address minter) {
+        transferOwnership(minter);
+    }
+
+    /**
+     * @notice Mint one token for each address in `recipients`.
+     * @dev Can only be called by owner. Each recipient must hold zero tokens
+     *      prior to minting, and will end up with exactly one.
+     * @param recipients List of addresses to receive exactly one token each.
+     */
+    function mint(address[] recipients) onlyOwner {
+        for (uint i = 0; i < recipients.length; i++) {
+            address to = recipients[i];
+            require(to != address(0));
+            require(balanceOf[to] == 0);
+
+            balanceOf[to] = 1;
+            totalSupply += 1;
+
+            Transfer(address(0), to, 1);
+        }
+    }
+
+    /**
+     * @notice Irreversibly ends minting by zeroing out the owner.
+     * @dev After this is called, `onlyOwner` calls will revert.
+     */
+    function endMinting() onlyOwner {
+        owner = address(0);
+        EndMinting(now);
+    }
+
+    /**
+     * @notice Burns the caller's token.
+     * @dev Caller must hold exactly one token.
+     */
+    function burn() {
+        require(balanceOf[msg.sender] == 1);
+
+        balanceOf[msg.sender] = 0;
+        totalSupply -= 1;
+
+        Transfer(msg.sender, address(0), 1);
+    }
+
+    /**
+     * @notice Drain any ERC20 tokens accidentally sent to this contract.
+     * @dev Sends `amount` of `token` to the current owner (multisig).
+     *      Anyone can call this to rescue stuck tokens.
+     * @param token ERC20 contract to drain.
+     * @param amount Amount of tokens to transfer out.
+     */
+    function emergencyERC20Drain(ERC20Interface token, uint amount) {
+        // transfer to owner (predefined multisig)
+        token.transfer(owner, amount);
+    }
+
+    // ----------------------------------------------------------------------
+    // The following ERC20 methods are stubs. They always revert (or return 0).
+    // ----------------------------------------------------------------------
+
+    function transfer(address _to, uint _value) returns (bool) {
+        revert();
+    }
+
+    function transferFrom(address _from, address _to, uint _value) returns (bool) {
+        revert();
+    }
+
+    function approve(address _spender, uint _value) returns (bool) {
+        revert();
+    }
+
+    function allowance(address /*_owner*/, address /*_spender*/) constant returns (uint) {
+        return 0;
+    }
+
+    /// @notice Emitted on calls to `approve`, but since approve always reverts, this will never fire.
+    event Approval(address indexed _owner, address indexed _spender, uint _value);
+}

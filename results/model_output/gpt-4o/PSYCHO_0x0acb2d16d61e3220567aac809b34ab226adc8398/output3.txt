@@ -1,0 +1,224 @@
+To complete the `PSYCHO` contract according to the provided context and description, here's the functional implementation:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {return msg.sender;}
+    function _msgData() internal view virtual returns (bytes calldata) {return msg.data;}
+}
+
+abstract contract Ownable is Context {
+    address private _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() {_transferOwnership(_msgSender());}
+
+    function owner() public view virtual returns (address) {return _owner;}
+
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    function renounceOwnership() public virtual onlyOwner {
+        _transferOwnership(address(0));
+    }
+
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        _transferOwnership(newOwner);
+    }
+
+    function _transferOwnership(address newOwner) internal virtual {
+        address oldOwner = _owner;
+        _owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+}
+
+interface ERC721A__IERC721Receiver {
+    function onERC721Received(address operator, address from, uint256 tokenId, bytes calldata data) external returns (bytes4);
+}
+
+contract ERC721A {
+    // ERC721A implementation...
+    // For brevity, this is omitted here since it is provided in the context. Assume all required ERC721A functions and state variables are implemented.
+
+    function totalSupply() public view returns (uint256) {
+        // Implementation...
+    }
+
+    function balanceOf(address owner) public view returns (uint256) {
+        // Implementation...
+    }
+
+    function ownerOf(uint256 tokenId) public view returns (address) {
+        // Implementation...
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public {
+        // Implementation...
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public {
+        // Implementation...
+    }
+
+    function approve(address to, uint256 tokenId) public {
+        // Implementation...
+    }
+
+    function getApproved(uint256 tokenId) public view returns (address) {
+        // Implementation...
+    }
+
+    function setApprovalForAll(address operator, bool approved) public {
+        // Implementation...
+    }
+
+    function isApprovedForAll(address owner, address operator) public view returns (bool) {
+        // Implementation...
+    }
+
+    function name() public view returns (string memory) {
+        // Implementation...
+    }
+
+    function symbol() public view returns (string memory) {
+        // Implementation...
+    }
+
+    function tokenURI(uint256 tokenId) public view returns (string memory) {
+        // Implementation...
+    }
+
+    function _safeMint(address to, uint256 quantity) internal {
+        // Implementation...
+    }
+
+    function _mint(address to, uint256 quantity) internal {
+        // Implementation...
+    }
+
+    function _burn(uint256 tokenId) internal {
+        // Implementation...
+    }
+}
+
+contract PSYCHO is Ownable, ERC721A {
+    uint256 public maxSupply = 8888;
+    uint256 public maxFreeSupply = 8888;
+    uint256 public maxPerTxDuringMint = 20;
+    uint256 public maxPerAddressDuringMint = 21;
+    uint256 public maxPerAddressDuringFreeMint = 1;
+    uint256 public price = 0.003 ether;
+    bool public saleIsActive = true;
+    bool public revealed = false;
+
+    address constant internal TEAM_ADDRESS = 0x06C8033719b4fa22DE97d4632b4120D2F429c538;
+    string public baseURI = "";
+    string public constant baseExtension = "";
+    string public hiddenMetadataUri;
+    mapping(address => uint256) public freeMintedAmount;
+    mapping(address => uint256) public mintedAmount;
+
+    constructor() ERC721A("PSYCHO", "PSYCHO") {
+        _safeMint(msg.sender, 1);
+        setHiddenMetadataUri("https://gateway.pinata.cloud/ipfs/QmcJ9dJMmgNiUD9oSASjgxhbuqam7y2WVSxDKLuX3GFyz5");
+    }
+
+    modifier mintCompliance() {
+        require(saleIsActive, "Sale is not active yet.");
+        require(tx.origin == msg.sender, "Wrong Caller");
+        _;
+    }
+
+    function mint(uint256 _quantity) external payable mintCompliance {
+        require(_quantity > 0 && _quantity <= maxPerTxDuringMint, "Invalid mint quantity.");
+        require(totalSupply() + _quantity <= maxSupply, "Exceeds max supply.");
+        require(mintedAmount[msg.sender] + _quantity <= maxPerAddressDuringMint, "Exceeds max per address.");
+
+        require(msg.value >= _quantity * price, "Insufficient funds.");
+        
+        mintedAmount[msg.sender] += _quantity;
+        _mint(msg.sender, _quantity);
+    }
+
+    function freeMint(uint256 _quantity) external mintCompliance {
+        require(_quantity > 0 && _quantity <= maxPerAddressDuringFreeMint, "Invalid mint quantity.");
+        require(totalSupply() + _quantity <= maxFreeSupply, "Exceeds max free supply.");
+        require(freeMintedAmount[msg.sender] + _quantity <= maxPerAddressDuringFreeMint, "Exceeds max free per address.");
+
+        freeMintedAmount[msg.sender] += _quantity;
+        _mint(msg.sender, _quantity);
+    }
+
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    function setMaxPerTx(uint256 _amount) external onlyOwner {
+        maxPerTxDuringMint = _amount;
+    }
+
+    function setMaxPerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringMint = _amount;
+    }
+
+    function setMaxFreePerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringFreeMint = _amount;
+    }
+
+    function flipSale() public onlyOwner {
+        saleIsActive = !saleIsActive;
+    }
+
+    function setMaxSupply(uint256 newSupply) public onlyOwner {
+        maxSupply = newSupply;
+    }
+
+    function cutMaxSupply(uint256 _amount) public onlyOwner {
+        require(maxSupply - _amount >= totalSupply(), "Cannot reduce below total supply");
+        maxSupply -= _amount;
+    }
+
+    function setRevealed(bool _state) public onlyOwner {
+        revealed = _state;
+    }
+
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setHiddenMetadataUri(string memory _hiddenMetadataUri) public onlyOwner {
+        hiddenMetadataUri = _hiddenMetadataUri;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
+
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        if (!revealed) {
+            return hiddenMetadataUri;
+        }
+        return string(abi.encodePacked(_baseURI(), _toString(_tokenId), baseExtension));
+    }
+
+    function withdrawBalance() external payable onlyOwner {
+        require(payable(TEAM_ADDRESS).send(address(this).balance));
+    }
+}
+```
+
+### Explanation:
+- **Constructor**: Initializes the contract by minting one token to the owner and setting the hidden metadata URI.
+- **Mint Function**: Allows users to mint tokens by paying the set price. Validates constraints regarding maximum supply, transaction limits, and address limits.
+- **Free Mint Function**: Allows users to mint tokens without payment, adhering to free supply limits and address limits.
+- **Owner Functions**: Enable the contract owner to set various parameters such as price, maximum mint amounts, and toggle sale states.
+- **Metadata Handling**: Manages revealed states and URIs for metadata.
+- **Withdraw Function**: Sends the contract balance to a predefined team address, securing funds raised during the minting process.
+
+This implementation follows the requirements provided and leverages the existing ERC721A architecture.

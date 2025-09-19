@@ -1,0 +1,120 @@
+Below is the completed `UniqlyPresale4` smart contract according to the provided specifications and context:
+
+```solidity
+// SPDX-License-Identifier: Unlicense
+pragma solidity 0.8.2;
+
+abstract contract IERC20 {
+    function balanceOf(address _owner) external virtual returns (uint256 balance);
+    function transfer(address _to, uint256 _value) external virtual;
+}
+
+contract UniqlyPresale4 {
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+    uint256 constant failSafeTime = 2 weeks;
+    address public owner;
+    bool public presaleEnded;
+    bool public presaleFailed;
+    bool public presaleStarted;
+    mapping(address => uint256) private balances;
+
+    constructor(uint256 _presaleLimit, uint256 _minPerUser, uint256 _maxPerUser, uint256 _presaleEnd, address _owner) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 amount = msg.value + balances[msg.sender];
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+        balances[msg.sender] = amount;
+
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    function start() external {
+        require(msg.sender == owner, "Not the owner");
+        presaleStarted = true;
+    }
+
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    function balanceOf() external view returns (uint256) {
+        return balanceOf(msg.sender);
+    }
+
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    function withdraw() external returns (bool) {
+        if (!presaleEnded && block.timestamp > presaleEnd + failSafeTime) {
+            presaleFailed = true;
+        }
+
+        if (presaleFailed) {
+            uint256 amount = balances[msg.sender];
+            if (amount > 0) {
+                balances[msg.sender] = 0;
+                send(msg.sender, amount);
+                return true;
+            }
+        } else if (presaleEnded || collected() >= presaleLimit) {
+            if (msg.sender == owner) {
+                send(owner, collected());
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function send(address user, uint256 amount) private {
+        bool success;
+        assembly {
+            success := call(gas(), user, amount, 0, 0, 0, 0)
+        }
+        require(success, "Transfer failed");
+    }
+
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Not the owner");
+        uint256 balance = token.balanceOf(address(this));
+        token.transfer(owner, balance);
+    }
+
+    address public newOwner;
+
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Not the owner");
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Not the new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+```
+
+### Key Implementations:
+- **Presale Logic**: Users can contribute ETH within specified limits and time frames. The presale can end if the funding goal is met or the time expires.
+- **Withdrawal Logic**: Handles three scenarios: ongoing presale, successful presale, and failed presale.
+- **ERC20 Recovery**: Allows the owner to recover any ERC20 tokens accidentally sent to the contract.
+- **Ownership Transfer**: Ownership can be transferred in two steps to ensure the correct address becomes the owner.
+
+This contract adheres to the requirements provided, ensuring it is secure and functional for its intended use.

@@ -1,0 +1,165 @@
+pragma solidity 0.8.4;
+
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address _owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function increaseAllowance(address spender, uint256 addedValue) external;
+    function decreaseAllowance(address spender, uint256 subtractedValue) external;
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+}
+
+interface contract2 {
+    function claimRewards(address user) external returns (bool);
+}
+
+interface MCHstakingInterface {
+    function stakingStats(address user) external view returns (uint256 amount, uint256 stakingBlock);
+    function totalStaked() external view returns (uint256);
+    function showBlackUser(address user) external view returns (bool);
+    function allowance(address user) external view returns (bool);
+    function transferOwnership(address to) external;
+    function giveAllowence(address user) external;
+    function removeAllowence(address user) external;
+    function addToBlackList(address user) external;
+    function removeFromBlackList(address user) external;
+    function stakeMCH(uint256 amount) external;
+    function unstake(address user, uint256 amount) external;
+    function refreshBlock(address user) external;
+    function setData(address user, uint256 staked, uint256 stakingBlock, uint256 stakedMCH) external;
+    function transferMCH(address to, uint256 amount) external;
+    function emergencyWithdraw(uint256 amount) external;
+    event Stake(address indexed staker, uint256 indexed amount);
+}
+
+contract MCHstaking is MCHstakingInterface {
+    address private _owner;
+    mapping(address => bool) private _allowence;
+    IERC20 private MCH;
+    contract2 private MCF;
+
+    mapping(address => uint256) private _staking;
+    mapping(address => uint256) private _block;
+    uint256 private _totalStaked;
+    mapping(address => bool) private _blackListed;
+
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "MCHstaking: caller is not the owner");
+        _;
+    }
+
+    modifier onlyAllowed() {
+        require(_allowence[msg.sender], "MCHstaking: caller has no allowance");
+        _;
+    }
+
+    constructor(address MCHtoken) {
+        require(MCHtoken != address(0), "MCHstaking: token address zero");
+        MCH = IERC20(MCHtoken);
+        _owner = msg.sender;
+        _allowence[msg.sender] = true;
+    }
+
+    function setMCFcontract(address contractAddress) external override onlyOwner {
+        require(contractAddress != address(0), "MCHstaking: MCF address zero");
+        MCF = contract2(contractAddress);
+    }
+
+    function stakingStats(address user) external view override returns (uint256 amount, uint256 stakingBlock) {
+        amount = _staking[user];
+        stakingBlock = _block[user];
+    }
+
+    function totalStaked() external view override returns (uint256) {
+        return _totalStaked;
+    }
+
+    function showBlackUser(address user) external view override onlyAllowed returns (bool) {
+        return _blackListed[user];
+    }
+
+    function allowance(address user) external view override onlyAllowed returns (bool) {
+        return _allowence[user];
+    }
+
+    function transferOwnership(address to) external override onlyOwner {
+        require(to != address(0), "MCHstaking: new owner is zero");
+        _owner = to;
+        _allowence[to] = true;
+    }
+
+    function giveAllowence(address user) external override onlyOwner {
+        require(user != address(0), "MCHstaking: user zero");
+        _allowence[user] = true;
+    }
+
+    function removeAllowence(address user) external override onlyOwner {
+        require(user != address(0), "MCHstaking: user zero");
+        _allowence[user] = false;
+    }
+
+    function addToBlackList(address user) external override onlyOwner {
+        require(user != address(0), "MCHstaking: user zero");
+        _blackListed[user] = true;
+    }
+
+    function removeFromBlackList(address user) external override onlyOwner {
+        require(user != address(0), "MCHstaking: user zero");
+        _blackListed[user] = false;
+    }
+
+    function stakeMCH(uint256 amount) external override {
+        require(amount > 0, "MCHstaking: amount zero");
+        require(!_blackListed[msg.sender], "MCHstaking: blacklisted");
+        // settle rewards before state change
+        if (address(MCF) != address(0)) {
+            MCF.claimRewards(msg.sender);
+        }
+        // transfer tokens
+        require(MCH.transferFrom(msg.sender, address(this), amount), "MCHstaking: transferFrom failed");
+        _staking[msg.sender] += amount;
+        _block[msg.sender] = block.number;
+        _totalStaked += amount;
+        emit Stake(msg.sender, amount);
+    }
+
+    function unstake(address user, uint256 amount) external override onlyAllowed {
+        require(user != address(0), "MCHstaking: user zero");
+        require(amount > 0, "MCHstaking: amount zero");
+        require(_staking[user] >= amount, "MCHstaking: insufficient staked");
+        // settle rewards before state change
+        if (address(MCF) != address(0)) {
+            MCF.claimRewards(user);
+        }
+        _staking[user] -= amount;
+        _block[user] = block.number;
+        _totalStaked -= amount;
+        require(MCH.transfer(user, amount), "MCHstaking: transfer failed");
+    }
+
+    function refreshBlock(address user) external override onlyAllowed {
+        require(user != address(0), "MCHstaking: user zero");
+        _block[user] = block.number;
+    }
+
+    function setData(address user, uint256 staked, uint256 stakingBlock, uint256 stakedMCH) external override onlyAllowed {
+        require(user != address(0), "MCHstaking: user zero");
+        _staking[user] = staked;
+        _block[user] = stakingBlock;
+        _totalStaked = stakedMCH;
+    }
+
+    function transferMCH(address to, uint256 amount) external override onlyAllowed {
+        require(to != address(0), "MCHstaking: to zero");
+        require(amount > 0, "MCHstaking: amount zero");
+        require(MCH.balanceOf(address(this)) >= amount, "MCHstaking: insufficient balance");
+        require(MCH.transfer(to, amount), "MCHstaking: transfer failed");
+    }
+
+    function emergencyWithdraw(uint256 amount) external override onlyOwner {
+        require(amount > 0, "MCHstaking: amount zero");
+        require(MCH.balanceOf(address(this)) >= amount, "MCHstaking: insufficient balance");
+        require(MCH.transfer(_owner, amount), "MCHstaking: transfer failed");
+    }
+}

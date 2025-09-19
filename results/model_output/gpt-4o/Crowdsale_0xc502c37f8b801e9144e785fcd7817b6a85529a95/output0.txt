@@ -1,0 +1,141 @@
+Below is the complete code implementation of the `Crowdsale` contract strictly adhering to the provided context and description. 
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract Crowdsale is Ownable {
+  using SafeMath for uint256;
+
+  DragonToken public token;
+  address public tokenReserve;
+  uint256 public startTime;
+  uint256 public endTime;
+  address public wallet;
+  uint256 public rate;
+  uint256 public weiRaised;
+  uint256 public tokensSold;
+
+  mapping(address => uint256) balances;
+  mapping(address => uint256) releaseTime;
+
+  event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amount, uint256 releaseTime);
+  event EndTimeUpdated();
+  event DragonPriceUpdated();
+  event TokenReleased(address indexed holder, uint256 amount);
+
+  function Crowdsale() public {
+    owner = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e; // overriding owner
+    startTime = now;
+    endTime = 1521187200; // set as required
+    rate = 5000000000000000; // price in wei
+    wallet = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    token = DragonToken(0x814F67fA286f7572B041D041b1D99b432c9155Ee);
+    tokenReserve = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+  }
+
+  function () external payable {
+    buyTokens(msg.sender);
+  }
+
+  function buyTokens(address beneficiary) public payable {
+    require(beneficiary != address(0));
+    require(validPurchase());
+
+    uint256 weiAmount = msg.value;
+    uint256 tokens = getTokenAmount(weiAmount);
+
+    weiRaised = weiRaised.add(weiAmount);
+    tokensSold = tokensSold.add(tokens);
+
+    uint256 lockedUntil = assignTokens(beneficiary, tokens);
+    TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, lockedUntil);
+
+    forwardFunds();
+  }
+
+  function hasEnded() public view returns (bool) {
+    return now > endTime;
+  }
+
+  function getTokenAmount(uint256 weiAmount) internal view returns(uint256) {
+    return weiAmount.div(rate);
+  }
+
+  function validPurchase() internal view returns (bool) {
+    bool withinPeriod = now >= startTime && now <= endTime;
+    bool nonZeroPurchase = msg.value != 0;
+    return withinPeriod && nonZeroPurchase;
+  }
+
+  function forwardFunds() internal {
+    wallet.transfer(msg.value);
+  }
+
+  function updateEndTime(uint256 newTime) onlyOwner external {
+    require(newTime > now);
+    endTime = newTime;
+    EndTimeUpdated();
+  }
+
+  function updateDragonPrice(uint256 weiAmount) onlyOwner external {
+    require(weiAmount > 0);
+    rate = weiAmount;
+    DragonPriceUpdated();
+  }
+
+  function assignTokens(address beneficiary, uint256 amount) private returns(uint256 lockedFor) {
+    require(token.transferFrom(tokenReserve, address(this), amount)); // transfer tokens from the reserve to contract
+    balances[beneficiary] = balances[beneficiary].add(amount);
+    releaseTime[beneficiary] = now.add(30 days); // tokens locked for 30 days
+    return releaseTime[beneficiary];
+  }
+
+  function balanceOf(address _owner) public view returns (uint256 balance) {
+    return balances[_owner];
+  }
+
+  function unlockTime(address _owner) public view returns (uint256 time) {
+    return releaseTime[_owner];
+  }
+
+  function releaseDragonTokens() public {
+    uint256 amount = balances[msg.sender];
+    require(amount > 0);
+    require(now >= releaseTime[msg.sender]);
+
+    balances[msg.sender] = 0;
+    releaseTime[msg.sender] = 0;
+
+    require(token.transferFrom(address(this), msg.sender, amount)); // transfer tokens to beneficiary
+    TokenReleased(msg.sender, amount);
+  }
+}
+```
+
+### Explanation of Contract Functions:
+1. **Fallback Function**: Enables Ether payments to directly call `buyTokens` function.
+    
+2. **`buyTokens`**: Allows participants to purchase tokens by sending Ether. Tokens are locked for 30 days after purchase.
+
+3. **`hasEnded`**: Checks whether the crowdsale has concluded based on the current timestamp.
+
+4. **`getTokenAmount`**: Calculates the number of tokens purchasable for a given amount of Ether.
+
+5. **`validPurchase`**: Checks whether the crowdsale conditions for purchase are met.
+
+6. **`forwardFunds`**: Transfers Ether collected via the sale to the wallet.
+
+7. **`updateEndTime`**: Allows the owner to update the end time of the crowdsale.
+
+8. **`updateDragonPrice`**: Allows the owner to update the exchange rate (price of tokens in wei).
+
+9. **`assignTokens`**: Assigns tokens to the beneficiary and locks them for 30 days.
+
+10. **`balanceOf` and `unlockTime`**: Display the current balance and unlock time for a participant.
+
+11. **`releaseDragonTokens`**: Releases the tokens to the beneficiary when the lock period ends.
+
+### Key Considerations:
+- Solidity `<0.5.0` is used, so constructors are defined as functions named after the contract name.
+- Ensures backward compatibility with version `0.4.18`.
+- Event logging is included for key actions (purchase, price update, etc.).

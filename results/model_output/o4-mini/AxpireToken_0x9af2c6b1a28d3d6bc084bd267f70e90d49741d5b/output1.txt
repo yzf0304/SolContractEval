@@ -1,0 +1,114 @@
+pragma solidity ^0.4.20;
+
+contract AxpireToken is ERC223, ERC20 {
+    uint256 public initialSupply = 350000000 * 10**8;
+    string public tokenName    = "aXpire Token";
+    string public tokenSymbol  = "AXP";
+    uint8  public decimalUnits = 8;
+
+    function AxpireToken() public
+        ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        // constructor of ERC20 already set balances[owner], totalSupply, name, symbol, decimals
+        // but we ensure owner is correct
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+
+    // ERC223 transfer with data
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        require(transferInternal(msg.sender, to, value, data));
+        return true;
+    }
+
+    // ERC223 transfer with data & custom fallback
+    function transfer(address to, uint256 value, bytes data, string customFallback) public returns (bool success) {
+        require(transferInternal(msg.sender, to, value, data, true, customFallback));
+        return true;
+    }
+
+    // override ERC20 transferFrom to emit ERC223 events & support contract receivers
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        require(transferInternal(_from, _to, _value));
+        return true;
+    }
+
+    // internal: transfer without data (ERC20 style)
+    function transferInternal(address from, address to, uint256 value) internal returns (bool success) {
+        bytes memory empty;
+        return transferInternal(from, to, value, empty);
+    }
+
+    // internal: transfer with data (ERC223 style)
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        return transferInternal(from, to, value, data, false, "");
+    }
+
+    // internal: transfer with data & optional custom fallback
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        // zero‐value transfers still fire the event
+        if (value == 0) {
+            Transfer(from, to, value, data);
+            return true;
+        }
+
+        // standard balance check
+        require(balances[from] >= value);
+        balances[from] = balances[from].sub(value);
+        balances[to]   = balances[to].add(value);
+
+        // if recipient is a contract, invoke fallback
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                // call custom fallback signature, e.g. "myFallback(address,uint256,bytes)"
+                require(
+                    to.call.value(0)(
+                        abi.encodeWithSignature(
+                            strConcat(customFallback, "(address,uint256,bytes)"),
+                            from,
+                            value,
+                            data
+                        )
+                    )
+                );
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+
+        // emit ERC223 and ERC20 Transfer events
+        Transfer(from, to, value, data);
+        Transfer(from, to, value);
+        return true;
+    }
+
+    // detect if address is a contract
+    function isContract(address _addr) private returns (bool) {
+        uint256 size;
+        assembly { size := extcodesize(_addr) }
+        return size > 0;
+    }
+
+    // helper to concatenate strings (only used internally for signature building)
+    function strConcat(string _a, string _b) internal pure returns (string) {
+        bytes memory _ba = bytes(_a);
+        bytes memory _bb = bytes(_b);
+        string memory ab = new string(_ba.length + _bb.length);
+        bytes memory bab = bytes(ab);
+        uint256 k = 0;
+        for (uint256 i = 0; i < _ba.length; i++) bab[k++] = _ba[i];
+        for (i = 0; i < _bb.length; i++)    bab[k++] = _bb[i];
+        return string(bab);
+    }
+}

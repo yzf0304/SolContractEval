@@ -1,0 +1,110 @@
+I'll complete the ProxyRegistry contract based on the provided context and requirements:
+
+```solidity
+/**
+ * @title ProxyRegistry
+ * @notice A registry for managing proxy contracts and their permissions.
+ * @dev This contract allows the owner to grant and revoke access to specific contracts, and users to register their own proxy contracts.
+ */
+contract ProxyRegistry is Ownable {
+
+    /* DelegateProxy implementation contract. Must be initialized. */
+    address public delegateProxyImplementation;
+
+    /* Authenticated proxies by user. */
+    mapping(address => OwnableDelegateProxy) public proxies;
+
+    /* Contracts pending access. */
+    mapping(address => uint256) public pending;
+
+    /* Contracts allowed to call those proxies. */
+    mapping(address => bool) public contracts;
+
+    /* Delay period for adding an authenticated contract.
+       This mitigates a particular class of potential attack on the Elementix DAO (which owns this registry) - if at any point the value of assets held by proxy contracts exceeded the value of half the ELT supply (votes in the DAO),
+       a malicious but rational attacker could buy half the Elementix and grant themselves access to all the proxy contracts. A delay period renders this attack nonthreatening - given one weeks, if that happened, users would have
+       plenty of time to notice and transfer their assets.
+    */
+    uint256 public DELAY_PERIOD = 7 days;
+
+    // event
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool opt);
+
+    /**
+     * @notice Start the process to enable access for a specified contract. Subject to a delay period.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function startGrantAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        require(!contracts[addr], "Contract is already authenticated");
+        require(pending[addr] == 0, "Contract authentication already pending");
+        pending[addr] = block.timestamp;
+    }
+
+    /**
+     * @notice End the process to enable access for a specified contract after the delay period has passed.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function endGrantAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        require(pending[addr] != 0, "Contract authentication not started");
+        require(block.timestamp - pending[addr] >= DELAY_PERIOD, "Delay period not yet passed");
+        
+        pending[addr] = 0;
+        contracts[addr] = true;
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice Revoke access for a specified contract. Can be done instantly.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address of which to revoke permissions
+     */
+    function revokeAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        contracts[addr] = false;
+        emit AuthenticationOperation(addr, false);
+    }
+
+    /**
+     * @notice Register a proxy contract with this registry.
+     * @dev Must be called by the user for whom the proxy is being created. Creates a new AuthenticatedProxy.
+     * @return proxy New AuthenticatedProxy contract
+     */
+    function registerProxy()
+        public
+        returns (OwnableDelegateProxy proxy)
+    {
+        require(proxies[msg.sender] == OwnableDelegateProxy(address(0)), "Proxy already registered");
+        
+        proxy = new OwnableDelegateProxy(msg.sender, delegateProxyImplementation);
+        proxies[msg.sender] = proxy;
+        
+        emit RegisterProxy(msg.sender, address(proxy));
+        
+        return proxy;
+    }
+}
+
+/**
+ * @title OwnableDelegateProxy
+ * @notice A proxy contract that delegates calls to an implementation contract and is owned by a specific address
+ */
+contract OwnableDelegateProxy {
+    constructor(address owner, address implementation) {
+        // Implementation specific to requirements
+        // This is a minimal implementation to make the code compile
+    }
+}
+```
+
+Note: I've included a minimal `OwnableDelegateProxy` contract to make the code compile. In a real implementation, you would need to properly define this contract with the necessary functionality for delegation and ownership. Since the complete implementation details of this contract weren't provided in the context, I've included only a basic structure.

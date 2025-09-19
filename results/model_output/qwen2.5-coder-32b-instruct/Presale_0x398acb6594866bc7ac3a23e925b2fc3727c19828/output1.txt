@@ -1,0 +1,295 @@
+Below is the completed and functional `Presale` contract based on the provided context and requirements. The contract includes all necessary logic for setting up and managing a token presale with tiered discounts, purchase limits, participant authorization, and functionality for purchases and withdrawals.
+
+```solidity
+pragma solidity ^0.4.18;
+
+import "./Discounts.sol";
+import "./Limits.sol";
+import "./SeeToken.sol";
+import "zeppelin-solidity/contracts/lifecycle/Pausable.sol";
+import "zeppelin-solidity/contracts/ownership/Claimable.sol";
+import "zeppelin-solidity/contracts/math/SafeMath.sol";
+
+/**
+ * @title Presale
+ * @notice This contract facilitates a token presale with tiered discounts, purchase limits, and authorization for participants.
+ * @dev The contract is pausable and claimable, inheriting from Pausable and Claimable contracts. It manages the sale of tokens,
+ *      setting rates, adding tiers, authorizing participants, and handling purchases and withdrawals.
+ */
+contract Presale is Claimable, Pausable {
+  using Discounts for Discounts.Collection;
+  using Limits for Limits.Window;
+  using SafeMath for uint256;
+
+  /**
+   * @notice Struct to store participant information.
+   * @dev Contains whether the participant is authorized and their minimum tier.
+   */
+  struct Participant {
+    bool authorized;
+    uint256 minimumTier;
+  }
+
+  /**************************************************************************
+   * STORAGE / EVENTS
+   *************************************************************************/
+
+  SeeToken public token;
+  Discounts.Collection public discounts;
+  Limits.Window public cap;
+  mapping (address => Participant) public participants;
+
+  /**
+   * @notice Emitted when a new tier is added.
+   * @param discount The discount in basis points.
+   * @param available The available supply at the tier.
+   */
+  event Tier(uint256 discount, uint256 available);
+
+  /**************************************************************************
+   * CONSTRUCTOR / LIFECYCLE
+   *************************************************************************/
+
+  function Presale(address _token)
+    public
+  {
+    token = SeeToken(_token);
+    paused = true;
+  }
+
+  /**
+   * @notice Claims ownership of the token contract.
+   * @dev This function should be called as part of the migration process.
+   */
+  function claimToken()
+    public
+  {
+    token.claimOwnership();
+  }
+
+  /**
+   * @notice Unpauses the contract, allowing purchases.
+   * @dev Can only be called by the owner, and the contract must be paused, have a set rate, be capped, and own the token.
+   */
+  function unpause()
+    onlyOwner
+    whenPaused
+    whenRateSet
+    whenCapped
+    whenOwnsToken
+    public
+  {
+    super.unpause();
+  }
+
+  /**************************************************************************
+   * ADMIN INTERFACE
+   *************************************************************************/
+
+  /**
+   * @notice Sets the base purchase rate for the token.
+   * @param _purchaseRate The number of tokens granted per wei.
+   * @dev Can only be called by the owner and while the contract is paused.
+   */
+  function setRate(uint256 _purchaseRate)
+    onlyOwner
+    whenPaused
+    public
+  {
+    discounts.baseRate = _purchaseRate;
+  }
+
+  /**
+   * @notice Specifies purchasing limits for a single account.
+   * @param _amount The limit of tokens that a participant may purchase.
+   * @param _duration The duration in blocks over which the limit applies.
+   * @dev Can only be called by the owner and while the contract is paused.
+   */
+  function limitPurchasing(uint256 _amount, uint256 _duration)
+    onlyOwner
+    whenPaused
+    public
+  {
+    cap.amount = _amount;
+    cap.duration = _duration;
+  }
+
+  /**
+   * @notice Adds a new tier with a given discount and available supply.
+   * @param _discount The discount in basis points.
+   * @param _available The available supply at the tier.
+   * @dev Can only be called by the owner and while the contract is paused.
+   */
+  function addTier(uint256 _discount, uint256 _available)
+    onlyOwner
+    whenPaused
+    public
+  {
+    discounts.addTier(_discount, _available);
+    Tier(_discount, _available);
+  }
+
+  /**
+   * @notice Authorizes a group of participants for a specific tier.
+   * @param _minimumTier The minimum tier for the list of participants.
+   * @param _authorized An array of addresses to be authorized.
+   * @dev Can only be called by the owner.
+   */
+  function authorizeForTier(uint256 _minimumTier, address[] _authorized)
+    onlyOwner
+    public
+  {
+    for(uint256 i = 0; i < _authorized.length; i++) {
+      participants[_authorized[i]] = Participant(true, _minimumTier);
+    }
+  }
+
+  /**
+   * @notice Withdraws the balance from the presale contract.
+   * @dev Can only be called by the owner.
+   */
+  function withdraw()
+    onlyOwner
+    public
+  {
+    owner.transfer(this.balance);
+  }
+
+  /**************************************************************************
+   * PURCHASE INTERFACE
+   *************************************************************************/
+
+  /**
+   * @notice Fallback function that forwards to `purchaseTokens()`.
+   * @dev Accepts Ether and calls `purchaseTokens()`.
+   */
+  function ()
+    public
+    payable
+  {
+    purchaseTokens();
+  }
+
+  /**
+   * @notice Public purchase interface for authorized participants.
+   * @dev Purchases tokens starting from the authorized minimum tier.
+   * Can only be called by an authorized participant and while the contract is not paused.
+   */
+  function purchaseTokens()
+    onlyAuthorized
+    whenNotPaused
+    public
+    payable
+  {
+    uint256 _amount = cap.getLimit(msg.sender);
+    require(_amount > 0);
+    
+    uint256 _remainingFunds;
+    uint256 _purchasedTokens;
+
+    (_purchasedTokens, _remainingFunds) = discounts.purchaseTokens(
+      _amount,
+      msg.value,
+      participants[msg.sender].minimumTier
+    );
+    
+    if (_remainingFunds > 0) {
+      msg.sender.transfer(_remainingFunds);
+    }
+    
+    cap.recordPurchase(msg.sender, _purchasedTokens);
+    token.issue(msg.sender, _purchasedTokens);
+  }
+
+  /**************************************************************************
+   * PRICING / AVAILABILITY - VIEW INTERFACE
+   *************************************************************************/
+
+  /**
+   * @notice Gets the terms for the purchasing limit window.
+   * @return _amount The number of tokens allowed.
+   * @return _duration The duration in blocks.
+   */
+  function getPurchaseLimit()
+    public
+    view
+    returns (uint256 _amount, uint256 _duration)
+  {
+    return (cap.amount, cap.duration);
+  }
+
+  /**
+   * @notice Gets the tiers currently set up, with discounts and available supplies.
+   * @return An array of tuples (discount, available).
+   */
+  function getTiers()
+    public
+    view
+    returns (uint256[2][] _tiers)
+  {
+    _tiers = new uint256[2][](discounts.tiers.length);
+    for (uint256 i = 0; i < discounts.tiers.length; i++) {
+      _tiers[i][0] = discounts.tiers[i].discount;
+      _tiers[i][1] = discounts.tiers[i].available;
+    }
+    return;
+  }
+
+  /**
+   * @notice Gets the available supply for each tier for a given participant.
+   * @param _participant The address of the participant.
+   * @return An array of available supplies by tier index, zeroes for non-authorized participants.
+   */
+  function getAvailability(address _participant)
+    public
+    view
+    returns (uint256[])
+  {
+    uint256[] memory _availability = new uint256[](discounts.tiers.length);
+    if (participants[_participant].authorized) {
+      for (uint256 i = 0; i < discounts.tiers.length; i++) {
+        _availability[i] = discounts.tiers[i].available;
+      }
+    }
+    return _availability;
+  }
+
+  /**************************************************************************
+   * MODIFIERS
+   *************************************************************************/
+
+  /**
+   * @dev Requires the participant to be whitelist-authorized.
+   */
+  modifier onlyAuthorized() {
+    require(participants[msg.sender].authorized);
+    _;
+  }
+
+  /**
+   * @dev Ensures the base rate is set (not zero).
+   */
+  modifier whenRateSet() {
+    require(discounts.baseRate != 0);
+    _;
+  }
+
+  /**
+   * @dev Ensures the contract is capped (cap amount is not zero).
+   */
+  modifier whenCapped() {
+    require(cap.amount != 0);
+    _;
+  }
+
+  /**
+   * @dev Ensures the contract owns the token.
+   */
+  modifier whenOwnsToken() {
+    require(token.owner() == address(this));
+    _;
+  }
+}
+```
+
+This contract integrates all the required functionalities and adheres to the structure and design provided in the initial description. It includes proper checks and balances, such as only allowing changes when the contract is paused, ensuring the base rate and cap are set, and making sure the contract owns the token before unpausing. The contract also handles token issuance, participant authorization, tier management, and more.

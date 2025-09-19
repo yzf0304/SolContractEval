@@ -1,0 +1,379 @@
+pragma solidity 0.7.6;
+
+// SPDX-License-Identifier: UNLICENSED
+
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        return sub(a, b, "SafeMath: subtraction overflow");
+    }
+    function sub(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b <= a, errorMessage);
+        return a - b;
+    }
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) return 0;
+        uint256 c = a * b;
+        require(c / a == b, "SafeMath: multiplication overflow");
+        return c;
+    }
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        return div(a, b, "SafeMath: division by zero");
+    }
+    function div(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b > 0, errorMessage);
+        return a / b;
+    }
+    function mod(uint256 a, uint256 b) internal pure returns (uint256) {
+        return mod(a, b, "SafeMath: modulo by zero");
+    }
+    function mod(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b != 0, errorMessage);
+        return a % b;
+    }
+    function ceil(uint a, uint m) internal pure returns (uint r) {
+        return (a + m - 1) / m * m;
+    }
+}
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address payable) {
+        return msg.sender;
+    }
+    function _msgData() internal view virtual returns (bytes memory) {
+        this;
+        return msg.data;
+    }
+}
+
+contract Owned is Context {
+    modifier onlyOwner() virtual {
+        require(_msgSender() == owner, "Only owner");
+        _;
+    }
+    address payable owner;
+    address payable newOwner;
+    function changeOwner(address payable _newOwner) external onlyOwner {
+        require(_newOwner != address(0), "Zero address");
+        newOwner = _newOwner;
+    }
+    function acceptOwnership() external {
+        if (_msgSender() == newOwner) {
+            owner = newOwner;
+        }
+    }
+}
+
+interface ERC20 {
+    function balanceOf(address _owner) view external returns (uint256 balance);
+    function transfer(address _to, uint256 _value) external returns (bool success);
+    function transferFrom(address _from, address _to, uint256 _value) external returns (bool success);
+    function approve(address _spender, uint256 _value) external returns (bool success);
+    function allowance(address _owner, address _spender) view external returns (uint256 remaining);
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+}
+
+interface IUniswapV2Factory {
+    function createPair(address tokenA, address tokenB) external returns (address pair);
+    function factory() external view returns (address);
+}
+
+interface IUniswapV2Router01 {
+    function factory() external pure returns (address);
+    function WETH() external pure returns (address);
+}
+
+interface IUniswapV2Router02 is IUniswapV2Router01 {
+    function addLiquidityETH(
+        address token,
+        uint amountTokenDesired,
+        uint amountTokenMin,
+        uint amountETHMin,
+        address to,
+        uint deadline
+    ) external payable returns (uint amountToken, uint amountETH, uint liquidity);
+    function swapExactTokensForETHSupportingFeeOnTransferTokens(
+        uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline
+    ) external;
+}
+
+contract PIKA is Context, Owned, ERC20 {
+    using SafeMath for uint256;
+
+    uint256 public _taxFee; // accumulated fee tokens
+    uint256 public totalSupply;
+    string public symbol;
+    string public name;
+    uint8 public decimals;
+    uint256 private _taxFeepercent = 225; // 2.25%
+    IUniswapV2Router02 public immutable uniswapV2Router;
+    address public immutable uniswapV2Pair;
+    mapping(address => bool) private _isExcludedFromFee;
+    uint256 public ContractDeployed;
+    address oldPika = 0xE09fB60E8D6e7E1CEbBE821bD5c3FC67a40F86bF;
+    uint256 public oldPika_amount;
+    uint256 private minamountTakenOut = 1000000 * 10**9 * 10**9;
+    uint256 private MinimumSupply = 100000000 * 10**9 * 10**9;
+
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+
+    event TransferFee(address indexed _from, address indexed _to, uint256 _value);
+
+    constructor() {
+        symbol = "PIKA";
+        name = "PIKA";
+        decimals = 18;
+        totalSupply = 50000000000000 * 10**9 * 10**9; // 50 trillion
+        owner = _msgSender();
+        balances[owner] = totalSupply;
+        _isExcludedFromFee[owner] = true;
+        _isExcludedFromFee[address(this)] = true;
+        IUniswapV2Router02 _router = IUniswapV2Router02(
+            0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D
+        );
+        uniswapV2Pair = IUniswapV2Factory(_router.factory())
+            .createPair(address(this), _router.WETH());
+        uniswapV2Router = _router;
+        ContractDeployed = block.timestamp;
+        emit Transfer(address(0), owner, totalSupply);
+    }
+
+    receive() external payable {
+        require(msg.value > 0, "No ETH");
+        owner.transfer(msg.value);
+    }
+
+    function balanceOf(address _owner)
+        public
+        view
+        override
+        returns (uint256)
+    {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _amount)
+        public
+        override
+        returns (bool)
+    {
+        _transfer(_msgSender(), _to, _amount);
+        return true;
+    }
+
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) public override returns (bool) {
+        require(
+            allowed[sender][_msgSender()] >= amount,
+            "ERC20: transfer amount exceeds allowance"
+        );
+        allowed[sender][_msgSender()] = allowed[sender][_msgSender()].sub(
+            amount
+        );
+        _transfer(sender, recipient, amount);
+        return true;
+    }
+
+    function _transfer(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) internal virtual {
+        require(sender != address(0) && recipient != address(0), "Zero addr");
+        require(balances[sender] >= amount, "Balance too low");
+
+        uint256 fee = 0;
+        if (
+            !_isExcludedFromFee[sender] && !_isExcludedFromFee[recipient]
+        ) {
+            fee = amount.mul(_taxFeepercent).div(10000);
+            _taxFee = _taxFee.add(fee);
+            balances[address(this)] = balances[address(this)].add(fee);
+            emit TransferFee(sender, address(this), fee);
+        }
+
+        uint256 net = amount.sub(fee);
+        balances[sender] = balances[sender].sub(amount);
+        balances[recipient] = balances[recipient].add(net);
+
+        emit Transfer(sender, recipient, net);
+    }
+
+    function approve(address spender, uint256 amount)
+        public
+        override
+        returns (bool)
+    {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
+
+    function _approve(
+        address owner_,
+        address spender,
+        uint256 amount
+    ) internal virtual {
+        require(owner_ != address(0) && spender != address(0), "Zero addr");
+        allowed[owner_][spender] = amount;
+        emit Approval(owner_, spender, amount);
+    }
+
+    function allowance(address _owner, address _spender)
+        public
+        view
+        override
+        returns (uint256)
+    {
+        return allowed[_owner][_spender];
+    }
+
+    function _burn(address account, uint256 amount) internal virtual {
+        require(account != address(0), "Zero addr");
+        require(
+            balances[account] >= amount,
+            "Burn amount exceeds balance"
+        );
+        require(
+            totalSupply.sub(amount) >= MinimumSupply,
+            "Cannot go below minimum supply"
+        );
+        balances[account] = balances[account].sub(amount);
+        totalSupply = totalSupply.sub(amount);
+        emit Transfer(account, address(0), amount);
+    }
+
+    function swapTokensForEth(uint256 tokenAmount) private {
+        require(tokenAmount > 0, "Zero amount");
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = uniswapV2Router.WETH();
+        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0,
+            path,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    function viewMinExtractAmt() public view returns (uint256) {
+        return minamountTakenOut;
+    }
+
+    function setMinExtractAmt(uint256 _amount) public onlyOwner {
+        minamountTakenOut = _amount;
+    }
+
+    function viewFee() public view returns (uint256) {
+        return _taxFeepercent;
+    }
+
+    function exchnagePika(uint256 tokens) external {
+        require(
+            block.timestamp <= ContractDeployed + 4 days,
+            "Exchange period over"
+        );
+        require(tokens > 0, "Zero tokens");
+        require(
+            ERC20(oldPika).transferFrom(
+                _msgSender(),
+                address(this),
+                tokens
+            ),
+            "Old token transfer failed"
+        );
+        uint256 bonusPct;
+        if (tokens < 1e12 * 10**9 * 10**9) {
+            bonusPct = 500; // 500%
+        } else if (tokens < 1e13 * 10**9 * 10**9) {
+            bonusPct = 250; // 250%
+        } else {
+            bonusPct = 100; // 100%
+        }
+        uint256 bonus = calSwapToken(tokens, bonusPct);
+        uint256 totalOut = tokens.add(bonus);
+        require(
+            balances[address(this)] >= totalOut,
+            "Contract has insufficient new tokens"
+        );
+        balances[address(this)] = balances[address(this)].sub(totalOut);
+        balances[_msgSender()] = balances[_msgSender()].add(totalOut);
+        oldPika_amount = oldPika_amount.add(tokens);
+        emit Transfer(address(this), _msgSender(), totalOut);
+    }
+
+    function extractOldPIKA() external onlyOwner {
+        uint256 bal = ERC20(oldPika).balanceOf(address(this));
+        require(bal > 0, "No old tokens");
+        require(
+            ERC20(oldPika).transfer(owner, bal),
+            "Transfer failed"
+        );
+        oldPika_amount = 0;
+    }
+
+    function extractfee() external onlyOwner {
+        require(_taxFee > 0, "No fees");
+        require(
+            balances[address(this)] >= _taxFee,
+            "Contract fee balance low"
+        );
+        balances[address(this)] = balances[address(this)].sub(_taxFee);
+        balances[owner] = balances[owner].add(_taxFee);
+        emit Transfer(address(this), owner, _taxFee);
+        _taxFee = 0;
+    }
+
+    function calSwapToken(uint256 _tokens, uint256 cust)
+        internal
+        virtual
+        returns (uint256)
+    {
+        return _tokens.mul(cust).div(100);
+    }
+
+    function burn(uint256 value) public returns (bool) {
+        _burn(_msgSender(), value);
+        return true;
+    }
+
+    function viewMinSupply() public view returns (uint256) {
+        return MinimumSupply;
+    }
+
+    function changeMinSupply(uint256 newMinSupply) public onlyOwner {
+        MinimumSupply = newMinSupply;
+    }
+
+    function addLiquidity(uint256 tokenAmount)
+        public
+        payable
+        onlyOwner
+    {
+        require(tokenAmount > 0, "Zero tokens");
+        require(msg.value > 0, "Zero ETH");
+        require(
+            balances[address(this)] >= tokenAmount,
+            "Insufficient contract tokens"
+        );
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+        uniswapV2Router.addLiquidityETH{value: msg.value}(
+            address(this),
+            tokenAmount,
+            0,
+            0,
+            owner,
+            block.timestamp
+        );
+    }
+}

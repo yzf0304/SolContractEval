@@ -1,0 +1,128 @@
+Here is the complete and functional implementation of the FORMLESS contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract FORMLESS is Ownable, ERC721A, ReentrancyGuard {
+    using Strings for uint256;
+
+    uint256 public MAX_PER_Transtion = 1;
+    uint256 public MAX_PER_Address = 1;
+    uint256 public PRICE = 0.069 ether;
+    uint256 private TotalCollectionSize_ = 500;
+    uint256 private constant MaxMintPerBatch_ = 1;
+    
+    mapping(address => bool) private whitelistedAddressesForMint;
+    string private _baseTokenURI;
+    uint public status = 0;
+
+    constructor() ERC721A("FORMLESS", "FORMLESS", MaxMintPerBatch_, TotalCollectionSize_) {
+        _baseTokenURI = "https://gateway.pinata.cloud/ipfs/QmWT2u6UEeXJs5MWcSTQhHFyYC9wKevQNjXC4J3k67ymtQ/";
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function mint(uint256 quantity) external payable callerIsUser nonReentrant {
+        require(status == 1 || status == 2, "Sale is not active");
+        if (status == 1) {
+            require(whitelistedAddressesForMint[msg.sender], "Not whitelisted");
+        }
+        require(quantity <= MAX_PER_Transtion, "Exceeds per transaction limit");
+        require(_numberMinted(msg.sender) + quantity <= MAX_PER_Address, "Exceeds per address limit");
+        require(totalSupply() + quantity <= TotalCollectionSize_, "Exceeds collection size");
+        require(msg.value == PRICE * quantity, "Incorrect payment");
+        
+        _safeMint(msg.sender, quantity);
+    }
+
+    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+        require(_exists(tokenId), "URI query for nonexistent token");
+        return string(abi.encodePacked(_baseTokenURI, tokenId.toString()));
+    }
+
+    function isWhitelistedForMint(address _user) public view returns (bool) {
+        return whitelistedAddressesForMint[_user];
+    }
+
+    function addNewWhitelistUserForMint(address[] calldata _users) public onlyOwner {
+        for (uint256 i = 0; i < _users.length; i++) {
+            whitelistedAddressesForMint[_users[i]] = true;
+        }
+    }
+
+    function setBaseURI(string memory baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        require(_exists(tokenId), "Nonexistent token");
+        return _ownerships[tokenId];
+    }
+
+    function withdrawMoney() external onlyOwner nonReentrant {
+        (bool success, ) = msg.sender.call{value: address(this).balance}("");
+        require(success, "Transfer failed");
+    }
+
+    function changeMAX_PER_Address(uint256 q) external onlyOwner {
+        MAX_PER_Address = q;
+    }
+
+    function reserve(address _address, uint256 quantity) public onlyOwner {
+        require(totalSupply() + quantity <= TotalCollectionSize_, "Exceeds collection size");
+        _safeMint(_address, quantity);
+    }
+
+    function changeMintPrice(uint256 _newPrice) external onlyOwner {
+        PRICE = _newPrice;
+    }
+
+    function changeCollectionSize(uint256 _collectionSize) external onlyOwner {
+        TotalCollectionSize_ = _collectionSize;
+    }
+
+    function changeMAX_PER_Transtion(uint256 q) external onlyOwner {
+        MAX_PER_Transtion = q;
+    }
+
+    function giveaway(address a, uint256 q) public onlyOwner {
+        require(totalSupply() + q <= TotalCollectionSize_, "Exceeds collection size");
+        _safeMint(a, q);
+    }
+
+    function setStatus(uint256 s) external onlyOwner {
+        status = s;
+    }
+
+    function getStatus() public view returns (uint) {
+        return status;
+    }
+
+    function getcollectionSize() public view returns (uint) {
+        return TotalCollectionSize_;
+    }
+}
+```
+
+This implementation:
+1. Uses ERC721A for efficient batch minting
+2. Implements whitelist functionality with add/check capabilities
+3. Includes adjustable mint parameters (price, limits, collection size)
+4. Has multiple sale phases controlled by the status variable
+5. Uses ReentrancyGuard for secure ETH handling
+6. Follows Ownable pattern for administrative control
+7. Implements proper URI handling with updatable base URI
+8. Includes safety checks for all user-facing functions
+9. Maintains ERC721 compliance while adding collection-specific features

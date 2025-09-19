@@ -1,0 +1,123 @@
+```solidity
+pragma solidity ^0.4.18;
+
+contract tokenRecipient {
+
+  function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public;
+
+}
+
+contract ERC20Token {
+
+    uint256 public totalSupply;
+
+    function balanceOf(address _owner) constant public returns (uint256 balance);
+
+    function transfer(address _to, uint256 _value) public returns (bool success);
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+
+    function approve(address _spender, uint256 _value) public returns (bool success);
+
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining);
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+
+}
+
+contract limitedFactor {
+
+    uint256 public FoundationAddressFreezeTime;
+    address public FoundationAddress;
+    address public TeamAddress;
+
+    modifier FoundationAccountNeedFreezeOneYear(address _address) {
+        if(_address == FoundationAddress) {
+            require(now >= FoundationAddressFreezeTime + 1 years);
+        }
+        _;
+    }
+
+}
+
+contract standardToken is ERC20Token, limitedFactor {
+
+    mapping (address => uint256) balances;
+    mapping (address => mapping (address => uint256)) allowances;
+
+    function balanceOf(address _owner) constant public returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _value) public FoundationAccountNeedFreezeOneYear(msg.sender) returns (bool success) {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _value);
+        require(balances[_to] + _value >= balances[_to]);
+
+        balances[msg.sender] -= _value;
+        balances[_to] += _value;
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowances[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        approve(_spender, _value);
+        tokenRecipient(_spender).receiveApproval(msg.sender, _value, address(this), _extraData);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0));
+        require(balances[_from] >= _value);
+        require(allowances[_from][msg.sender] >= _value);
+        require(balances[_to] + _value >= balances[_to]);
+
+        balances[_from] -= _value;
+        balances[_to] += _value;
+        allowances[_from][msg.sender] -= _value;
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining) {
+        return allowances[_owner][_spender];
+    }
+}
+```
+
+**Step-by-Step Explanation:**
+
+1. **Transfer Function:**
+   - Checks recipient address is valid (not zero).
+   - Verifies sender has sufficient balance.
+   - Prevents overflow on recipient's balance.
+   - Updates balances and emits Transfer event.
+   - Applies the freeze modifier to restrict FoundationAddress transfers within the first year.
+
+2. **Approve Function:**
+   - Sets allowance for spender and emits Approval event.
+
+3. **ApproveAndCall Function:**
+   - Calls approve to set the allowance.
+   - Invokes receiveApproval on the spender's contract, passing relevant data.
+
+4. **TransferFrom Function:**
+   - Validates recipient address.
+   - Ensures sufficient balance and allowance.
+   - Prevents overflow.
+   - Updates balances and allowance, emits Transfer event.
+
+5. **Allowance Function:**
+   - Returns the remaining allowance for a spender.
+
+6. **Modifier Application:**
+   - The FoundationAccountNeedFreezeOneYear modifier is applied to the transfer function to enforce the one-year freeze period for the FoundationAddress.
+
+This implementation adheres to ERC20 standards while integrating the specified freezing logic for the foundation account.

@@ -1,0 +1,129 @@
+Here is the complete implementation of the `ogreswampwtf` contract:
+
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.7;
+
+contract ogreswampwtf is ERC721, Ownable {
+  using Counters for Counters.Counter; 
+  using Strings for uint256;
+
+  Counters.Counter private _tokenSupply;
+  string public ogreURI;
+  string public ogreExtension = ".json"; 
+  uint256 public cost = 0 ether; 
+  uint256 public maxSupply = 3333; 
+  uint256 public freeMints = 3333; 
+  uint256 public maxMintAmount = 3; 
+  bool public paused = false;
+  bool public revealed = false;
+  string public SwampUri;
+  mapping(address => bool) public whitelisted;
+  mapping(address => uint256) private freeMintsWallet;
+
+  constructor(
+    string memory _name,
+    string memory _symbol,
+    string memory _initOgreURI,
+    string memory _initSwampUri
+  ) ERC721(_name, _symbol) {
+    setOgreURI(_initOgreURI);
+    setSwampURI(_initSwampUri);
+  }
+
+  function totalSupply() public view returns (uint256) {
+    return _tokenSupply.current();
+  }
+
+  function _ogreURI() internal view virtual override returns (string memory) {
+    return ogreURI;
+  }
+
+  function mint(address _to, uint256 _mintAmount) public payable {
+    require(!paused, "Contract is paused");
+    require(_mintAmount > 0 && _mintAmount <= maxMintAmount, "Invalid mint amount");
+    uint256 supply = _tokenSupply.current();
+    require(supply + _mintAmount <= maxSupply, "Exceeds max supply");
+
+    if (supply + _mintAmount <= freeMints) {
+      require(whitelisted[msg.sender], "Not whitelisted");
+      require(msg.value == 0, "Free mint requires no payment");
+    } else {
+      require(msg.value >= cost * _mintAmount, "Insufficient funds");
+      require(freeMintsWallet[_to] + _mintAmount <= 20, "Exceeds wallet limit");
+      freeMintsWallet[_to] += _mintAmount;
+    }
+
+    for (uint256 i = 0; i < _mintAmount; i++) {
+      _tokenSupply.increment();
+      _safeMint(_to, _tokenSupply.current());
+    }
+  }
+
+  function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+    require(_exists(tokenId), "Nonexistent token");
+    if (!revealed) return SwampUri;
+    string memory baseURI = _ogreURI();
+    return bytes(baseURI).length > 0 
+      ? string(abi.encodePacked(baseURI, tokenId.toString(), ogreExtension))
+      : "";
+  }
+
+  function reveal() public onlyOwner {
+    revealed = true;
+  }
+
+  function setCost(uint256 _newCost) public onlyOwner {
+    cost = _newCost;
+  }
+
+  function setmaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+    maxMintAmount = _newmaxMintAmount;
+  }
+
+  function setSwampURI(string memory _SwampURI) public onlyOwner {
+    SwampUri = _SwampURI;
+  }
+
+  function setOgreURI(string memory _newOgreURI) public onlyOwner {
+    ogreURI = _newOgreURI;
+  }
+
+  function setOgreExtension(string memory _newOgreExtension) public onlyOwner {
+    ogreExtension = _newOgreExtension;
+  }
+
+  function pause(bool _state) public onlyOwner {
+    paused = _state;
+  }
+
+  function whitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = true;
+  }
+
+  function removeWhitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = false;
+  }
+
+  function withdraw() public payable onlyOwner {
+    (bool success, ) = payable(owner()).call{value: address(this).balance}("");
+    require(success);
+  }
+}
+```
+
+This implementation:
+1. Tracks token supply with a counter
+2. Implements free whitelisted mints and paid mints with wallet limits
+3. Handles URI management for revealed/unrevealed states
+4. Includes all necessary administrative functions
+5. Follows ERC721 standards and OpenZeppelin best practices
+6. Maintains ownership control through the Ownable pattern
+
+Key features:
+- Whitelist system for free mints
+- Gradual token reveal functionality
+- Flexible URI configuration
+- Supply limits and minting restrictions
+- Payment handling and withdrawal functions
+- Pausable contract functionality

@@ -1,0 +1,168 @@
+Here's the completed `AxpireToken` contract implementation based on the provided context:
+
+```solidity
+/**
+ * @notice The AxpireToken contract is an implementation of the ERC20 and ERC223 standards, designed to create a token with the specified initial supply, name, symbol, and decimals.
+ * @dev This contract extends the functionality of ERC20 and ERC223 by adding additional transfer methods and handling for contract recipients.
+ */
+contract AxpireToken is ERC223, ERC20 {
+
+    uint256 initialSupply = 350000000 * 10**8;
+    string tokenName = "aXpire Token";
+    string tokenSymbol = "AXP";
+    uint8 decimalUnits = 8;
+
+    //Constructor
+    function AxpireToken() public
+    ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        //Assigning total no of tokens
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens to a recipient address, including additional data.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, false, "");
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens to a recipient address, including additional data and a custom fallback function.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @param customFallback The custom fallback function to use if the recipient is a contract.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, true, customFallback);
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from one address to another, using the allowance mechanism.
+     * @param _from The address from which the tokens will be transferred.
+     * @param _to The address to which the tokens will be transferred.
+     * @param _value The amount of tokens to transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        if (allowed[_from][msg.sender] < _value) {
+            return false;
+        }
+
+        bytes memory empty;
+        bool _success = transferInternal(_from, _to, _value, empty, false, "");
+
+        if (_success) {
+            allowed[_from][msg.sender] -= _value;
+        }
+
+        return _success;
+    }
+
+    /**
+     * @dev Internal function to handle the transfer of tokens, including additional data.
+     * @param from The address from which the tokens will be transferred.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        return transferInternal(from, to, value, data, false, "");
+    }
+
+    /**
+     * @dev Internal function to handle the transfer of tokens, including additional data and a custom fallback function.
+     * @param from The address from which the tokens will be transferred.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @param useCustomFallback A boolean indicating whether to use a custom fallback function.
+     * @param customFallback The custom fallback function to use if the recipient is a contract.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        if (value == 0) {
+            Transfer(from, to, value);
+            Transfer(from, to, value, data);
+            return true;
+        }
+
+        if (balances[from] < value) {
+            return false;
+        }
+
+        setBalance(from, balances[from].sub(value));
+        setBalance(to, balances[to].add(value));
+
+        if (isContract(to)) {
+            ContractReceiver receiver = ContractReceiver(to);
+            if (useCustomFallback) {
+                // solium-disable-next-line security/no-low-level-calls
+                require(to.call.value(0)(bytes4(keccak256(customFallback)), from, value, data));
+            } else {
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+
+        Transfer(from, to, value);
+        Transfer(from, to, value, data);
+        return true;
+    }
+
+    /**
+     * @dev Internal function to handle the transfer of tokens without additional data.
+     * @param from The address from which the tokens will be transferred.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferInternal(address from, address to, uint256 value) internal returns (bool success) {
+        if (value == 0) {
+            Transfer(from, to, value);
+            return true;
+        }
+
+        if (balances[from] < value) {
+            return false;
+        }
+
+        setBalance(from, balances[from].sub(value));
+        setBalance(to, balances[to].add(value));
+
+        Transfer(from, to, value);
+
+        return true;
+    }
+
+    /**
+     * @dev Checks if the given address is a contract by checking the code size.
+     * @param _addr The address to check.
+     * @return A boolean indicating whether the address is a contract.
+     */
+    function isContract(address _addr) private returns (bool) {
+        uint length;
+        assembly {
+            length := extcodesize(_addr)
+        }
+        return (length > 0);
+    }
+}
+```
+
+This implementation combines ERC20 and ERC223 standards, providing the functionality for transferring tokens with additional data and custom fallback functions when needed. The contract includes all the required methods with their implementations based on the provided context.

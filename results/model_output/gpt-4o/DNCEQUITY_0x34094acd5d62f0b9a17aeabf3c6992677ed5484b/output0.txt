@@ -1,0 +1,128 @@
+Below is the completed implementation of the `DNCEQUITY` contract. The implementation strictly adheres to the description provided while being compatible with Solidity compiler version `0.4.21`.
+
+```solidity
+pragma solidity ^0.4.21;
+
+/**
+ * @title DNCEQUITY
+ * @notice Implements ERC223 standard token with minting, burning, and admin-controlled transfers.
+ * @dev Extends ERC223BasicToken and introduces admin functionalities.
+ */
+contract DNCEQUITY is ERC223BasicToken {
+    address public admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping(address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    /**
+     * @notice Contract constructor initializes admin to the deployer.
+     */
+    function DNCEQUITY() public {
+        admin = msg.sender;
+    }
+
+    /**
+     * @notice Modifier ensures only the admin can execute certain functions.
+     */
+    modifier onlyadmin() {
+        require(msg.sender == admin);
+        _;
+    }
+
+    /**
+     * @notice Allows the admin to change the admin address.
+     * @param _newAdminAddr The address of the new admin.
+     */
+    function changeAdmin(address _newAdminAddr) public onlyadmin {
+        require(_newAdminAddr != address(0)); // Ensure new admin is not the zero address.
+        admin = _newAdminAddr;
+    }
+
+    /**
+     * @notice Allows the admin to create a mintable user.
+     * @param newAddr The address of the new mintable user.
+     */
+    function createNewMintableUser(address newAddr) public onlyadmin {
+        require(newAddr != address(0)); // Ensure new address is valid.
+        require(balances[newAddr] == 0); // Ensure no pre-existing balance.
+        mintable[newAddr] = true;
+    }
+
+    /**
+     * @notice Allows the admin to delete mintable status from a user.
+     * @param addr The address of the user to remove mintable status.
+     */
+    function deleteMintable(address addr) public onlyadmin {
+        require(addr != address(0)); // Ensure valid address.
+        require(mintable[addr]); // Ensure the user is mintable.
+        mintable[addr] = false;
+    }
+
+    /**
+     * @notice Allows the admin to transfer tokens from one address to another.
+     * @param from The address from which tokens are transferred.
+     * @param to The address to which tokens are transferred.
+     * @param value The amount of tokens to transfer.
+     */
+    function adminTransfer(address from, address to, uint256 value) public onlyadmin {
+        require(from != address(0));
+        require(to != address(0));
+        require(balances[from] >= value);
+        require(mintable[from]); // Ensure the `from` address is mintable.
+
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        emit Transfer(from, to, value);
+    }
+
+    /**
+     * @notice Allows the admin to mint new tokens to a specified user.
+     * @param user The address of the user receiving the new tokens.
+     * @param quantity The number of tokens to mint.
+     */
+    function mintNewDNC(address user, uint256 quantity) public onlyadmin {
+        require(user != address(0));
+        require(mintable[user]); // Ensure the user is mintable.
+
+        balances[user] = balances[user].add(quantity);
+        totalSupply = totalSupply.add(quantity);
+
+        emit Minted(user, quantity);
+    }
+
+    /**
+     * @notice Allows the admin to burn tokens from a specified user.
+     * @param user The address of the user burning tokens.
+     * @param quantity The number of tokens to burn.
+     */
+    function burnDNC(address user, uint256 quantity) public onlyadmin {
+        require(user != address(0));
+        require(mintable[user]); // Ensure the user is mintable.
+        require(balances[user] >= quantity); // Ensure sufficient balance.
+
+        balances[user] = balances[user].sub(quantity);
+        totalSupply = totalSupply.sub(quantity);
+
+        emit Burned(user, quantity);
+    }
+}
+```
+
+### Key Details:
+1. **Admin Role**: The admin is the deployer by default, and their functionalities include changing admin, creating or deleting mintable users, transferring on behalf of users, minting new tokens, and burning tokens.
+
+2. **Mintable Users**: Only addresses marked as mintable can be targeted for minting and burning operations. A mintable user must have a zero balance when added.
+
+3. **SafeMath**: SafeMath is used in all arithmetic operations to ensure overflow/underflow protection.
+
+4. **ERC223 Standard**: The `transfer` function included in the base contract (`ERC223BasicToken`) ensures compatibility with ERC223 by handling `tokenFallback`.
+
+5. **Event Emissions**: All state-changing actions (transfer, minting, and burning) emit relevant events for better transparency.
+
+6. **Compatibility**: Code ensures backward compatibility with Solidity `0.4.21` by adhering to its syntax and constraints (e.g., using the function constructor pattern).
+
+This implementation fulfills the requirements while leveraging inherited functionality from `ERC223BasicToken` and adhering strictly to the provided context.

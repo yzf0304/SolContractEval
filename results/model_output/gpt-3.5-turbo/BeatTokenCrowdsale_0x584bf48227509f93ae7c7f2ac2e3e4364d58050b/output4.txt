@@ -1,0 +1,152 @@
+Based on the provided context and description, here is the completed smart contract for BeatTokenCrowdsale:
+
+```solidity
+contract BeatTokenCrowdsale is Ownable {
+    enum Stages {
+        Deployed,
+        PreIco,
+        IcoPhase1,
+        IcoPhase2,
+        IcoPhase3,
+        IcoEnded,
+        Finalized
+    }
+
+    Stages public stage;
+
+    using SafeMath for uint256;
+
+    BeatToken public token;
+
+    uint256 public contractStartTime;
+    uint256 public preIcoEndTime;
+    uint256 public icoPhase1EndTime;
+    uint256 public icoPhase2EndTime;
+    uint256 public icoPhase3EndTime;
+    uint256 public contractEndTime;
+
+    address public ethTeamWallet;
+    address public beatTeamWallet;
+
+    uint256 public ethPriceInEuroCent;
+
+    event BeatTokenPreIcoStarted();
+    event BeatTokenIcoPhase1Started();
+    event BeatTokenIcoPhase2Started();
+    event BeatTokenIcoPhase3Started();
+    event BeatTokenIcoFinalized();
+
+    uint256 constant HARD_CAP = 1000000 ether;
+    uint256 constant PRE_ICO_LIMIT = 200000 ether;
+    uint256 constant ICO_PHASE1_LIMIT = 300000 ether;
+    uint256 constant ICO_PHASE2_LIMIT = 400000 ether;
+
+    function BeatTokenCrowdsale(address _ethTeamWallet, address _beatTeamWallet) public {
+        require(_ethTeamWallet != address(0));
+        require(_beatTeamWallet != address(0));
+
+        token = new BeatToken(HARD_CAP);
+        stage = Stages.Deployed;
+        ethTeamWallet = _ethTeamWallet;
+        beatTeamWallet = _beatTeamWallet;
+        ethPriceInEuroCent = 0;
+
+        contractStartTime = now;
+        preIcoEndTime = 0;
+        icoPhase1EndTime = 0;
+        icoPhase2EndTime = 0;
+        icoPhase3EndTime = 0;
+        contractEndTime = 0;
+    }
+
+    function setEtherPriceInEuroCent(uint256 _ethPriceInEuroCent) onlyOwner public {
+        ethPriceInEuroCent = _ethPriceInEuroCent;
+    }
+
+    function start() onlyOwner public {
+        require(stage == Stages.Deployed);
+        stage = Stages.PreIco;
+        preIcoEndTime = now + 1 weeks;
+        BeatTokenPreIcoStarted();
+    }
+
+    function finalize() onlyOwner public {
+        require(stage == Stages.IcoEnded);
+        stage = Stages.Finalized;
+        BeatTokenIcoFinalized();
+    }
+
+    function() payable public {
+        buyTokens(msg.sender);
+    }
+
+    function buyTokens(address beneficiary) payable public {
+        require(beneficiary != address(0));
+        require(msg.value > 0);
+        require(isWithinValidIcoPhase());
+
+        uint256 beatWeiAmount = calculateBeatWeiAmount(msg.value);
+        require(isWithinTokenAllocLimit(beatWeiAmount));
+
+        determineCurrentStage(beatWeiAmount);
+
+        // Mint tokens to beneficiary
+        token.mint(beneficiary, beatWeiAmount);
+    }
+
+    function isWithinValidIcoPhase() internal view returns (bool) {
+        return (stage == Stages.PreIco || stage == Stages.IcoPhase1 || stage == Stages.IcoPhase2 || stage == Stages.IcoPhase3);
+    }
+
+    function calculateBeatWeiAmount(uint256 ethWeiAmount) internal view returns (uint256) {
+        uint256 beatAmount = ethWeiAmount.mul(1000); // 1000 tokens per ETH
+        if (stage == Stages.PreIco) {
+            beatAmount = beatAmount.mul(120).div(100); // 20% bonus
+        } else if (stage == Stages.IcoPhase1) {
+            beatAmount = beatAmount.mul(110).div(100); // 10% bonus
+        } else if (stage == Stages.IcoPhase2) {
+            beatAmount = beatAmount.mul(105).div(100); // 5% bonus
+        }
+        return beatAmount;
+    }
+
+    function isWithinTokenAllocLimit(uint256 beatWeiAmount) internal view returns (bool) {
+        if (stage == Stages.PreIco) {
+            return token.getTotalSupply().add(beatWeiAmount) <= PRE_ICO_LIMIT;
+        } else if (stage == Stages.IcoPhase1) {
+            return token.getTotalSupply().add(beatWeiAmount) <= ICO_PHASE1_LIMIT;
+        } else if (stage == Stages.IcoPhase2) {
+            return token.getTotalSupply().add(beatWeiAmount) <= ICO_PHASE2_LIMIT;
+        }
+        return true;
+    }
+
+    function determineCurrentStage(uint256 beatWeiAmount) internal {
+        if (stage == Stages.PreIco) {
+            if (token.getTotalSupply().add(beatWeiAmount) >= PRE_ICO_LIMIT || now >= preIcoEndTime) {
+                stage = Stages.IcoPhase1;
+                icoPhase1EndTime = now + 2 weeks;
+                BeatTokenIcoPhase1Started();
+            }
+        } else if (stage == Stages.IcoPhase1) {
+            if (token.getTotalSupply().add(beatWeiAmount) >= ICO_PHASE1_LIMIT || now >= icoPhase1EndTime) {
+                stage = Stages.IcoPhase2;
+                icoPhase2EndTime = now + 2 weeks;
+                BeatTokenIcoPhase2Started();
+            }
+        } else if (stage == Stages.IcoPhase2) {
+            if (token.getTotalSupply().add(beatWeiAmount) >= ICO_PHASE2_LIMIT || now >= icoPhase2EndTime) {
+                stage = Stages.IcoPhase3;
+                icoPhase3EndTime = now + 2 weeks;
+                BeatTokenIcoPhase3Started();
+            }
+        } else if (stage == Stages.IcoPhase3) {
+            if (now >= icoPhase3EndTime) {
+                stage = Stages.IcoEnded;
+            }
+        }
+    }
+}
+```
+
+This completed smart contract for BeatTokenCrowdsale includes the necessary functions and logic to manage the token distribution, ICO stages, and finalization as per the provided context and description.

@@ -1,0 +1,103 @@
+pragma solidity 0.8.7;
+
+contract NftPresale is INftPresale, Ownable {
+    uint public constant START_TIME     = 1634929200;
+    uint public constant FINISH_TIME    = 1635015600;
+    uint public constant PRE_SALE_PRICE = 0.2 ether;
+
+    INFT public nft;
+    address public verifyAddress = 0x142581fda5769fe7f8d3b50794dBda454DA4F3ac;
+    mapping(address => bool) public buyers;
+    address payable public receiver;
+
+    constructor(address _nftAddress, address payable _receiverAddress) {
+        nft      = INFT(_nftAddress);
+        receiver = _receiverAddress;
+    }
+
+    /**
+     * @notice Allows a user to buy one NFT during the presale period.
+     * @param _amount The number of tokens to buy (must be 1).
+     * @param _signature The signed message from the verifyAddress.
+     */
+    function buy(uint _amount, bytes memory _signature) external override payable {
+        require(block.timestamp >= START_TIME && block.timestamp <= FINISH_TIME,
+                "Presale: not in sale period");
+        require(_amount == 1,
+                "Presale: only one token per address");
+        require(msg.value == PRE_SALE_PRICE * _amount,
+                "Presale: incorrect ETH amount");
+        require(!buyers[msg.sender],
+                "Presale: already purchased");
+        require(verify(_signature),
+                "Presale: invalid signature");
+
+        buyers[msg.sender] = true;
+        // Mint exactly _amount tokens to the buyer
+        if (_amount == 1) {
+            nft.mint(msg.sender);
+        } else {
+            nft.mintBatch(msg.sender, _amount);
+        }
+    }
+
+    /**
+     * @notice Withdraws all contract ETH to `_to`.
+     * @param _to The address to receive the funds.
+     */
+    function cashOut(address _to) public onlyOwner {
+        uint balance = address(this).balance;
+        require(balance > 0, "Presale: no funds");
+        (bool success, ) = payable(_to).call{value: balance}("");
+        require(success, "Presale: transfer failed");
+    }
+
+    /**
+     * @notice Verifies that `_signature` was produced by `verifyAddress`
+     *         over the purchaser's address.
+     * @param _signature The signature to check.
+     */
+    function verify(bytes memory _signature) internal view returns (bool) {
+        bytes32 msgHash = keccak256(abi.encodePacked(msg.sender));
+        bytes32 ethSigned = prefixed(msgHash);
+        return recoverSigner(ethSigned, _signature) == verifyAddress;
+    }
+
+    /**
+     * @notice Recovers the signer address from a signed message.
+     * @param message The prefixed hash that was signed.
+     * @param sig The signature bytes.
+     */
+    function recoverSigner(bytes32 message, bytes memory sig)
+        internal
+        pure
+        returns (address)
+    {
+        require(sig.length == 65, "Presale: invalid signature length");
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        // signature layout: [0:32]=r, [32:64]=s, [64]=v
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+        // EIP-2 still allows v to be 0/1
+        if (v < 27) {
+            v += 27;
+        }
+        require(v == 27 || v == 28, "Presale: invalid v value");
+        return ecrecover(message, v, r, s);
+    }
+
+    /**
+     * @notice Prefixes a hash with the "\x19Ethereum Signed Message:\n32" header.
+     * @param hash The original 32-byte hash.
+     */
+    function prefixed(bytes32 hash) internal pure returns (bytes32) {
+        return keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", hash)
+        );
+    }
+}

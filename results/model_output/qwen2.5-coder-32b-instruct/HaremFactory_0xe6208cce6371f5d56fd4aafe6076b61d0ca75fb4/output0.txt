@@ -1,0 +1,258 @@
+Below is the completed `HaremFactory` smart contract based on the provided context and description. The contract includes all necessary functionality as specified in the comments and follows the structure and conventions of the provided base contracts.
+
+```solidity
+pragma solidity ^0.5.0;
+
+contract Context {
+    // Existing implementation
+}
+
+contract Ownable is Context {
+    // Existing implementation
+}
+
+library SafeMath {
+    // Existing implementation
+}
+
+interface IERC20 {
+    // Existing implementation
+}
+
+contract MinterRole {
+    using Roles for Roles.Role;
+
+    event MinterAdded(address indexed account);
+    event MinterRemoved(address indexed account);
+
+    Roles.Role private _minters;
+
+    constructor () internal {
+        _addMinter(_msgSender());
+    }
+
+    modifier onlyMinter() {
+        require(isMinter(_msgSender()), "MinterRole: caller does not have the Minter role");
+        _;
+    }
+
+    function isMinter(address account) public view returns (bool) {
+        return _minters.has(account);
+    }
+
+    function addMinter(address account) public onlyOwner {
+        _addMinter(account);
+    }
+
+    function renounceMinter() public {
+        _removeMinter(_msgSender());
+    }
+
+    function _addMinter(address account) internal {
+        _minters.add(account);
+        emit MinterAdded(account);
+    }
+
+    function _removeMinter(address account) internal {
+        _minters.remove(account);
+        emit MinterRemoved(account);
+    }
+}
+
+contract CanTransferRole {
+    using Roles for Roles.Role;
+
+    event CanTransferAdded(address indexed account);
+    event CanTransferRemoved(address indexed account);
+
+    Roles.Role private _canTransfers;
+
+    constructor () internal {
+        _addCanTransfer(_msgSender());
+    }
+
+    modifier onlyCanTransfer() {
+        require(isCanTransfer(_msgSender()), "CanTransferRole: caller does not have the CanTransfer role");
+        _;
+    }
+
+    function isCanTransfer(address account) public view returns (bool) {
+        return _canTransfers.has(account);
+    }
+
+    function addCanTransfer(address account) public onlyOwner {
+        _addCanTransfer(account);
+    }
+
+    function renounceCanTransfer() public {
+        _removeCanTransfer(_msgSender());
+    }
+
+    function _addCanTransfer(address account) internal {
+        _canTransfers.add(account);
+        emit CanTransferAdded(account);
+    }
+
+    function _removeCanTransfer(address account) internal {
+        _canTransfers.remove(account);
+        emit CanTransferRemoved(account);
+    }
+}
+
+contract HaremNonTradable is Ownable, MinterRole, CanTransferRole {
+    // Existing implementation
+}
+
+contract HaremFactory is Ownable {
+    using SafeMath for uint256;
+    using Roles for Roles.Role;
+
+    struct UserInfo {
+        uint256 amount;
+        uint256 rewardDebt;
+    }
+
+    struct PoolInfo {
+        IERC20 token;
+        uint256 haremsPerDay;
+        uint256 maxStake;
+        uint256 lastUpdateTime;
+        uint256 accHaremPerShare;
+    }
+
+    address public treasuryAddr;
+    PoolInfo[] public poolInfo;
+    mapping(uint256 => mapping(address => UserInfo)) public userInfo;
+    mapping(address => uint256) public tokenPID;
+
+    HaremNonTradable public Harem;
+
+    event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
+    event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
+    event EmergencyWithdraw(address indexed user, uint256 indexed pid, uint256 amount);
+
+    constructor(HaremNonTradable _haremAddress, address _treasuryAddr) public {
+        Harem = _haremAddress;
+        treasuryAddr = _treasuryAddr;
+    }
+
+    function poolLength() external view returns (uint256) {
+        return poolInfo.length;
+    }
+
+    function add(IERC20 _token, uint256 _haremsPerDay, uint256 _maxStake) public onlyOwner {
+        require(tokenPID[address(_token)] == 0, "Token already added");
+        poolInfo.push(PoolInfo({
+            token: _token,
+            haremsPerDay: _haremsPerDay,
+            maxStake: _maxStake,
+            lastUpdateTime: block.timestamp,
+            accHaremPerShare: 0
+        }));
+        tokenPID[address(_token)] = poolInfo.length;
+    }
+
+    function setMaxStake(uint256 pid, uint256 amount) public onlyOwner {
+        poolInfo[pid].maxStake = amount;
+    }
+
+    function setHaremsPerDay(uint256 pid, uint256 amount) public onlyOwner {
+        poolInfo[pid].haremsPerDay = amount;
+    }
+
+    function pendingHarem(uint256 _pid, address _user) public view returns (uint256) {
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][_user];
+        uint256 accHaremPerShare = pool.accHaremPerShare;
+        uint256 lpSupply = pool.token.balanceOf(address(this));
+
+        if (block.timestamp > pool.lastUpdateTime && lpSupply != 0) {
+            uint256 multiplier = (block.timestamp.sub(pool.lastUpdateTime)).mul(1 days).div(1 seconds);
+            uint256 haremReward = multiplier.mul(pool.haremsPerDay);
+            accHaremPerShare = accHaremPerShare.add(haremReward.mul(1e12).div(lpSupply));
+        }
+        return user.amount.mul(accHaremPerShare).div(1e12).sub(user.rewardDebt);
+    }
+
+    function totalPendingHarem(address _user) public view returns (uint256) {
+        uint256 totalRewards = 0;
+        for (uint256 pid = 0; pid < poolInfo.length; pid++) {
+            totalRewards = totalRewards.add(pendingHarem(pid, _user));
+        }
+        return totalRewards;
+    }
+
+    function pendingHaremOfPool(uint256 _pid) public view returns (uint256) {
+        PoolInfo storage pool = poolInfo[_pid];
+        uint256 accHaremPerShare = pool.accHaremPerShare;
+        uint256 lpSupply = pool.token.balanceOf(address(this));
+
+        if (block.timestamp > pool.lastUpdateTime && lpSupply != 0) {
+            uint256 multiplier = (block.timestamp.sub(pool.lastUpdateTime)).mul(1 days).div(1 seconds);
+            uint256 haremReward = multiplier.mul(pool.haremsPerDay);
+            accHaremPerShare = accHaremPerShare.add(haremReward.mul(1e12).div(lpSupply));
+        }
+
+        uint256 totalRewards = 0;
+        for (uint256 i = 0; i < pool.token.balanceOf(address(this)); i++) {
+            address userAddress = getUserByToken(pool.token, i);
+            UserInfo storage user = userInfo[_pid][userAddress];
+            totalRewards = totalRewards.add(user.amount.mul(accHaremPerShare).div(1e12).sub(user.rewardDebt));
+        }
+
+        return totalRewards;
+    }
+
+    function rugPull(uint256[] memory _pids) public {
+        for (uint256 i = 0; i < _pids.length; i++) {
+            updatePool(_pids[i]);
+        }
+    }
+
+    function rugPullAll() public {
+        for (uint256 pid = 0; pid < poolInfo.length; pid++) {
+            updatePool(pid);
+        }
+    }
+
+    function updatePool(uint256 _pid) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        if (block.timestamp <= pool.lastUpdateTime) {
+            return;
+        }
+        uint256 lpSupply = pool.token.balanceOf(address(this));
+        if (lpSupply == 0) {
+            pool.lastUpdateTime = block.timestamp;
+            return;
+        }
+        uint256 multiplier = (block.timestamp.sub(pool.lastUpdateTime)).mul(1 days).div(1 seconds);
+        uint256 haremReward = multiplier.mul(pool.haremsPerDay);
+        pool.accHaremPerShare = pool.accHaremPerShare.add(haremReward.mul(1e12).div(lpSupply));
+        pool.lastUpdateTime = block.timestamp;
+    }
+
+    function deposit(uint256 _pid, uint256 _amount) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][msg.sender];
+        updatePool(_pid);
+        if (user.amount > 0) {
+            uint256 pending = user.amount.mul(pool.accHaremPerShare).div(1e12).sub(user.rewardDebt);
+            if (pending > 0) {
+                safeHaremTransfer(msg.sender, pending);
+            }
+        }
+        if (_amount > 0) {
+            require(pool.token.transferFrom(address(msg.sender), address(this), _amount), "Deposit failed");
+            user.amount = user.amount.add(_amount);
+            pool.maxStake = pool.maxStake.sub(_amount);
+        }
+        user.rewardDebt = user.amount.mul(pool.accHaremPerShare).div(1e12);
+        emit Deposit(msg.sender, _pid, _amount);
+    }
+
+    function withdraw(uint256 _pid, uint256 _amount) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][msg.sender];
+        require(user.amount >= _amount, "withdraw: not good");
+        updatePool(_pid);
+       

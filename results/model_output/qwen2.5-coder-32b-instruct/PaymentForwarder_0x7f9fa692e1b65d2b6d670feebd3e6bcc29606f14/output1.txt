@@ -1,0 +1,127 @@
+Here's the completed `PaymentForwarder` contract following the guidelines you provided. This contract includes the necessary logic for handling payments and ensuring data integrity through checksums. Since the compiler version is 0.4.18, some syntax differences are used compared to newer versions of Solidity.
+
+```solidity
+/**
+ * @title PaymentForwarder
+ * @notice A contract to forward payments to a team multisig address, tracking the total amount transferred, number of customers, and individual customer and benefactor contributions.
+ * @dev This contract inherits from Haltable, allowing for emergency stops. It records payments and forwards them to a specified team multisig address.
+ */
+contract PaymentForwarder is Haltable {
+
+  /** Who will get all ETH in the end */
+  address public teamMultisig;
+
+  /** Total incoming money */
+  uint public totalTransferred;
+
+  /** How many distinct customers we have that have made a payment */
+  uint public customerCount;
+
+  /** Total incoming money per centrally tracked customer id */
+  mapping(uint128 => uint) public paymentsByCustomer;
+
+  /** Total incoming money per benefactor address */
+  mapping(address => uint) public paymentsByBenefactor;
+
+  /** A customer has made a payment. Benefactor is the address where the tokens will be ultimately issued. */
+  event PaymentForwarded(address source, uint amount, uint128 customerId, address benefactor);
+
+  /**
+   * @notice Initializes the contract with the owner and team multisig addresses.
+   * @dev Sets the `teamMultisig` and `owner` addresses.
+   * @param _owner The address of the contract owner.
+   * @param _teamMultisig The address of the team multisig wallet.
+   */
+  function PaymentForwarder(address _owner, address _teamMultisig) {
+    teamMultisig = _teamMultisig;
+    owner = _owner;
+  }
+
+  /**
+   * @notice Allows a customer to make a payment without a checksum.
+   * @dev Records the payment, updates the total transferred, and forwards the payment to the team multisig address.
+   * @param customerId The unique identifier for the customer.
+   * @param benefactor The address that will benefit from the payment.
+   */
+  function payWithoutChecksum(uint128 customerId, address benefactor) public stopInEmergency payable {
+    require(msg.value > 0);
+    
+    // Update total transferred amount
+    totalTransferred += msg.value;
+    
+    // If it's the first payment from this customer, increase the customer count
+    if (paymentsByCustomer[customerId] == 0) {
+      customerCount += 1;
+    }
+    
+    // Update payment records
+    paymentsByCustomer[customerId] += msg.value;
+    paymentsByBenefactor[benefactor] += msg.value;
+    
+    // Forward payment to team multisig
+    teamMultisig.transfer(msg.value);
+    
+    // Emit event
+    emit PaymentForwarded(msg.sender, msg.value, customerId, benefactor);
+  }
+
+  /**
+   * @notice Allows a customer to make a payment on behalf of an address with a checksum.
+   * @dev Verifies the checksum and then calls `payWithoutChecksum` to process the payment.
+   * @param customerId The unique identifier for the customer.
+   * @param benefactor The address that will benefit from the payment.
+   * @param checksum The checksum to verify the payment.
+   */
+  function pay(uint128 customerId, address benefactor, bytes1 checksum) public stopInEmergency payable {
+    require(calculateChecksum(customerId, benefactor) == checksum);
+    payWithoutChecksum(customerId, benefactor);
+  }
+
+  /**
+   * @notice Allows a customer to make a payment on their own behalf with a checksum.
+   * @dev Verifies the checksum and then calls `payWithoutChecksum` to process the payment.
+   * @param customerId The unique identifier for the customer.
+   * @param checksum The checksum to verify the payment.
+   */
+  function payForMyselfWithChecksum(uint128 customerId, bytes1 checksum) public payable {
+    require(calculateChecksum(customerId, msg.sender) == checksum);
+    payWithoutChecksum(customerId, msg.sender);
+  }
+
+  /**
+   * @notice Allows a customer to make a payment on their own behalf without a checksum.
+   * @dev Calls `payWithoutChecksum` to process the payment.
+   * @param customerId The unique identifier for the customer.
+   */
+  function payForMyself(uint128 customerId) public payable {
+    payWithoutChecksum(customerId, msg.sender);
+  }
+
+  /**
+   * @notice Fallback function to receive Ether.
+   * @dev Reverts if the contract receives Ether directly.
+   */
+  function() external payable {
+    revert();
+  }
+
+  /**
+   * @notice Calculates a simple checksum for given customerId and benefactor.
+   * @dev Uses XOR operation to calculate the checksum.
+   * @param customerId The unique identifier for the customer.
+   * @param benefactor The address that will benefit from the payment.
+   * @return Calculated checksum.
+   */
+  function calculateChecksum(uint128 customerId, address benefactor) private pure returns (bytes1) {
+    return bytes1((bytes32(customerId) ^ bytes32(benefactor))[0]);
+  }
+}
+```
+
+### Key Points:
+- **Payments**: Payments are recorded against both `customerId` and `benefactor`. The total transferred amount is updated accordingly.
+- **Checksum Verification**: Functions `pay`, `payForMyselfWithChecksum` use a simple checksum to verify the legitimacy of the payment before processing.
+- **Fallback Function**: The fallback function reverts any direct Ether transfers, enforcing that all payments must go through one of the payment methods.
+- **Halting Mechanism**: The `Haltable` base contract provides an emergency stop mechanism that can halt all transactions except for those that restore the system from an emergency state.
+
+This contract assumes a basic checksum calculation and might need more sophisticated checks depending on your specific requirements.

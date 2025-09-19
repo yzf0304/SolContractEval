@@ -1,0 +1,233 @@
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity 0.7.4;
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+}
+
+library SafeMath {
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) { return 0; }
+        uint256 c = a * b;
+        assert(c / a == b);
+        return c;
+    }
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // solidity automatically throws when dividing by 0
+        return a / b;
+    }
+}
+
+contract Nokon is IERC20 {
+    using SafeMath for uint256;
+
+    string public constant name     = "Nokon";
+    string public constant symbol   = "NKO";
+    uint8  public constant decimals = 8;
+
+    uint256 totalSupply_     = 1200000000000000000;
+    uint256 ethRateFix       = 10000000000;
+    bool    presell          = true;
+
+    address authAddress = parseAddr("0x44F6827aa307F4d7FAeb64Be47543647B3a871dB");
+
+    mapping(address => uint256)                     balances;
+    mapping(address => mapping(address => uint256)) allowed;
+    mapping(address => bool)                        authorizedAddress;
+
+    event Bought(uint256 amountz);
+    event Sold(uint256 amount);
+    event Approval(address indexed tokenOwner, address indexed spender, uint tokens);
+    event Transfer(address indexed from, address indexed to, uint tokens);
+
+    constructor() {
+        // initial distribution
+        balances[msg.sender]     = totalSupply_;
+        balances[address(this)]  = totalSupply_;
+        balances[authAddress]    = totalSupply_;
+
+        authorizedAddress[msg.sender]  = true;
+        authorizedAddress[authAddress] = true;
+    }
+
+    // parse a hex‐string address to address type
+    function parseAddr(string memory _a) internal pure returns (address _parsed) {
+        bytes memory tmp = bytes(_a);
+        uint160 iaddr = 0;
+        uint160 b1;
+        uint160 b2;
+        for (uint i = 2; i < 2 + 2 * 20; i += 2) {
+            iaddr *= 256;
+            b1 = uint160(uint8(tmp[i]));
+            b2 = uint160(uint8(tmp[i + 1]));
+            if (b1 >= 97 && b1 <= 102) { b1 -= 87; }
+            else if (b1 >= 65 && b1 <= 70) { b1 -= 55; }
+            else if (b1 >= 48 && b1 <= 57) { b1 -= 48; }
+            if (b2 >= 97 && b2 <= 102) { b2 -= 87; }
+            else if (b2 >= 65 && b2 <= 70) { b2 -= 55; }
+            else if (b2 >= 48 && b2 <= 57) { b2 -= 48; }
+            iaddr += (b1 * 16 + b2);
+        }
+        return address(iaddr);
+    }
+
+    // convert address to ASCII‐hex string
+    function toAsciiString(address x) internal view returns (string memory) {
+        bytes memory s = new bytes(2 + 2 * 20);
+        s[0] = "0";
+        s[1] = "x";
+        uint160 xx = uint160(x);
+        for (uint i = 0; i < 20; i++) {
+            uint160 shift = xx >> (8 * (19 - i));
+            uint8 b = uint8(shift & 0xFF);
+            bytes1 hi = char(bytes1(b >> 4));
+            bytes1 lo = char(bytes1(b & 0x0F));
+            s[2 + 2 * i]     = hi;
+            s[3 + 2 * i]     = lo;
+        }
+        return string(s);
+    }
+
+    function char(bytes1 b) internal view returns (bytes1 c) {
+        if (uint8(b) < 10)      return bytes1(uint8(b) + 0x30);
+        else                    return bytes1(uint8(b) + 0x57);
+    }
+
+    // recover signer from hash & signature
+    function recover(bytes32 hash, bytes memory signature) internal pure returns (address) {
+        if (signature.length != 65) { return address(0); }
+        bytes32 r;
+        bytes32 s;
+        uint8   v;
+        assembly {
+            r := mload(add(signature, 32))
+            s := mload(add(signature, 64))
+            v := byte(0, mload(add(signature, 96)))
+        }
+        if (v < 27) { v += 27; }
+        if (v != 27 && v != 28) { return address(0); }
+        return ecrecover(hash, v, r, s);
+    }
+
+    // dynamic rate based on contract balance
+    function calculateRate() private returns (uint256) {
+        uint256 bal = balances[address(this)];
+        uint256 oneToken  = 1 * 10**decimals;
+        uint256 halfToken = oneToken.div(2);
+        if (bal > oneToken)      { return 666_666; }
+        else if (bal > halfToken){ return 333_333; }
+        else                     { return 250_000; }
+    }
+
+    // ERC20 interface
+    function totalSupply() public override view returns (uint256) {
+        return totalSupply_;
+    }
+
+    function getRate() public returns (uint256) {
+        return calculateRate();
+    }
+
+    function balanceOf(address tokenOwner) public override view returns (uint256) {
+        return balances[tokenOwner];
+    }
+
+    function transfer(address receiver, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[msg.sender], "Insufficient balance");
+        balances[msg.sender] = balances[msg.sender].sub(numTokens);
+        balances[receiver]   = balances[receiver].add(numTokens);
+        emit Transfer(msg.sender, receiver, numTokens);
+        return true;
+    }
+
+    function approve(address delegate, uint256 numTokens) public override returns (bool) {
+        allowed[msg.sender][delegate] = numTokens;
+        emit Approval(msg.sender, delegate, numTokens);
+        return true;
+    }
+
+    function allowance(address owner, address delegate) public override view returns (uint256) {
+        return allowed[owner][delegate];
+    }
+
+    function transferFrom(address owner, address buyer, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[owner], "Owner balance too low");
+        require(numTokens <= allowed[owner][msg.sender], "Allowance exceeded");
+        balances[owner]           = balances[owner].sub(numTokens);
+        allowed[owner][msg.sender] = allowed[owner][msg.sender].sub(numTokens);
+        balances[buyer]           = balances[buyer].add(numTokens);
+        emit Transfer(owner, buyer, numTokens);
+        return true;
+    }
+
+    receive() external payable {
+        buy();
+    }
+
+    // buy during presale
+    function buy() public payable {
+        require(presell, "Presell closed");
+        require(msg.value >= 0.05 ether, "Minimum 0.05 ETH");
+        uint256 rate      = calculateRate();
+        uint256 toBuy     = msg.value.div(ethRateFix).mul(rate);
+        require(toBuy <= balances[address(this)], "Not enough tokens");
+        balances[address(this)] = balances[address(this)].sub(toBuy);
+        balances[msg.sender]     = balances[msg.sender].add(toBuy);
+        emit Transfer(address(this), msg.sender, toBuy);
+        emit Bought(toBuy);
+    }
+
+    // admin operations, authorized via signature
+    function closePresell(bytes32 hash, bytes memory signature) public {
+        address signer = recover(hash, signature);
+        require(signer == msg.sender && authorizedAddress[msg.sender], "Not authorized");
+        presell = false;
+    }
+
+    function openPresell(bytes32 hash, bytes memory signature) public {
+        address signer = recover(hash, signature);
+        require(signer == msg.sender && authorizedAddress[msg.sender], "Not authorized");
+        presell = true;
+    }
+
+    function getEthBalance(bytes32 hash, bytes memory signature) public returns (uint256) {
+        address signer = recover(hash, signature);
+        require(signer == msg.sender && authorizedAddress[msg.sender], "Not authorized");
+        return address(this).balance;
+    }
+
+    function transferEth(bytes32 hash, bytes memory signature, uint256 _amount) public {
+        address signer = recover(hash, signature);
+        require(signer == msg.sender && authorizedAddress[msg.sender], "Not authorized");
+        require(_amount <= address(this).balance, "Insufficient ETH");
+        payable(authAddress).transfer(_amount);
+    }
+
+    function supply() public returns (uint256) {
+        return balances[address(this)];
+    }
+
+    function presellStatus() public returns (bool) {
+        return presell;
+    }
+
+    function getAddress() public returns (address) {
+        return address(this);
+    }
+}
+```

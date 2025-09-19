@@ -1,0 +1,110 @@
+Certainly! Below is the complete and functional `Manager` contract based on your requirements and constraints:
+
+```solidity
+/**
+ * @notice A contract for managing a list of managers with the ability to add, remove, and check their status.
+ * @dev This contract inherits from SpecialManager and provides functionality to manage a list of addresses that are considered managers.
+ */
+contract Manager is SpecialManager {
+
+	// адрес менеджеров
+	mapping ( address => bool ) public managerAddressMap;
+
+	// Соответсвие адреса менеджеров и его номера
+	mapping ( address => uint256 ) public managerAddressNumberMap;
+
+	// список менеджеров
+	mapping ( uint256 => address ) public managerListMap;
+
+	// сколько всего менеджеров
+	uint256 public managerCountInt = 0;
+
+	/**
+	 * @notice Modifier to restrict access to only the owner or a manager.
+	 * @dev This modifier checks if the message sender is either the owner or a registered manager.
+	 */
+	modifier isManagerOrOwner {
+        require( managerAddressMap[msg.sender]==true || ownerAddressMap[msg.sender]==true );
+        _;
+    }
+
+	/**
+     * @dev Enables or re-enables a manager address.
+     * @param _onManagerAddress The address of the manager to enable
+     * @return retrnVal Boolean indicating success (true) or if manager already active (false)
+     * @dev Requirements:
+     *   - Only callable by contract owner
+     *   - Manager address cannot be zero
+     * @dev Behavior:
+     *   - If manager exists but is disabled, enables them and emits event
+     *   - If manager doesn't exist, adds them to the manager list with sequential numbering
+     *   - Updates all relevant manager tracking mappings
+     *   - Emits ContractManagementUpdate event in all cases
+     * @dev Notes:
+     *   - Maintains three related mappings for manager tracking:
+     *     1. managerAddressMap: tracks enabled/disabled status
+     *     2. managerAddressNumberMap: tracks manager's sequential number
+     *     3. managerListMap: maintains ordered list of managers
+     *   - Increments managerCountInt when adding new managers
+     * @dev Events:
+     *   - Emits ContractManagementUpdate with action details
+     */
+	function managerOn( address _onManagerAddress ) external isOwner returns (bool retrnVal) {
+		// Check if it's a non-zero address
+		require(_onManagerAddress != address(0));
+		
+		// if such manager exists
+		if (managerAddressNumberMap[_onManagerAddress] > 0) {
+			// if such manager is disabled, enable him again
+			if (!managerAddressMap[_onManagerAddress]) {
+				managerAddressMap[_onManagerAddress] = true;
+				ContractManagementUpdate("Manager", msg.sender, _onManagerAddress, true);
+				retrnVal = true;
+			} else {
+				retrnVal = false;
+			}
+		}
+		// if there is no such manager
+		else {
+			managerAddressMap[_onManagerAddress] = true;
+			managerAddressNumberMap[_onManagerAddress] = managerCountInt;
+			managerListMap[managerCountInt] = _onManagerAddress;
+			managerCountInt++;
+			ContractManagementUpdate("Manager", msg.sender, _onManagerAddress, true);
+			retrnVal = true;
+		}
+	}
+
+	/**
+	 * @notice Disables a manager.
+	 * @dev This function disables an existing manager. Only the owner can call this function.
+	 * @param _offManagerAddress The address of the manager to be disabled.
+	 * @return retrnVal Returns true if the operation was successful, false otherwise.
+	 */
+	function managerOff( address _offManagerAddress ) external isOwner returns (bool retrnVal) {
+		// if such manager exists and he is active
+		// 0-th manager can't be disabled
+		if (managerAddressNumberMap[_offManagerAddress] > 0 && managerAddressMap[_offManagerAddress]) {
+			managerAddressMap[_offManagerAddress] = false;
+			ContractManagementUpdate("Manager", msg.sender, _offManagerAddress, false);
+			retrnVal = true;
+		} else {
+			retrnVal = false;
+		}
+	}
+
+	/**
+	 * @notice Initializes the contract and adds the creator as the first manager.
+	 * @dev The constructor sets up the initial state and adds the contract creator as the first manager.
+	 */
+	function Manager() public {
+		// adding creator as a manager
+		managerAddressMap[msg.sender] = true;
+		managerAddressNumberMap[msg.sender] = managerCountInt;
+		managerListMap[managerCountInt] = msg.sender;
+		managerCountInt++;
+	}
+}
+```
+
+This contract `Manager` extends the `SpecialManager` contract and includes functionalities to manage a list of managers. It allows the owner to add (`managerOn`) or disable (`managerOff`) managers while maintaining a record of all managers and ensuring that the owner has the necessary permissions to perform these actions.

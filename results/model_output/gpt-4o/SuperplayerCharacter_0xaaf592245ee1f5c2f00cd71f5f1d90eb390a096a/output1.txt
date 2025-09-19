@@ -1,0 +1,151 @@
+Below is the completed `SuperplayerCharacter` smart contract based on the provided context and description:
+
+```solidity
+pragma solidity ^0.5.1;
+
+/**
+ * @notice This contract manages a set of characters that users can select. Each character has an ID and a weight, which is used in a weighted random selection process. The contract also allows the owner to add new characters, set a fee for changing characters, and withdraw funds.
+ * @dev The contract uses SafeMath for arithmetic operations to prevent overflows and underflows. It also emits events and maintains mappings and arrays to track character selections and configurations.
+ */
+contract SuperplayerCharacter is Ownable {
+  using SafeMath for uint256;
+
+  /**
+   * @notice Emitted when a user selects a character.
+   * @param from The address of the user who selected the character.
+   * @param chaId The ID of the character selected.
+   */
+  event CharacterSelect(address from, uint32 chaId);
+
+  /**
+   * @notice A mapping that associates each address with a character ID.
+   */
+  mapping(address => uint32) public addrMapCharacterIds;
+
+  /**
+   * @notice The fee required to change a character.
+   */
+  uint256 private changeFee = 0;
+
+  /**
+   * @notice A struct representing a character, which includes an ID and a weight.
+   */
+  struct Character {
+    uint32 id;
+    uint weight;
+  }
+
+  /**
+   * @notice An array of characters.
+   */
+  Character[] private characters;
+
+  /**
+   * @notice The total number of characters.
+   */
+  uint256 private totalNum = 0;
+
+  /**
+   * @notice The sum of all character weights.
+   */
+  uint256 private totalWeight = 0;
+
+  /**
+   * @notice Initializes the contract by adding initial characters.
+   */
+  constructor() public {
+      _addCharacter(1, 1000000);
+      _addCharacter(2, 1000000);
+      _addCharacter(3, 1000000);
+      _addCharacter(4, 1000);
+      _addCharacter(5, 1000);
+      _addCharacter(6, 1000);
+  }
+
+  /**
+   * @notice Allows the owner to add a new character.
+   * @param id The ID of the new character.
+   * @param weight The weight of the new character.
+   */
+  function AddCharacter(uint32 id, uint weight) public onlyOwner {
+    _addCharacter(id, weight);
+  }
+
+  /**
+   * @notice Allows the owner to set the fee for changing a character.
+   * @param fee The new fee amount.
+   */
+  function SetFee(uint256 fee) public onlyOwner {
+    changeFee = fee;
+  }
+
+  /**
+   * @notice Allows the owner to withdraw the contract's balance.
+   * @param to The address to send the funds to.
+   */
+  function withdraw(address payable to) public onlyOwner {
+    require(to != address(0), "Withdraw to the zero address");
+    to.transfer(address(this).balance);
+  }
+
+  /**
+   * @notice Returns the configuration of all characters, including their IDs and weights.
+   * @return ids An array of character IDs.
+   * @return weights An array of character weights.
+   */
+  function getConfig() public view returns (uint32[] memory ids, uint256[] memory weights) {
+    ids = new uint32[](characters.length);
+    weights = new uint256[](characters.length);
+    for (uint i = 0; i < characters.length; i++) {
+      ids[i] = characters[i].id;
+      weights[i] = characters[i].weight;
+    }
+  }
+
+  /**
+   * @notice Allows users to select a character by sending a transaction with the required fee.
+   */
+  function () payable external {
+    require(msg.value >= changeFee, "Insufficient fee");
+    uint sum = 0;
+    uint index = characters.length - 1;
+
+    uint weight = uint256(keccak256(abi.encodePacked(block.timestamp, msg.value, block.difficulty))) % totalWeight + 1;
+
+    for (uint i = 0; i < characters.length; i++) {
+      Character memory ch = characters[i];
+      sum += ch.weight;
+      if (weight <= sum) {
+        index = i;
+        break;
+      }
+    }
+    _selectCharacter(msg.sender, characters[index].id);
+
+    msg.sender.transfer(msg.value.sub(changeFee));
+  }
+
+  /**
+   * @dev Internal function to select a character for a user.
+   * @param from The address of the user.
+   * @param id The ID of the character to select.
+   */
+  function _selectCharacter(address from, uint32 id) internal {
+    addrMapCharacterIds[from] = id;
+    emit CharacterSelect(from, id);
+  }
+
+  /**
+   * @dev Internal function to add a new character to the list.
+   * @param id The ID of the new character.
+   * @param weight The weight of the new character.
+   */
+  function _addCharacter(uint32 id, uint weight) internal {
+    characters.push(Character(id, weight));
+    totalNum = totalNum.add(1);
+    totalWeight = totalWeight.add(weight);
+  }
+}
+```
+
+This contract follows the context and requirements given, implementing character management with weighted random selection and owner-controlled configuration functionalities.

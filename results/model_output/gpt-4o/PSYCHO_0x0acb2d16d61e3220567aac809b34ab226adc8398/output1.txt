@@ -1,0 +1,119 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "erc721a/contracts/ERC721A.sol";
+
+/**
+ * @title PSYCHO
+ * @notice This contract is an ERC721A NFT minting contract with features for both paid and free mints, and various administrative controls.
+ * @dev The contract inherits from Ownable and ERC721A. It includes functions to manage the minting process, set prices, and control the sale state.
+ */
+contract PSYCHO is Ownable, ERC721A {
+    uint256 public maxSupply = 8888;
+    uint256 public maxFreeSupply = 8888;
+    uint256 public maxPerTxDuringMint = 20;
+    uint256 public maxPerAddressDuringMint = 21;
+    uint256 public maxPerAddressDuringFreeMint = 1;
+    uint256 public price = 0.003 ether;
+    bool public saleIsActive = true;
+    bool public revealed = false;
+
+    address constant internal TEAM_ADDRESS = 0x06C8033719b4fa22DE97d4632b4120D2F429c538;
+    string public baseURI = "";
+    string public constant baseExtension = "";
+    string public hiddenMetadataUri;
+    mapping(address => uint256) public freeMintedAmount;
+    mapping(address => uint256) public mintedAmount;
+
+    constructor() ERC721A("PSYCHO", "PSYCHO") {
+        _safeMint(msg.sender, 1);
+        setHiddenMetadataUri("https://gateway.pinata.cloud/ipfs/QmcJ9dJMmgNiUD9oSASjgxhbuqam7y2WVSxDKLuX3GFyz5");
+    }
+
+    modifier mintCompliance() {
+        require(saleIsActive, "Sale is not active yet.");
+        require(tx.origin == msg.sender, "Wrong Caller");
+        _;
+    }
+
+    function mint(uint256 _quantity) external payable mintCompliance() {
+        require(_quantity > 0, "Quantity must be greater than zero");
+        require(totalSupply() + _quantity <= maxSupply, "Exceeds max supply");
+        require(mintedAmount[msg.sender] + _quantity <= maxPerAddressDuringMint, "Exceeds max per address");
+        require(_quantity <= maxPerTxDuringMint, "Exceeds max per transaction");
+        require(msg.value >= price * _quantity, "Insufficient funds");
+
+        mintedAmount[msg.sender] += _quantity;
+        _safeMint(msg.sender, _quantity);
+    }
+
+    function freeMint(uint256 _quantity) external mintCompliance() {
+        require(_quantity > 0, "Quantity must be greater than zero");
+        require(totalSupply() + _quantity <= maxFreeSupply, "Exceeds max free supply");
+        require(freeMintedAmount[msg.sender] + _quantity <= maxPerAddressDuringFreeMint, "Exceeds max free per address");
+
+        freeMintedAmount[msg.sender] += _quantity;
+        _safeMint(msg.sender, _quantity);
+    }
+
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    function setMaxPerTx(uint256 _amount) external onlyOwner {
+        maxPerTxDuringMint = _amount;
+    }
+
+    function setMaxPerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringMint = _amount;
+    }
+
+    function setMaxFreePerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringFreeMint = _amount;
+    }
+
+    function flipSale() public onlyOwner {
+        saleIsActive = !saleIsActive;
+    }
+
+    function setMaxSupply(uint256 newSupply) public onlyOwner {
+        require(newSupply >= totalSupply(), "New supply must be greater than or equal to existing supply");
+        maxSupply = newSupply;
+    }
+
+    function cutMaxSupply(uint256 _amount) public onlyOwner {
+        require(maxSupply - _amount >= totalSupply(), "Cannot cut max supply below total supply");
+        maxSupply -= _amount;
+    }
+
+    function setRevealed(bool _state) public onlyOwner {
+        revealed = _state;
+    }
+
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setHiddenMetadataUri(string memory _hiddenMetadataUri) public onlyOwner {
+        hiddenMetadataUri = _hiddenMetadataUri;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
+
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        if (!_exists(_tokenId)) revert URIQueryForNonexistentToken();
+        if (!revealed) {
+            return hiddenMetadataUri;
+        }
+        return string(abi.encodePacked(_baseURI(), Strings.toString(_tokenId), baseExtension));
+    }
+
+    function withdrawBalance() external payable onlyOwner {
+        payable(TEAM_ADDRESS).transfer(address(this).balance);
+    }
+}
+```

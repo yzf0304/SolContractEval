@@ -1,0 +1,306 @@
+```solidity
+pragma solidity ^0.4.20;
+
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks that throw on error
+ */
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal constant returns (uint256) {
+        uint256 c = a * b;
+        assert(a == 0 || c / a == b);
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal constant returns (uint256) {
+        // assert(b > 0); // Solidity automatically throws when dividing by 0
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal constant returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal constant returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+contract TokenRecipient {
+    function tokenFallback(address _from, uint _value, bytes _data) public;
+}
+
+//Token Format
+contract ERC20 {
+    using SafeMath for uint256;
+    //Public Variables of the token
+    string public name;
+    string public symbol;
+    uint8 public decimals;
+    uint256 public totalSupply;
+
+    mapping (address => uint256) public balances;
+
+    mapping (address => mapping (address => uint256)) public allowed;
+
+    /* This generates a public event on the blockchain that will notify clients */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed _owner, address indexed _spender, uint _value);
+
+    //Constructor
+    function ERC20(
+        uint256 _initialSupply,
+        string _tokenName,
+        uint8 _decimalUnits,
+        string _tokenSymbol
+    ) public
+    {
+    }
+
+    /* public methods */
+    function transfer(address _to, uint256 _value) public  returns (bool) {
+        return false;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        return false;
+    }
+
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        return false;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        return false;
+    }
+
+    /*constant functions*/
+    function totalSupply() public constant returns (uint256) {
+        return totalSupply;
+    }
+
+    function balanceOf(address _address) public constant returns (uint256 balance) {
+        return balances[_address];
+    }
+
+    function allowance(address _owner, address _spender) public constant returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+}
+
+contract ERC223 {
+    event Transfer(address indexed from, address indexed to, uint value, bytes  data);
+    function transfer(address to, uint value, bytes data) public returns (bool ok);
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool ok);
+}
+
+//Owner Contract-For Defining Owner and Transferring Ownership
+contract Ownable {
+
+    address public owner;
+
+    function Ownable() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        owner = newOwner;
+    }
+}
+
+/**
+ * @notice The AxpireToken contract is an implementation of the ERC20 and ERC223 standards, designed to create a token with the specified initial supply, name, symbol, and decimals.
+ * @dev This contract extends the functionality of ERC20 and ERC223 by adding additional transfer methods and handling for contract recipients.
+ */
+contract AxpireToken is ERC223, ERC20, Ownable {
+    using SafeMath for uint256;
+
+    uint256 initialSupply = 350000000 * 10**8;
+    string public name = "aXpire Token";
+    string public symbol = "AXP";
+    uint8 public decimals = 8;
+
+    mapping (address => uint256) public balances;
+    mapping (address => mapping (address => uint256)) public allowed;
+
+    /* This generates a public event on the blockchain that will notify clients */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed _owner, address indexed _spender, uint _value);
+
+
+    //Constructor
+    function AxpireToken() public
+    ERC20(initialSupply, name, decimals, symbol)
+    {
+        owner = msg.sender;
+        //Assigning total no of tokens
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens to a recipient address, including additional data.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, false, "");
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens to a recipient address, including additional data and a custom fallback function.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @param customFallback The custom fallback function to use if the recipient is a contract.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, true, customFallback);
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from one address to another, using the allowance mechanism.
+     * @param _from The address from which the tokens will be transferred.
+     * @param _to The address to which the tokens will be transferred.
+     * @param _value The amount of tokens to transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        return transferInternal(_from, _to, _value, "", false, "");
+    }
+
+    /**
+     * @dev Internal function to handle the transfer of tokens, including additional data.
+     * @param from The address from which the tokens will be transferred.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        return transferInternal(from, to, value, data, false, "");
+    }
+
+    /**
+     * @dev Internal function to handle the transfer of tokens, including additional data and a custom fallback function.
+     * @param from The address from which the tokens will be transferred.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @param useCustomFallback A boolean indicating whether to use a custom fallback function.
+     * @param customFallback The custom fallback function to use if the recipient is a contract.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        require(balances[from] >= value);
+
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+
+        Transfer(from, to, value);
+        Transfer(from, to, value, data);
+
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                //Not supported in solidity 0.4.20
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @dev Internal function to handle the transfer of tokens without additional data.
+     * @param from The address from which the tokens will be transferred.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferInternal(address from, address to, uint256 value) internal returns (bool success) {
+        return transferInternal(from, to, value, "", false, "");
+    }
+
+    /**
+     * @dev Checks if the given address is a contract by checking the code size.
+     * @param _addr The address to check.
+     * @return A boolean indicating whether the address is a contract.
+     */
+    function isContract(address _addr) private returns (bool) {
+        uint size;
+        assembly {
+            size := extcodesize(_addr)
+        }
+        return size > 0;
+    }
+
+   /**
+     * @dev Transfer the specified amount of tokens to the specified address.
+     *      This function works the same as the previous one but doesn't require data parameter.
+     *      Added due to backward compatibility reasons.
+     * @param _to address The address to transfer to.
+     * @param _value uint256 The amount to be transferred.
+     */
+    function transfer(address _to, uint256 _value) public returns (bool) {
+        return transferInternal(msg.sender, _to, _value);
+    }
+
+   /**
+    * @dev Function to approve the specified address to spend the specified amount of tokens on behalf of msg.sender.
+    * @param _spender The address authorized to spend.
+    * @param _value The max amount they can spend.
+    */
+    function approve(address _spender, uint256 _value) public returns (bool) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+   /**
+    * @dev Function to check the amount of tokens that an owner allowed to a spender.
+    * @param _owner address The address which owns the funds.
+    * @param _spender address The address which will spend the funds.
+    * @return A uint256 specifying the amount of tokens still available for the spender.
+    */
+    function allowance(address _owner, address _spender) public constant returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+    
+    /**
+     * @dev Function to receive approval and execute a function in the receiving contract
+     * @param _spender The address authorized to spend.
+     * @param _value The max amount they can spend.
+     * @param _extraData The extra data to send to the receiving contract.
+     */
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool) {
+        approve(_spender, _value);
+        TokenRecipient spender = TokenRecipient(_spender);
+        spender.receiveApproval(msg.sender, _value, this, _extraData);
+        return true;
+    }
+}
+```

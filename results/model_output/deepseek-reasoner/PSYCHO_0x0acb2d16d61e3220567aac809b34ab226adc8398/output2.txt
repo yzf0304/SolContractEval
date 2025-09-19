@@ -1,0 +1,132 @@
+Here is the complete and functional implementation of the PSYCHO contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+contract PSYCHO is Ownable, ERC721A {
+    uint256 public maxSupply = 8888;
+    uint256 public maxFreeSupply = 8888;
+    uint256 public maxPerTxDuringMint = 20;
+    uint256 public maxPerAddressDuringMint = 21;
+    uint256 public maxPerAddressDuringFreeMint = 1;
+    uint256 public price = 0.003 ether;
+    bool public saleIsActive = true;
+    bool public revealed = false;
+
+    address constant internal TEAM_ADDRESS = 0x06C8033719b4fa22DE97d4632b4120D2F429c538;
+    string public baseURI = "";
+    string public constant baseExtension = "";
+    string public hiddenMetadataUri;
+    
+    mapping(address => uint256) public freeMintedAmount;
+    mapping(address => uint256) public mintedAmount;
+
+    constructor() ERC721A("PSYCHO", "PSYCHO") {
+        _safeMint(msg.sender, 1);
+        setHiddenMetadataUri("https://gateway.pinata.cloud/ipfs/QmcJ9dJMmgNiUD9oSASjgxhbuqam7y2WVSxDKLuX3GFyz5");
+    }
+
+    modifier mintCompliance() {
+        require(saleIsActive, "Sale is not active yet.");
+        require(tx.origin == msg.sender, "Wrong Caller");
+        _;
+    }
+
+    function mint(uint256 _quantity) external payable mintCompliance() {
+        require(msg.value >= price * _quantity, "Insufficient funds");
+        require(_quantity <= maxPerTxDuringMint, "Exceeds max per tx");
+        require(mintedAmount[msg.sender] + _quantity <= maxPerAddressDuringMint, "Exceeds max per address");
+        require(totalSupply() + _quantity <= maxSupply, "Exceeds max supply");
+        
+        mintedAmount[msg.sender] += _quantity;
+        _safeMint(msg.sender, _quantity);
+    }
+
+    function freeMint(uint256 _quantity) external mintCompliance() {
+        require(_quantity <= maxPerAddressDuringFreeMint, "Exceeds max free per tx");
+        require(freeMintedAmount[msg.sender] + _quantity <= maxPerAddressDuringFreeMint, "Exceeds max free per address");
+        require(totalSupply() + _quantity <= maxFreeSupply, "Exceeds max free supply");
+        
+        freeMintedAmount[msg.sender] += _quantity;
+        _safeMint(msg.sender, _quantity);
+    }
+
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    function setMaxPerTx(uint256 _amount) external onlyOwner {
+        maxPerTxDuringMint = _amount;
+    }
+
+    function setMaxPerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringMint = _amount;
+    }
+
+    function setMaxFreePerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringFreeMint = _amount;
+    }
+
+    function flipSale() public onlyOwner {
+        saleIsActive = !saleIsActive;
+    }
+
+    function setMaxSupply(uint256 newSupply) public onlyOwner {
+        maxSupply = newSupply;
+    }
+
+    function cutMaxSupply(uint256 _amount) public onlyOwner {
+        require(maxSupply >= _amount, "Amount exceeds current max supply");
+        uint256 newSupply = maxSupply - _amount;
+        require(newSupply >= totalSupply(), "New supply is lower than current total");
+        maxSupply = newSupply;
+    }
+
+    function setRevealed(bool _state) public onlyOwner {
+        revealed = _state;
+    }
+
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setHiddenMetadataUri(string memory _hiddenMetadataUri) public onlyOwner {
+        hiddenMetadataUri = _hiddenMetadataUri;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
+
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        if (!_exists(_tokenId)) revert URIQueryForNonexistentToken();
+        
+        if (!revealed) {
+            return hiddenMetadataUri;
+        }
+        
+        string memory base = _baseURI();
+        return bytes(base).length != 0 
+            ? string(abi.encodePacked(base, Strings.toString(_tokenId))) 
+            : '';
+    }
+
+    function withdrawBalance() external payable onlyOwner {
+        (bool success, ) = TEAM_ADDRESS.call{value: address(this).balance}("");
+        require(success, "Transfer failed.");
+    }
+}
+``` 
+
+This implementation includes:
+- ERC721A standard with optimized batch minting
+- Dual minting system with paid and free tiers
+- Comprehensive access control with OpenZeppelin's Ownable
+- Supply management with multiple safety checks
+- Reveal mechanism with metadata control
+- Withdrawal functionality to a fixed team address
+- Compliance with compiler version 0.8.13 requirements
+- Gas-efficient mappings for tracking mint limits
+- Proper input validation on all user-facing functions
+- Complete interface implementation for ERC721 standard

@@ -1,0 +1,449 @@
+Here is the completed `AggregationRouter` contract (compatible with Solidity 0.7.6) with the requested functions filled in. No extra contracts or dependencies have been introduced; all logic follows the provided context and descriptions.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.7.6;
+
+interface IERC20 {
+    event Approval(
+        address indexed owner,
+        address indexed spender,
+        uint256 value
+    );
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    function name() external view returns (string memory);
+
+    function symbol() external view returns (string memory);
+
+    function decimals() external view returns (uint8);
+
+    function totalSupply() external view returns (uint256);
+
+    function balanceOf(address owner) external view returns (uint256);
+
+    function allowance(address owner, address spender)
+        external
+        view
+        returns (uint256);
+
+    function approve(address spender, uint256 value) external returns (bool);
+
+    function transfer(address to, uint256 value) external returns (bool);
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 value
+    ) external returns (bool);
+}
+
+library TransferHelper {
+    function safeApprove(
+        address token,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('approve(address,uint256)')));
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSelector(0x095ea7b3, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            "TransferHelper: APPROVE_FAILED"
+        );
+    }
+
+    function safeTransfer(
+        address token,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('transfer(address,uint256)')));
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSelector(0xa9059cbb, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            "TransferHelper: TRANSFER_FAILED"
+        );
+    }
+
+    function safeTransferFrom(
+        address token,
+        address from,
+        address to,
+        uint256 value
+    ) internal {
+        // bytes4(keccak256(bytes('transferFrom(address,address,uint256)')));
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSelector(0x23b872dd, from, to, value));
+        require(
+            success && (data.length == 0 || abi.decode(data, (bool))),
+            "TransferHelper: TRANSFER_FROM_FAILED"
+        );
+    }
+
+    function safeTransferETH(address to, uint256 value) internal {
+        (bool success, ) = to.call{value: value}(new bytes(0));
+        require(success, "TransferHelper: ETH_TRANSFER_FAILED");
+    }
+}
+
+library SafeMath {
+    function add(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x + y) >= x, "ds-math-add-overflow");
+    }
+
+    function sub(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x - y) <= x, "ds-math-sub-underflow");
+    }
+
+    function mul(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require(y == 0 || (z = x * y) / y == x, "ds-math-mul-overflow");
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256 c) {
+        require(b > 0, "ds-math-division-by-zero");
+        c = a / b;
+    }
+}
+
+library RevertReasonParser {
+    function parse(bytes memory data, string memory prefix)
+        internal
+        pure
+        returns (string memory)
+    {
+        // https://solidity.readthedocs.io/en/latest/control-structures.html#revert
+        // We assume that revert reason is abi-encoded as Error(string)
+
+        // 68 = 4-byte selector 0x08c379a0 + 32 bytes offset + 32 bytes length
+        if (
+            data.length >= 68 &&
+            data[0] == "\x08" &&
+            data[1] == "\xc3" &&
+            data[2] == "\x79" &&
+            data[3] == "\xa0"
+        ) {
+            string memory reason;
+            assembly {
+                // skip selector (4) + offset (32) + length (32) = 68
+                reason := add(data, 68)
+            }
+            require(
+                data.length >= 68 + bytes(reason).length,
+                "Invalid revert reason"
+            );
+            return string(abi.encodePacked(prefix, "Error(", reason, ")"));
+        } else if (
+            data.length == 36 &&
+            data[0] == "\x4e" &&
+            data[1] == "\x48" &&
+            data[2] == "\x7b" &&
+            data[3] == "\x71"
+        ) {
+            uint256 code;
+            assembly {
+                code := mload(add(data, 36))
+            }
+            return
+                string(abi.encodePacked(prefix, "Panic(", _toHex(code), ")"));
+        }
+        return string(abi.encodePacked(prefix, "Unknown(", _toHex(data), ")"));
+    }
+
+    function _toHex(uint256 value) private pure returns (string memory) {
+        return _toHex(abi.encodePacked(value));
+    }
+
+    function _toHex(bytes memory data) private pure returns (string memory) {
+        bytes16 alphabet = 0x30313233343536373839616263646566;
+        bytes memory str = new bytes(2 + data.length * 2);
+        str[0] = "0";
+        str[1] = "x";
+        for (uint256 i = 0; i < data.length; i++) {
+            str[2 * i + 2] = alphabet[uint8(data[i] >> 4)];
+            str[2 * i + 3] = alphabet[uint8(data[i] & 0x0f)];
+        }
+        return string(str);
+    }
+}
+
+interface IERC20Permit {
+    function permit(
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
+}
+
+contract Permitable {
+    event Error(string reason);
+
+    function _permit(
+        IERC20 token,
+        uint256 amount,
+        bytes calldata permitData
+    ) internal {
+        // permitData is 7 * 32 bytes if present: owner, spender, value, deadline, v, r, s
+        if (permitData.length == 32 * 7) {
+            (bool success, bytes memory result) =
+                address(token).call(
+                    abi.encodePacked(IERC20Permit.permit.selector, permitData)
+                );
+            if (!success) {
+                string memory reason =
+                    RevertReasonParser.parse(result, "Permit call failed: ");
+                if (token.allowance(msg.sender, address(this)) < amount) {
+                    revert(reason);
+                } else {
+                    emit Error(reason);
+                }
+            }
+        }
+    }
+}
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address payable) {
+        return msg.sender;
+    }
+
+    function _msgData() internal view virtual returns (bytes memory) {
+        this;
+        return msg.data;
+    }
+}
+
+abstract contract Ownable is Context {
+    address private _owner;
+
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+
+    constructor() {
+        address msgSender = _msgSender();
+        _owner = msgSender;
+        emit OwnershipTransferred(address(0), msgSender);
+    }
+
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    function renounceOwnership() public onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0), "Ownable: zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+interface IAggregationExecutor {
+    function callBytes(bytes calldata data) external payable;
+}
+
+contract AggregationRouter is Permitable, Ownable {
+    using SafeMath for uint256;
+
+    address public immutable WETH;
+    address private constant ETH_ADDRESS =
+        address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+    event Exchange(address pair, uint256 amountOut, address output);
+
+    modifier ensure(uint256 deadline) {
+        require(deadline >= block.timestamp, "Router: EXPIRED");
+        _;
+    }
+
+    constructor(address _WETH) {
+        WETH = _WETH;
+    }
+
+    receive() external payable {
+        // accept ETH only via WETH.withdraw
+    }
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    ) external payable ensure(desc.flags /* for deadline reuse */) returns (uint256) {
+        require(desc.minReturnAmount > 0, "minReturnAmount>0");
+        require(data.length > 0, "data must not be empty");
+
+        // 1) Permit if needed
+        _permit(desc.srcToken, desc.amount, desc.permit);
+
+        bool srcIsETH = isETH(desc.srcToken);
+        bool dstIsETH = isETH(desc.dstToken);
+
+        // 2) Handle incoming funds
+        uint256 valueForExecutor = 0;
+        if (srcIsETH) {
+            // ETH-based swap
+            if (desc.flags & _REQUIRES_EXTRA_ETH != 0) {
+                require(msg.value >= desc.amount, "Router: extra ETH required");
+            } else {
+                require(msg.value == desc.amount, "Router: wrong ETH amount");
+            }
+            valueForExecutor = msg.value;
+        } else {
+            require(msg.value == 0, "Router: ETH not allowed");
+            TransferHelper.safeTransferFrom(
+                address(desc.srcToken),
+                desc.srcReceiver,
+                address(this),
+                desc.amount
+            );
+            // approve executor to pull tokens
+            TransferHelper.safeApprove(
+                address(desc.srcToken),
+                address(caller),
+                desc.amount
+            );
+        }
+
+        // 3) Measure dstToken balance before
+        uint256 balanceBefore = getBalance(desc.dstToken, address(this));
+
+        // 4) Execute the aggregated call
+        caller.callBytes{value: valueForExecutor}(data);
+
+        // 5) Clean up allowance if needed
+        if (!srcIsETH) {
+            TransferHelper.safeApprove(
+                address(desc.srcToken),
+                address(caller),
+                0
+            );
+        }
+
+        // 6) Calculate return amount
+        uint256 balanceAfter = getBalance(desc.dstToken, address(this));
+        uint256 returnAmount = balanceAfter.sub(balanceBefore);
+
+        // 7) Check slippage / partial fill
+        if (desc.flags & _PARTIAL_FILL != 0) {
+            require(returnAmount > 0, "Router: returnAmount=0");
+        } else {
+            require(
+                returnAmount >= desc.minReturnAmount,
+                "Router: Return amount too low"
+            );
+        }
+
+        // 8) Transfer out to dstReceiver
+        if (dstIsETH) {
+            TransferHelper.safeTransferETH(desc.dstReceiver, returnAmount);
+        } else {
+            TransferHelper.safeTransfer(
+                address(desc.dstToken),
+                desc.dstReceiver,
+                returnAmount
+            );
+        }
+
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+
+        return returnAmount;
+    }
+
+    function getBalance(IERC20 token, address account)
+        internal
+        view
+        returns (uint256)
+    {
+        if (isETH(token)) {
+            return account.balance;
+        } else {
+            return token.balanceOf(account);
+        }
+    }
+
+    function isETH(IERC20 token) internal pure returns (bool) {
+        return address(token) == ETH_ADDRESS;
+    }
+
+    function rescueFunds(address token, uint256 amount)
+        external
+        onlyOwner
+    {
+        require(amount > 0, "Router: amount=0");
+        if (token == ETH_ADDRESS) {
+            // rescue ETH
+            TransferHelper.safeTransferETH(owner(), amount);
+        } else {
+            // rescue ERC20
+            TransferHelper.safeTransfer(token, owner(), amount);
+        }
+    }
+}
+```
+
+Explanation of key points:
+
+1. **swap(...)**  
+   - Checks `minReturnAmount` and non-empty payload.  
+   - Honors the `_REQUIRES_EXTRA_ETH` flag to allow extra ETH or enforce exact ETH.  
+   - Pulls ERC20 tokens in via `safeTransferFrom` + `safeApprove` (or accepts ETH via `msg.value`).  
+   - Calls the aggregator executor’s `callBytes` (forwarding ETH if needed).  
+   - Computes the actual output by comparing pre- and post-balances.  
+   - Applies strict slippage or partial-fill logic depending on the `_PARTIAL_FILL` flag.  
+   - Delivers output tokens or ETH to `dstReceiver`.  
+   - Emits `Swapped(...)`.
+
+2. **getBalance(...)** & **isETH(...)**  
+   - Utility functions to unify ERC20 vs. ETH balance checks and transfers.
+
+3. **rescueFunds(...)**  
+   - For owner-only recovery of stuck ETH or ERC20s, routing them back to the contract owner.
+
+All other flags (_SHOULD_CLAIM, _BURN_FROM_*) were left unused as their mechanics depend on custom token logics not described in the specification. The above strictly completes your router as requested.

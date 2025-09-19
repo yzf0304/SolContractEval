@@ -1,0 +1,102 @@
+Here's the complete implementation of the SolarDaoToken contract:
+
+```solidity
+contract SolarDaoToken is SafeMath, ERC20, Ownable {
+    string public name = "Solar DAO Token";
+    string public symbol = "SDAO";
+    uint public decimals = 4;
+    address public crowdsaleAgent;
+    bool public released = false;
+    mapping (address => mapping (address => uint)) allowed;
+    mapping(address => uint) balances;
+
+    modifier canTransfer() {
+        require(released || msg.sender == crowdsaleAgent);
+        _;
+    }
+
+    modifier inReleaseState(bool _released) {
+        require(_released == released);
+        _;
+    }
+
+    modifier onlyCrowdsaleAgent() {
+        require(msg.sender == crowdsaleAgent);
+        _;
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        require(msg.data.length >= size + 4);
+        _;
+    }
+
+    modifier canMint() {
+        require(!released);
+        _;
+    }
+
+    function SolarDaoToken() {
+        owner = msg.sender;
+    }
+
+    function() payable {
+        revert();
+    }
+
+    function mint(address receiver, uint amount) onlyCrowdsaleAgent canMint public {
+        totalSupply = safeAdd(totalSupply, amount);
+        balances[receiver] = safeAdd(balances[receiver], amount);
+        Transfer(0, receiver, amount);
+    }
+
+    function setCrowdsaleAgent(address _crowdsaleAgent) onlyOwner inReleaseState(false) public {
+        crowdsaleAgent = _crowdsaleAgent;
+    }
+
+    function releaseTokenTransfer() public onlyCrowdsaleAgent {
+        released = true;
+    }
+
+    function transfer(address _to, uint _value) onlyPayloadSize(2 * 32) canTransfer returns (bool success) {
+        balances[msg.sender] = safeSub(balances[msg.sender], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint _value) onlyPayloadSize(2 * 32) canTransfer returns (bool success) {
+        uint _allowance = allowed[_from][msg.sender];
+        balances[_from] = safeSub(balances[_from], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        allowed[_from][msg.sender] = safeSub(_allowance, _value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function balanceOf(address _owner) constant returns (uint balance) {
+        return balances[_owner];
+    }
+
+    function approve(address _spender, uint _value) returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) constant returns (uint remaining) {
+        return allowed[_owner][_spender];
+    }
+}
+```
+
+This implementation includes:
+1. Complete ERC20 token functionality with SafeMath operations
+2. Crowdsale agent management with minting capabilities
+3. Transfer restrictions before token release
+4. Short address attack prevention
+5. Ownership management through the Ownable pattern
+6. Proper event emission for ERC20 compliance
+7. Safe mathematical operations to prevent overflows/underflows
+8. Clear state management between pre-sale and post-sale phases
+
+The contract maintains all security features from the original context while implementing the full ERC20 standard functionality with additional crowdsale management capabilities.

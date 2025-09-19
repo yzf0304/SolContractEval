@@ -1,0 +1,166 @@
+Here is the completed `Registry` contract strictly based on the provided context:
+
+```solidity
+pragma solidity 0.5.17;
+
+contract Registry is HasAdmin {
+
+  event ContractAddressUpdated(
+    string indexed _name,
+    bytes32 indexed _code,
+    address indexed _newAddress
+  );
+
+  event TokenMapped(
+    address indexed _mainchainToken,
+    address indexed _sidechainToken,
+    uint32 _standard
+  );
+
+  string public constant GATEWAY = "GATEWAY";
+  string public constant WETH_TOKEN = "WETH_TOKEN";
+  string public constant VALIDATOR = "VALIDATOR";
+  string public constant ACKNOWLEDGEMENT = "ACKNOWLEDGEMENT";
+
+  struct TokenMapping {
+    address mainchainToken;
+    address sidechainToken;
+    uint32 standard; // 20, 721 or any other standards
+  }
+
+  mapping(bytes32 => address) public contractAddresses;
+  mapping(address => TokenMapping) public mainchainMap;
+  mapping(address => TokenMapping) public sidechainMap;
+
+  function getContract(string calldata _name)
+    external
+    view
+    returns (address _address)
+  {
+    bytes32 code = getCode(_name);
+    _address = contractAddresses[code];
+    require(_address != address(0), "Contract address not found");
+  }
+
+  function isTokenMapped(address _token, uint32 _standard, bool _isMainchain)
+    external
+    view
+    returns (bool)
+  {
+    TokenMapping memory mappingData = _getTokenMapping(_token, _isMainchain);
+    return mappingData.standard == _standard && mappingData.mainchainToken != address(0);
+  }
+
+  function updateContract(string calldata _name, address _newAddress)
+    external
+    onlyAdmin
+  {
+    require(_newAddress != address(0), "New address is zero");
+    bytes32 code = getCode(_name);
+    contractAddresses[code] = _newAddress;
+    emit ContractAddressUpdated(_name, code, _newAddress);
+  }
+
+  function mapToken(
+    address _mainchainToken,
+    address _sidechainToken,
+    uint32 _standard
+  )
+    external
+    onlyAdmin
+  {
+    require(_standard > 0, "Invalid standard");
+    require(_mainchainToken != address(0), "Mainchain token is zero address");
+    require(_sidechainToken != address(0), "Sidechain token is zero address");
+
+    mainchainMap[_mainchainToken] = TokenMapping(_mainchainToken, _sidechainToken, _standard);
+    sidechainMap[_sidechainToken] = TokenMapping(_mainchainToken, _sidechainToken, _standard);
+
+    emit TokenMapped(_mainchainToken, _sidechainToken, _standard);
+  }
+
+  function clearMapToken(address _mainchainToken, address _sidechainToken)
+    external
+    onlyAdmin
+  {
+    require(_mainchainToken != address(0), "Mainchain token is zero address");
+    require(_sidechainToken != address(0), "Sidechain token is zero address");
+
+    TokenMapping storage mainchainEntry = mainchainMap[_mainchainToken];
+    TokenMapping storage sidechainEntry = sidechainMap[_sidechainToken];
+
+    require(
+      mainchainEntry.mainchainToken != address(0) && 
+      sidechainEntry.sidechainToken != address(0),
+      "Token mapping not found"
+    );
+
+    _clearMapEntry(mainchainEntry);
+    _clearMapEntry(sidechainEntry);
+  }
+
+  function getMappedToken(
+    address _token,
+    bool _isMainchain
+  )
+    external
+    view
+    returns (
+      address _mainchainToken,
+      address _sidechainToken,
+      uint32 _standard
+    )
+  {
+    TokenMapping memory mappingData = _getTokenMapping(_token, _isMainchain);
+    require(mappingData.mainchainToken != address(0), "No mapping found");
+    return (mappingData.mainchainToken, mappingData.sidechainToken, mappingData.standard);
+  }
+
+  function getCode(string memory _name)
+    public
+    pure
+    returns (bytes32)
+  {
+    return keccak256(abi.encodePacked(_name));
+  }
+
+  function _getTokenMapping(
+    address _token,
+    bool isMainchain
+  )
+    internal
+    view
+    returns (TokenMapping memory _mapping)
+  {
+    return isMainchain ? mainchainMap[_token] : sidechainMap[_token];
+  }
+
+  function _clearMapEntry(TokenMapping storage _entry)
+    internal
+  {
+    _entry.mainchainToken = address(0);
+    _entry.sidechainToken = address(0);
+    _entry.standard = 0;
+  }
+}
+```
+
+### Explanation
+
+1. **`getContract`**: Retrieves a contract address by its name. Uses `keccak256` to hash the name and verify that the address is non-zero.
+
+2. **`isTokenMapped`**: Checks if a token is mapped for a given standard and chain type. Verifies the `TokenMapping` structure.
+
+3. **`updateContract`**: Updates the contract address mapped to a name. Emits a `ContractAddressUpdated` event.
+
+4. **`mapToken`**: Maps a mainchain token to a sidechain token, with proper validity checks and emits the `TokenMapped` event.
+
+5. **`clearMapToken`**: Resets the mapping for a given mainchain-to-sidechain pair. Ensures that mappings exist before clearing.
+
+6. **`getMappedToken`**: Retrieves mapping details by token address and chain type, ensuring the mapping exists.
+
+7. **`getCode`**: Computes a unique hash for a contract name using `keccak256`.
+
+8. **Internal Functions**: `_getTokenMapping` retrieves mapping information, `_clearMapEntry` resets a `TokenMapping`.
+
+This implementation follows the provided specification and adheres to the constraints in the context.

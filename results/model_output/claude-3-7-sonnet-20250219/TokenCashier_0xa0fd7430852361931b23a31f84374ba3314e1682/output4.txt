@@ -1,0 +1,195 @@
+# TokenCashier Contract Implementation
+
+```solidity
+/**
+ * @notice A smart contract for managing token deposits and withdrawals, including fee collection and token whitelisting.
+ * @dev This contract allows users to deposit tokens into a safe or burn them, with certain conditions. It also allows the owner to set fees, withdraw funds, and manage token safes.
+ */
+contract TokenCashier is Pausable {
+    event Receipt(address indexed token, uint256 indexed id, address sender, address recipient, uint256 amount, uint256 fee);
+
+    ITokenList[] public tokenLists;
+    address[] public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    /**
+     * @notice Initializes the contract with the provided wrapped coin, token lists, and token safes.
+     * @dev Ensures that the number of token lists matches the number of token safes.
+     * @param _wrappedCoin The address of the wrapped coin contract.
+     * @param _tokenLists Array of token list addresses.
+     * @param _tokenSafes Array of token safe addresses.
+     */
+    constructor(IWrappedCoin _wrappedCoin, ITokenList[] memory _tokenLists, address[] memory _tokenSafes) public {
+        require(_tokenLists.length == _tokenSafes.length, "# of token lists is not equal to # of safes");
+        wrappedCoin = _wrappedCoin;
+        tokenLists = _tokenLists;
+        tokenSafes = _tokenSafes;
+    }
+
+    /**
+     * @notice Fallback function that reverts any ETH sent directly to the contract.
+     * @dev This function prevents accidental ETH transfers to the contract.
+     */
+    function() external {
+        revert();
+    }
+
+    /**
+     * @notice Returns the count of transactions for a specific token.
+     * @dev This function is used to track the number of times a token has been deposited.
+     * @param _token The address of the token.
+     * @return The count of transactions for the token.
+     */
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    /**
+     * @notice Sets the deposit fee for the contract.
+     * @dev Only the contract owner can call this function.
+     * @param _fee The new deposit fee.
+     */
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    /**
+     * @notice Deposits tokens or native currency into the contract for further processing.
+     * @param _token The address of the token to deposit (use address(0) for native currency).
+     * @param _to The recipient address for the deposited amount (must not be zero).
+     * @param _amount The amount of tokens or native currency to deposit.
+     * @dev:
+     * - Validates the destination address is not zero.
+     * - Handles both native currency and ERC20 tokens.
+     * - Applies deposit fee and checks against minimum/maximum allowed amounts.
+     * - Routes deposits to designated safes or burns tokens if no safe is configured.
+     * - Emits a Receipt event upon successful deposit.
+     */
+    function depositTo(address _token, address _to, uint256 _amount) public whenNotPaused payable {
+        require(_to != address(0), "Invalid destination address");
+
+        uint256 fee = depositFee;
+        address recipient = _to;
+        uint256 amount = _amount;
+        uint256 id = counts[_token];
+
+        // Handle native currency
+        if (_token == address(0)) {
+            require(msg.value >= _amount + fee, "Insufficient msg.value");
+            
+            // Wrap native currency if wrappedCoin is set
+            if (address(wrappedCoin) != address(0)) {
+                wrappedCoin.deposit.value(_amount)();
+                _token = address(wrappedCoin);
+            }
+        } else {
+            require(msg.value >= fee, "Insufficient fee");
+            require(safeTransferFrom(_token, msg.sender, address(this), _amount), "Token transfer failed");
+        }
+
+        // Check token is allowed and verify amount constraints
+        bool allowed = false;
+        for (uint256 i = 0; i < tokenLists.length; i++) {
+            if (tokenLists[i].isAllowed(_token)) {
+                allowed = true;
+                require(_amount >= tokenLists[i].minAmount(_token), "Amount too small");
+                require(_amount <= tokenLists[i].maxAmount(_token), "Amount too large");
+                
+                // If token has a safe, transfer to it, otherwise try to burn
+                if (tokenSafes[i] != address(0)) {
+                    require(safeTransfer(_token, tokenSafes[i], _amount), "Transfer to safe failed");
+                } else {
+                    // Try to burn the tokens using burn selector 0x42966c68
+                    (bool success,) = _token.call(abi.encodeWithSelector(0x42966c68, _amount));
+                    require(success, "Burn failed");
+                }
+                break;
+            }
+        }
+        require(allowed, "Token not allowed");
+
+        counts[_token] = id + 1;
+        emit Receipt(_token, id, msg.sender, recipient, amount, fee);
+    }
+
+    /**
+     * @notice Allows a user to deposit a specified amount of a token to themselves.
+     * @dev This function is a convenience wrapper for `depositTo` where the recipient is the sender.
+     * @param _token The address of the token to deposit.
+     * @param _amount The amount of the token to deposit.
+     */
+    function deposit(address _token, uint256 _amount) public payable {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all ETH from the contract.
+     * @dev This function ensures that only the owner can withdraw funds.
+     */
+    function withdraw() external onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all tokens of a specified type.
+     * @param _token The address of the token to withdraw.
+     */
+    function withdrawToken(address _token) public onlyOwner {
+        // Call balanceOf using selector 0x70a08231
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(0x70a08231, address(this)));
+        require(success, "Balance call failed");
+        
+        uint256 balance = abi.decode(data, (uint256));
+        if (balance > 0) {
+            require(safeTransfer(_token, owner, balance), "Token transfer failed");
+        }
+    }
+
+    /**
+     * @notice Safely transfers tokens from a specified address to another address.
+     * @param _token The address of the token to transfer.
+     * @param _from The address to transfer tokens from.
+     * @param _to The address to transfer tokens to.
+     * @param _amount The amount of tokens to transfer.
+     * @return bool True if the transfer was successful, false otherwise.
+     */
+    function safeTransferFrom(address _token, address _from, address _to, uint256 _amount) internal returns (bool) {
+        // Call transferFrom using selector 0x23b872dd
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(0x23b872dd, _from, _to, _amount));
+        
+        if (success && data.length > 0) {
+            // Check if return value is true
+            bool result;
+            assembly {
+                result := mload(add(data, 32))
+            }
+            return result;
+        }
+        return success;
+    }
+
+    /**
+     * @notice Safely transfers tokens from the contract to a specified address.
+     * @param _token The address of the token to transfer.
+     * @param _to The address to transfer tokens to.
+     * @param _amount The amount of tokens to transfer.
+     * @return bool True if the transfer was successful, false otherwise.
+     */
+    function safeTransfer(address _token, address _to, uint256 _amount) internal returns (bool) {
+        // Call transfer using selector 0xa9059cbb
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(0xa9059cbb, _to, _amount));
+        
+        if (success && data.length > 0) {
+            // Check if return value is true
+            bool result;
+            assembly {
+                result := mload(add(data, 32))
+            }
+            return result;
+        }
+        return success;
+    }
+}
+```

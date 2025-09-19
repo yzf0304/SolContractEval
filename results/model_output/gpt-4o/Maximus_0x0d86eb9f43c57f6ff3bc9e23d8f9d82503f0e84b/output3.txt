@@ -1,0 +1,83 @@
+To implement the `HEXToken` contract as described, we need to cover basic functionality like staking, unstaking, transferring, and approving tokens. We'll also implement utility functions to check the current day and the number of stakes for a given address. Here's a possible implementation:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+contract HEXToken {
+    struct Stake {
+        uint256 amount;
+        uint256 startDay;
+        uint256 duration;
+    }
+
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowances;
+    mapping(address => Stake[]) private stakes;
+    uint256 private totalSupply;
+    uint256 private startTimestamp;
+
+    constructor(uint256 initialSupply) {
+        balances[msg.sender] = initialSupply;
+        totalSupply = initialSupply;
+        startTimestamp = block.timestamp;
+    }
+
+    function currentDay() external view returns (uint256) {
+        return (block.timestamp - startTimestamp) / 1 days;
+    }
+
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(balances[msg.sender] >= newStakedHearts, "Insufficient balance to stake");
+        balances[msg.sender] -= newStakedHearts;
+        stakes[msg.sender].push(Stake(newStakedHearts, currentDay(), newStakedDays));
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowances[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(balances[msg.sender] >= amount, "Insufficient balance");
+        require(recipient != address(0), "Invalid recipient address");
+        
+        balances[msg.sender] -= amount;
+        balances[recipient] += amount;
+        return true;
+    }
+
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < stakes[msg.sender].length, "Invalid stake index");
+        Stake memory stake = stakes[msg.sender][stakeIndex];
+        
+        uint256 currentStakeDay = currentDay();
+        require(currentStakeDay >= stake.startDay + stake.duration, "Stake duration not yet completed");
+
+        // Transfer staked amount back to user
+        balances[msg.sender] += stake.amount;
+
+        // Remove stake from user's stake array
+        stakes[msg.sender][stakeIndex] = stakes[msg.sender][stakes[msg.sender].length - 1];
+        stakes[msg.sender].pop();
+    }
+
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return stakes[stakerAddr].length;
+    }
+}
+```
+
+### Explanation
+
+1. **Staking Mechanism**: Users can start a stake with `stakeStart`. The contract deducts the staked amount from the user's balance and records the stake with the starting day and duration. The staked HEX is considered locked until the specified duration elapses.
+
+2. **Unstaking**: The `stakeEnd` function lets users end their stake after the specified duration, transferring their staked tokens back to their balance. The function also removes the stake from the list.
+
+3. **Allowance System**: The `approve` function sets up an allowance for a spender to transfer tokens on behalf of the owner. 
+
+4. **Transfer Functionality**: The `transfer` function is for sending HEX tokens from one address to another. It ensures that the sender has enough balance and that the recipient address is valid.
+
+5. **Utility Functions**: `currentDay` calculates the current day since the contract was deployed, useful for staking duration, while `stakeCount` returns the number of active stakes for a particular address. 
+
+This implementation ensures that basic token mechanics, staking, and unstaking operations are covered while adhering to the provided guidelines and restrictions.

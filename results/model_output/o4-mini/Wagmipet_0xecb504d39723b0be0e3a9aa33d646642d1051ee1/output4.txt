@@ -1,0 +1,201 @@
+pragma solidity 0.8.7;
+
+contract Wagmipet {
+    address _owner;
+    bool _birthed;
+
+    event CaretakerLoved(address indexed caretaker, uint256 indexed amount);
+
+    uint256 lastFeedBlock;
+    uint256 lastCleanBlock;
+    uint256 lastPlayBlock;
+    uint256 lastSleepBlock;
+
+    uint8 internal hunger;
+    uint8 internal uncleanliness;
+    uint8 internal boredom;
+    uint8 internal sleepiness;
+
+    mapping(address => uint256) public love;
+
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "Only owner can call");
+        _;
+    }
+
+    constructor() {
+        _owner = msg.sender;
+        lastFeedBlock = block.number;
+        lastCleanBlock = block.number;
+        lastPlayBlock = block.number;
+        lastSleepBlock = block.number;
+
+        hunger = 0;
+        uncleanliness = 0;
+        boredom = 0;
+        sleepiness = 0;
+    }
+
+    function addLove(address caretaker, uint256 amount) internal {
+        love[caretaker] += amount;
+        emit CaretakerLoved(caretaker, amount);
+    }
+
+    function _currentHunger() internal view returns (uint256) {
+        return uint256(hunger) + (block.number - lastFeedBlock);
+    }
+
+    function _currentUnclean() internal view returns (uint256) {
+        return uint256(uncleanliness) + (block.number - lastCleanBlock);
+    }
+
+    function _currentBoredom() internal view returns (uint256) {
+        return uint256(boredom) + (block.number - lastPlayBlock);
+    }
+
+    function _currentSleepiness() internal view returns (uint256) {
+        return uint256(sleepiness) + (block.number - lastSleepBlock);
+    }
+
+    function feed() public {
+        require(getAlive(), "Pet is no longer alive");
+        uint256 curBored = _currentBoredom();
+        uint256 curUnclean = _currentUnclean();
+        require(curBored <= 50, "Too bored to eat");
+        require(curUnclean <= 50, "Too dirty to eat");
+
+        // reset hunger
+        hunger = 0;
+        lastFeedBlock = block.number;
+
+        // increase boredom by 10
+        boredom = uint8(curBored + 10);
+        lastPlayBlock = block.number;
+
+        // increase uncleanliness by 3
+        uncleanliness = uint8(curUnclean + 3);
+        lastCleanBlock = block.number;
+
+        addLove(msg.sender, 1);
+    }
+
+    function clean() public {
+        require(getAlive(), "Pet is no longer alive");
+        uint256 curUnclean = _currentUnclean();
+        require(curUnclean > 0, "Already clean");
+
+        // reset uncleanliness
+        uncleanliness = 0;
+        lastCleanBlock = block.number;
+
+        addLove(msg.sender, 1);
+    }
+
+    function play() public {
+        require(getAlive(), "Pet is no longer alive");
+        uint256 curHun = _currentHunger();
+        uint256 curSleep = _currentSleepiness();
+        uint256 curUnclean = _currentUnclean();
+        require(curHun <= 50, "Too hungry to play");
+        require(curSleep <= 50, "Too sleepy to play");
+        require(curUnclean <= 50, "Too dirty to play");
+
+        // reset boredom
+        boredom = 0;
+        lastPlayBlock = block.number;
+
+        // increase hunger by 10
+        hunger = uint8(curHun + 10);
+        lastFeedBlock = block.number;
+
+        // increase sleepiness by 10
+        sleepiness = uint8(curSleep + 10);
+        lastSleepBlock = block.number;
+
+        // increase uncleanliness by 5
+        uncleanliness = uint8(curUnclean + 5);
+        lastCleanBlock = block.number;
+
+        addLove(msg.sender, 1);
+    }
+
+    function sleep() public {
+        require(getAlive(), "Pet is no longer alive");
+        uint256 curUnclean = _currentUnclean();
+        uint256 curSleep = _currentSleepiness();
+        require(curUnclean < 80, "Too dirty to sleep");
+        require(curSleep > 0, "Not sleepy");
+
+        // reset sleepiness
+        sleepiness = 0;
+        lastSleepBlock = block.number;
+
+        // increase uncleanliness by 5
+        uncleanliness = uint8(curUnclean + 5);
+        lastCleanBlock = block.number;
+
+        addLove(msg.sender, 1);
+    }
+
+    function getStatus() public view returns (string memory) {
+        if (!getAlive()) {
+            return "no longer with us";
+        }
+
+        uint256 h = _currentHunger();
+        uint256 u = _currentUnclean();
+        uint256 b = _currentBoredom();
+        uint256 s = _currentSleepiness();
+
+        // all under threshold => random good status
+        if (h <= 50 && u <= 50 && b <= 50 && s <= 50) {
+            string[4] memory good = ["gm", "im feeling great", "all good", "i love u"];
+            uint256 idx = block.number % 4;
+            return good[idx];
+        }
+
+        // find the need with the highest value above 50
+        uint256 maxVal = 0;
+        string memory msgNeed = "";
+        if (h > 50 && h > maxVal) {
+            maxVal = h;
+            msgNeed = "i am hungry";
+        }
+        if (u > 50 && u > maxVal) {
+            maxVal = u;
+            msgNeed = "i am dirty";
+        }
+        if (b > 50 && b > maxVal) {
+            maxVal = b;
+            msgNeed = "i am bored";
+        }
+        if (s > 50 && s > maxVal) {
+            maxVal = s;
+            msgNeed = "i am sleepy";
+        }
+        return msgNeed;
+    }
+
+    function getAlive() public view returns (bool) {
+        return (_currentHunger() < 101 &&
+                _currentUnclean() < 101 &&
+                _currentBoredom() < 101 &&
+                _currentSleepiness() < 101);
+    }
+
+    function getHunger() public view returns (uint256) {
+        return _currentHunger();
+    }
+
+    function getUncleanliness() public view returns (uint256) {
+        return _currentUnclean();
+    }
+
+    function getBoredom() public view returns (uint256) {
+        return _currentBoredom();
+    }
+
+    function getSleepiness() public view returns (uint256) {
+        return _currentSleepiness();
+    }
+}

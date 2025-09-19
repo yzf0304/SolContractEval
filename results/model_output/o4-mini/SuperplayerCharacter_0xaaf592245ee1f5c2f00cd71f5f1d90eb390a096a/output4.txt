@@ -1,0 +1,140 @@
+pragma solidity 0.5.1;
+
+contract SuperplayerCharacter is Ownable {
+    using SafeMath for uint256;
+
+    /**
+     * @notice Emitted when a user selects a character.
+     * @param from The address of the user who selected the character.
+     * @param chaId The ID of the character selected.
+     */
+    event CharacterSelect(address indexed from, uint32 indexed chaId);
+
+    /// @notice Mapping from user address to selected character ID
+    mapping(address => uint32) public addrMapCharacterIds;
+
+    /// @notice Fee required to change a character
+    uint256 public changeFee = 0;
+
+    struct Character {
+        uint32 id;
+        uint256 weight;
+    }
+
+    /// @notice Array of all characters
+    Character[] private characters;
+
+    /// @notice Total number of characters
+    uint256 public totalNum = 0;
+
+    /// @notice Sum of weights of all characters
+    uint256 public totalWeight = 0;
+
+    /**
+     * @notice Initializes the contract with a default set of characters.
+     */
+    constructor() public {
+        _addCharacter(1, 1000000);
+        _addCharacter(2, 1000000);
+        _addCharacter(3, 1000000);
+        _addCharacter(4, 1000);
+        _addCharacter(5, 1000);
+        _addCharacter(6, 1000);
+    }
+
+    /**
+     * @notice Allows the owner to add a new character.
+     * @param id The ID of the new character.
+     * @param weight The weight of the new character.
+     */
+    function AddCharacter(uint32 id, uint256 weight) external onlyOwner {
+        _addCharacter(id, weight);
+    }
+
+    /**
+     * @notice Allows the owner to set the fee for changing a character.
+     * @param fee The new fee amount.
+     */
+    function SetFee(uint256 fee) external onlyOwner {
+        changeFee = fee;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the entire contract balance.
+     * @param to The address to send the funds to.
+     */
+    function withdraw(address payable to) external onlyOwner {
+        require(to != address(0), "SuperplayerCharacter: zero address");
+        uint256 bal = address(this).balance;
+        to.transfer(bal);
+    }
+
+    /**
+     * @notice Returns the configuration of all characters.
+     * @return ids An array of character IDs.
+     * @return weights An array of character weights.
+     */
+    function getConfig()
+        external
+        view
+        returns (uint32[] memory ids, uint256[] memory weights)
+    {
+        uint256 len = characters.length;
+        ids = new uint32[](len);
+        weights = new uint256[](len);
+        for (uint256 i = 0; i < len; i++) {
+            Character storage ch = characters[i];
+            ids[i] = ch.id;
+            weights[i] = ch.weight;
+        }
+    }
+
+    /**
+     * @notice Fallback function: users send ETH (>= changeFee) to select a character.
+     */
+    function() external payable {
+        require(msg.value >= changeFee, "Insufficient fee");
+        // pick a random weight in [1..totalWeight]
+        uint256 r = uint256(
+            keccak256(
+                abi.encodePacked(block.timestamp, msg.value, block.difficulty)
+            )
+        ) % totalWeight + 1;
+
+        uint256 cumulative = 0;
+        uint256 idx = characters.length - 1;
+        for (uint256 i = 0; i < characters.length; i++) {
+            cumulative = cumulative.add(characters[i].weight);
+            if (r <= cumulative) {
+                idx = i;
+                break;
+            }
+        }
+
+        // record selection
+        _selectCharacter(msg.sender, characters[idx].id);
+
+        // refund excess
+        uint256 refund = msg.value.sub(changeFee);
+        if (refund > 0) {
+            msg.sender.transfer(refund);
+        }
+    }
+
+    /**
+     * @dev Internal: record the user's character selection and emit event.
+     */
+    function _selectCharacter(address from, uint32 id) internal {
+        addrMapCharacterIds[from] = id;
+        emit CharacterSelect(from, id);
+    }
+
+    /**
+     * @dev Internal: add a new character to the list and update totals.
+     */
+    function _addCharacter(uint32 id, uint256 weight) internal {
+        characters.push(Character({id: id, weight: weight}));
+        totalNum = totalNum.add(1);
+        totalWeight = totalWeight.add(weight);
+    }
+}

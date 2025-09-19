@@ -1,0 +1,107 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
+
+contract PepeYogaClub is ERC721A, Ownable {
+    /// @notice Base URI for token metadata
+    string public baseURI = "ipfs://QmTLWN9WPq5L9eS9EKcTn2rqUCzr9QK5sd8DYVkkL7yguL/";
+    /// @notice Contract‐level metadata URI
+    string public contractURI = "ipfs://QmUvB8sKL4XFTxbMkL9FykiqLgrXeBV1mUkdzWMWhachvD";
+
+    /// @notice Maximum tokens a single wallet may mint (inclusive of all previous mints)
+    uint256 public MAX_PER_WALLET = 11;
+    /// @notice Total supply cap
+    uint256 public constant MAX_SUPPLY = 2069;
+    /// @notice Price per token
+    uint256 public price = 0.0069 ether;
+    /// @notice Pauses public mint when true
+    bool public paused = true;
+
+    /// @dev Set name and symbol via ERC721A constructor
+    constructor() ERC721A("PepeYogaClub", "PYC") {}
+
+    /// @notice Public mint function
+    /// @param _amount Number of NFTs to mint
+    function mint(uint256 _amount) external payable {
+        require(!paused,                         "Minting is paused");
+        require(_amount > 0,                     "Must mint at least one");
+        require(totalSupply() + _amount <= MAX_SUPPLY,                         "Exceeds max supply");
+        require(_numberMinted(msg.sender) + _amount <= MAX_PER_WALLET,         "Exceeds max per wallet");
+        require(msg.value >= price * _amount,   "Insufficient ETH sent");
+
+        _safeMint(msg.sender, _amount);
+    }
+
+    /// @notice Override to start token IDs at 1 instead of 0
+    function _startTokenId() internal pure override returns (uint256) {
+        return 1;
+    }
+
+    /// @notice Returns number of tokens minted by an address
+    /// @param _owner Address to query
+    function minted(address _owner) public view returns (uint256) {
+        return _numberMinted(_owner);
+    }
+
+    /// @notice Owner can withdraw entire contract balance
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No funds to withdraw");
+
+        (bool success, ) = payable(owner()).call{ value: balance }("");
+        require(success, "Withdraw failed");
+    }
+
+    /// @notice Mint tokens in bulk to a list of recipients (owner only)
+    /// @param _to List of recipient addresses
+    /// @param _amount List of amounts to mint to each address
+    function teamMint(address[] memory _to, uint256[] memory _amount) external onlyOwner {
+        require(_to.length == _amount.length, "Array length mismatch");
+        uint256 supply = totalSupply();
+
+        for (uint256 i = 0; i < _to.length; i++) {
+            uint256 amt = _amount[i];
+            if (amt == 0) continue;
+            require(supply + amt <= MAX_SUPPLY, "Exceeds max supply");
+            _safeMint(_to[i], amt);
+            supply += amt;
+        }
+    }
+
+    /// @notice Update max per‐wallet limit (owner only)
+    /// @param _max New per‐wallet cap
+    function setMaxPerWallet(uint256 _max) external onlyOwner {
+        MAX_PER_WALLET = _max;
+    }
+
+    /// @notice Update mint price (owner only)
+    /// @param _price New price in wei
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    /// @notice Toggle public mint on/off (owner only)
+    function toggleMint() external onlyOwner {
+        paused = !paused;
+    }
+
+    /// @notice Update the base URI for tokens (owner only)
+    /// @param baseURI_ New base URI
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    /// @notice Update the contract metadata URI (owner only)
+    /// @param _contractURI New contract URI
+    function setContractURI(string memory _contractURI) external onlyOwner {
+        contractURI = _contractURI;
+    }
+
+    /// @notice Returns token URI given a tokenId
+    /// @param _tokenId Token ID to query
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        if (!_exists(_tokenId)) revert URIQueryForNonexistentToken();
+        return string(abi.encodePacked(baseURI, _toString(_tokenId)));
+    }
+}
+```

@@ -1,0 +1,216 @@
+```solidity
+pragma solidity 0.5.12;
+
+interface ITokenList {
+    function isAllowed(address) external returns (bool);
+    function maxAmount(address) external returns (uint256);
+    function minAmount(address) external returns (uint256);
+}
+
+interface IWrappedCoin {
+    function deposit() external payable;
+}
+
+contract TokenCashier is Pausable {
+    event Receipt(
+        address indexed token,
+        uint256 indexed id,
+        address sender,
+        address recipient,
+        uint256 amount,
+        uint256 fee
+    );
+
+    ITokenList[] public tokenLists;
+    address[] public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    constructor(
+        IWrappedCoin _wrappedCoin,
+        ITokenList[] memory _tokenLists,
+        address[] memory _tokenSafes
+    ) public {
+        require(
+            _tokenLists.length == _tokenSafes.length,
+            "# of token lists is not equal to # of safes"
+        );
+        wrappedCoin = _wrappedCoin;
+        tokenLists = _tokenLists;
+        tokenSafes = _tokenSafes;
+    }
+
+    function() external {
+        revert();
+    }
+
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    function depositTo(
+        address _token,
+        address _to,
+        uint256 _amount
+    ) public whenNotPaused payable {
+        require(_to != address(0), "invalid recipient");
+        uint256 fee = depositFee;
+        address actualToken = _token;
+
+        // Handle native currency deposit
+        if (_token == address(0)) {
+            // must send amount + fee
+            require(
+                msg.value >= _amount + fee,
+                "insufficient msg.value for native deposit"
+            );
+            // wrap native currency
+            wrappedCoin.deposit.value(_amount)();
+            actualToken = address(wrappedCoin);
+        } else {
+            // token deposit: must cover fee
+            require(msg.value >= fee, "insufficient msg.value for fee");
+        }
+
+        // Refund any excess ETH
+        uint256 refund = msg.value - (_token == address(0) ? _amount + fee : fee);
+        if (refund > 0) {
+            msg.sender.transfer(refund);
+        }
+
+        // Find whitelist entry
+        bool found = false;
+        address safeAddr = address(0);
+        for (uint256 i = 0; i < tokenLists.length; i++) {
+            ITokenList list = tokenLists[i];
+            if (list.isAllowed(actualToken)) {
+                uint256 minAmt = list.minAmount(actualToken);
+                uint256 maxAmt = list.maxAmount(actualToken);
+                require(
+                    _amount >= minAmt && _amount <= maxAmt,
+                    "amount out of allowed range"
+                );
+                safeAddr = tokenSafes[i];
+                found = true;
+                break;
+            }
+        }
+        require(found, "token is not whitelisted");
+
+        // Route tokens
+        if (safeAddr != address(0)) {
+            if (_token == address(0)) {
+                // we already have wrapped tokens in this contract
+                require(
+                    safeTransfer(actualToken, safeAddr, _amount),
+                    "wrapped transfer failed"
+                );
+            } else {
+                // pull tokens from sender directly into safe
+                require(
+                    safeTransferFrom(actualToken, msg.sender, safeAddr, _amount),
+                    "token transferFrom failed"
+                );
+            }
+        } else {
+            // burn path
+            // if native, burn wrapped tokens;
+            // if real token, same burn selector
+            bytes memory callData = abi.encodeWithSelector(
+                0x42966c68,
+                _amount
+            );
+            (bool success, bytes memory ret) = actualToken.call(callData);
+            require(success, "burn call failed");
+            if (ret.length > 0) {
+                require(
+                    abi.decode(ret, (bool)),
+                    "burn returned false"
+                );
+            }
+        }
+
+        // emit receipt
+        uint256 id = counts[_token]++;
+        emit Receipt(_token, id, msg.sender, _to, _amount, fee);
+    }
+
+    function deposit(address _token, uint256 _amount)
+        public
+        payable
+    {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    function withdraw() external onlyOwner {
+        uint256 bal = address(this).balance;
+        if (bal > 0) {
+            msg.sender.transfer(bal);
+        }
+    }
+
+    function withdrawToken(address _token) public onlyOwner {
+        // balanceOf(address)
+        (bool ok, bytes memory data) = _token.call(
+            abi.encodeWithSelector(0x70a08231, address(this))
+        );
+        require(ok && data.length >= 32, "balanceOf failed");
+        uint256 bal = abi.decode(data, (uint256));
+        if (bal > 0) {
+            require(
+                safeTransfer(_token, owner, bal),
+                "withdrawToken transfer failed"
+            );
+        }
+    }
+
+    function safeTransferFrom(
+        address _token,
+        address _from,
+        address _to,
+        uint256 _amount
+    ) internal returns (bool) {
+        (bool success, bytes memory ret) = _token.call(
+            abi.encodeWithSelector(
+                0x23b872dd,
+                _from,
+                _to,
+                _amount
+            )
+        );
+        if (!success) {
+            return false;
+        }
+        if (ret.length == 0) {
+            return true;
+        }
+        return abi.decode(ret, (bool));
+    }
+
+    function safeTransfer(
+        address _token,
+        address _to,
+        uint256 _amount
+    ) internal returns (bool) {
+        (bool success, bytes memory ret) = _token.call(
+            abi.encodeWithSelector(
+                0xa9059cbb,
+                _to,
+                _amount
+            )
+        );
+        if (!success) {
+            return false;
+        }
+        if (ret.length == 0) {
+            return true;
+        }
+        return abi.decode(ret, (bool));
+    }
+}
+```

@@ -1,0 +1,129 @@
+Here is the complete implementation of the `UniqlyPresale4` contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: Unlicense
+pragma solidity 0.8.2;
+
+abstract contract IERC20 {
+    function balanceOf(address _owner) external virtual returns (uint256 balance);
+    function transfer(address _to, uint256 _value) external virtual;
+}
+
+contract UniqlyPresale4 {
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+    address public owner;
+    
+    uint256 constant failSafeTime = 2 weeks;
+    bool public presaleEnded;
+    bool public presaleFailed;
+    bool public presaleStarted;
+    mapping(address => uint256) private balances;
+    address public newOwner;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+
+    constructor(
+        uint256 _presaleLimit, 
+        uint256 _minPerUser, 
+        uint256 _maxPerUser, 
+        uint256 _presaleEnd, 
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 amount = msg.value + balances[msg.sender];
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+        balances[msg.sender] = amount;
+
+        if (address(this).balance >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    function start() external onlyOwner {
+        presaleStarted = true;
+    }
+
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    function withdraw() external returns (bool) {
+        if (!presaleEnded && block.timestamp >= presaleEnd + failSafeTime) {
+            presaleFailed = true;
+        }
+
+        if (presaleEnded) {
+            if (msg.sender == owner) {
+                send(owner, address(this).balance);
+                return true;
+            }
+            return false;
+        } else if (presaleFailed) {
+            uint256 amount = balances[msg.sender];
+            if (amount == 0) return false;
+            balances[msg.sender] = 0;
+            send(msg.sender, amount);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    function send(address user, uint256 amount) private {
+        (bool success, ) = user.call{value: amount}("");
+        // No require to allow silent failures as per spec
+    }
+
+    function withdrawAnyERC20(IERC20 token) external onlyOwner {
+        uint256 balance = token.balanceOf(address(this));
+        token.transfer(owner, balance);
+    }
+
+    function giveOwnership(address _newOwner) external onlyOwner {
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Not new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+```
+
+Key implementation details:
+1. Added `onlyOwner` modifier for owner-only functions
+2. Implemented start/withdraw/ERC20 recovery functionality
+3. Followed silent failure pattern for ETH withdrawals using low-level call
+4. Maintained time-based presale failure conditions
+5. Implemented two-step ownership transfer pattern
+6. Maintained strict ERC20 compatibility for token recovery
+7. Followed exact visibility and storage patterns from the original contract
+
+The contract maintains all specified presale mechanics while handling ETH contributions and withdrawals according to the described rules.

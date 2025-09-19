@@ -1,0 +1,55 @@
+To solve this problem, we need to create a smart contract that manages a whitelist of contributors with specific contribution caps. The contract should allow the owner to set individual caps, manage a global cap for special cases, and handle batch operations efficiently. The solution should also include self-destruction functionality for the owner to terminate the contract.
+
+### Approach
+1. **Ownership Management**: Inherit from the `Ownable` contract to leverage ownership control functionalities.
+2. **Individual Contributor Caps**: Use a mapping to store contribution caps for individual addresses. The owner can set or update these caps.
+3. **Global Cap for Special Cases**: Implement a global cap (`slackUsersCap`) that applies to addresses with a cap value of 1. This allows flexibility in managing a group of contributors under a shared cap.
+4. **Batch Operations**: Enable the owner to list multiple addresses with their respective caps in a single transaction, improving efficiency during network congestion.
+5. **Self-Destruction**: Allow the owner to destroy the contract and transfer any remaining funds to the owner's address.
+
+### Solution Code
+```solidity
+contract KyberContributorWhitelist is Ownable {
+    uint public slackUsersCap = 7;
+    mapping(address => uint) public addressCap;
+
+    function KyberContributorWhitelist() {}
+
+    event ListAddress(address _user, uint _cap, uint _time);
+
+    function listAddress(address _user, uint _cap) onlyOwner {
+        addressCap[_user] = _cap;
+        ListAddress(_user, _cap, now);
+    }
+
+    function listAddresses(address[] _users, uint[] _cap) onlyOwner {
+        require(_users.length == _cap.length);
+        for (uint i = 0; i < _users.length; i++) {
+            addressCap[_users[i]] = _cap[i];
+            ListAddress(_users[i], _cap[i], now);
+        }
+    }
+
+    function setSlackUsersCap(uint _cap) onlyOwner {
+        slackUsersCap = _cap;
+    }
+
+    function getCap(address _user) constant returns (uint) {
+        uint cap = addressCap[_user];
+        return cap == 1 ? slackUsersCap : cap;
+    }
+
+    function destroy() onlyOwner {
+        selfdestruct(owner);
+    }
+}
+```
+
+### Explanation
+1. **Ownership Management**: The contract inherits from `Ownable`, ensuring that only the owner can perform critical operations like setting caps and destroying the contract.
+2. **Individual Caps**: The `addressCap` mapping stores the contribution limit for each address. The `listAddress` function allows the owner to set or update these caps individually, emitting an event for transparency.
+3. **Global Cap**: Addresses with a cap value of 1 use the `slackUsersCap` value. This allows the owner to adjust a shared cap for multiple contributors efficiently using `setSlackUsersCap`.
+4. **Batch Operations**: The `listAddresses` function processes arrays of addresses and caps, ensuring both arrays are of equal length before updating each entry. This reduces transaction overhead when managing large lists.
+5. **Self-Destruction**: The `destroy` function allows the owner to terminate the contract, transferring any remaining Ether to the owner's address using `selfdestruct`.
+
+This approach ensures efficient management of contributor caps, flexibility with a global cap, and secure ownership controls, providing a robust solution for whitelisting contributors in a decentralized application.

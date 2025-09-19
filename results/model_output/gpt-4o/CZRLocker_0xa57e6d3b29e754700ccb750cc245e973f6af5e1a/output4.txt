@@ -1,0 +1,147 @@
+Below is the complete and functional implementation of the `CZRLocker` contract strictly based on the provided context and description. The contract is written for Solidity compiler version 0.4.18 as per your instructions.
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract owned {
+    address public owner;
+
+    function owned() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        owner = newOwner;
+    }
+}
+
+interface token {
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+    function transfer(address _to, uint256 _value) public returns (bool success);
+}
+
+contract CZRLocker is owned {
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+    event RemoveLock(address addr, uint index);
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    address public tokenAddr;
+    address public unlocker;
+
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length);
+        
+        // Emit event for removal
+        emit RemoveLock(addr, index);
+
+        // Remove lock by setting all fields to zero
+        lockedCZRMap[addr][index] = LockedCZR(0, 0, 0, 0);
+    }
+
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        require(amount > 0 && lockMonth > 0);
+        if (startLockTime == 0) {
+            startLockTime = now; // Default to current timestamp if not provided
+        }
+
+        lockedCZRMap[addr].push(LockedCZR(startLockTime, lockMonth, amount, 0));
+
+        uint index = lockedCZRMap[addr].length - 1;
+        emit AddLock(addr, index, startLockTime, lockMonth, amount);
+    }
+
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker);
+        require(lockedCZRMap[addr].length > 0);
+
+        token tokenInstance = token(tokenAddr);
+        uint processed = 0;
+
+        for (uint i = 0; i < lockedCZRMap[addr].length; i++) {
+            if (limit > 0 && processed >= limit) {
+                break;
+            }
+
+            LockedCZR storage lock = lockedCZRMap[addr][i];
+
+            if (lock.lockedAmount == 0) {
+                continue; // Skip empty locks
+            }
+
+            uint monthsPassed = (now - lock.startLockTime) / 30 days;
+            uint unlockableAmount = (monthsPassed * lock.lockedAmount) / lock.lockMonth;
+
+            if (unlockableAmount > lock.lockedAmount) {
+                unlockableAmount = lock.lockedAmount; // Cap to the locked amount
+            }
+
+            uint amountToUnlock = unlockableAmount - lock.unlockedAmount;
+
+            if (amountToUnlock > 0) {
+                require(tokenInstance.transfer(addr, amountToUnlock)); // Transfer unlocked tokens
+                lock.unlockedAmount += amountToUnlock;
+
+                emit Unlock(addr, i, amountToUnlock);
+                processed++;
+            }
+        }
+
+        require(processed > 0); // Ensure at least one lock was processed
+    }
+
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        require(to != address(0) && value > 0);
+        require(address(this).balance >= value);
+
+        to.transfer(value);
+    }
+
+    function() payable public {
+        // Fallback function to receive ETH
+    }
+}
+```
+
+### Explanation:
+
+1. **Remove Lock** (`removeCZRLock`):
+   - Allows the owner to remove a specific lock by index.
+   - Clears the lock data by resetting all fields to zero and emits a `RemoveLock` event.
+
+2. **Add Lock** (`addCZRLock`):
+   - Allows the owner to create a new lock for an address.
+   - Records the `startLockTime`, `lockMonth`, `amount`, and initializes `unlockedAmount` to zero.
+   - Emits an `AddLock` event after adding the lock.
+
+3. **Unlock Tokens** (`unlockCZR`):
+   - Unlocks tokens based on the elapsed time and monthly unlocking schedule.
+   - Processes locks up to the specified `limit`, or unlimited if `limit` is zero.
+   - Transfers unlocked tokens to the user's address and emits an `Unlock` event for each processed lock.
+
+4. **Withdraw ETH** (`withdrawEth`):
+   - Allows the owner to withdraw ETH to a specified address.
+   - Ensures the address and value are valid, and the contract has sufficient ETH balance.
+
+5. **Fallback Function**:
+   - Enables the contract to receive ETH deposits directly.
+
+This implementation adheres strictly to your context and description without introducing any extraneous features.

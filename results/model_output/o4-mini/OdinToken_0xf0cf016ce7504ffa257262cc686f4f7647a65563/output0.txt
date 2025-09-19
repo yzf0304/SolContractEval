@@ -1,0 +1,178 @@
+```solidity
+pragma solidity ^0.4.21;
+
+contract OdinToken is ERC20Interface, Owned {
+    using SafeMath for uint256;
+
+    string public symbol;
+    string public name;
+    uint8 public decimals;
+    uint private _totalSupply;
+    bool private _whitelistAll;
+
+    struct balanceData {
+        bool locked;
+        uint balance;
+        uint airDropQty;
+    }
+
+    mapping(address => balanceData) balances;
+    mapping(address => mapping(address => uint)) allowed;
+
+    /**
+     * @dev Constructor for Odin creation
+     * @dev Initially assigns the totalSupply to the contract creator
+     */
+    function OdinToken() public {
+        owner = msg.sender;
+        symbol = "ODIN";
+        name = "ODIN Token";
+        decimals = 18;
+        _whitelistAll = false;
+        _totalSupply = 100000000000000000000000;
+        balances[owner].balance = _totalSupply;
+        emit Transfer(address(0), owner, _totalSupply);
+    }
+
+    /**
+     * @notice Returns the total supply of the token.
+     */
+    function totalSupply() public constant returns (uint256) {
+        return _totalSupply;
+    }
+
+    /**
+     * @notice Whitelist an address to allow it to receive airdrops.
+     * @dev Clears any recorded airDropQty so that transfer restrictions no longer apply.
+     */
+    function whitelistAddress(address to) onlyOwner public returns (bool) {
+        balances[to].airDropQty = 0;
+        return true;
+    }
+
+    /**
+     * @notice Whitelist all addresses early.
+     * @dev Turns off the airdrop‐transfer lock globally.
+     */
+    function whitelistAllAddresses() onlyOwner public returns (bool) {
+        _whitelistAll = true;
+        return true;
+    }
+
+    /**
+     * @notice Gets the balance of the specified address.
+     */
+    function balanceOf(address tokenOwner) public constant returns (uint) {
+        return balances[tokenOwner].balance;
+    }
+
+    /**
+     * @notice Transfers tokens with airdrop‐based time locks.
+     */
+    function transfer(address to, uint tokens) public returns (bool) {
+        require(to != address(0));
+        require(to != msg.sender);
+        require(tokens <= balances[msg.sender].balance);
+
+        // Only enforce airdrop restrictions on non‐owner when not globally whitelisted
+        if (msg.sender != owner && !_whitelistAll && balances[msg.sender].airDropQty > 0) {
+            uint aq = balances[msg.sender].airDropQty;
+            uint nonAq = balances[msg.sender].balance.sub(aq);
+            uint allowedAir = 0;
+            uint ts = now;
+
+            // Sep 1, 2018
+            if (ts >= 1535760000) {
+                // before Oct 1, 2018
+                if (ts < 1538352000) {
+                    allowedAir = aq.mul(10).div(100);
+                }
+                // before Jan 1, 2019
+                else if (ts < 1546300800) {
+                    allowedAir = aq.mul(25).div(100);
+                }
+                // before Apr 1, 2019
+                else if (ts < 1554076800) {
+                    allowedAir = aq.mul(50).div(100);
+                }
+                // before Jul 1, 2019
+                else if (ts < 1561939200) {
+                    allowedAir = aq.mul(75).div(100);
+                }
+                // after Jun 30, 2019
+                else {
+                    allowedAir = aq;
+                }
+            }
+            // else ts < Sep 1, 2018: allowedAir = 0
+
+            // total allowed to move is non‐airdropped + allowedAir
+            require(tokens <= nonAq.add(allowedAir));
+
+            // if using any of the airdrop portion, decrement stored airdrop record
+            if (tokens > nonAq) {
+                uint useAq = tokens.sub(nonAq);
+                balances[msg.sender].airDropQty = aq.sub(useAq);
+            }
+        }
+
+        // do the transfer
+        balances[msg.sender].balance = balances[msg.sender].balance.sub(tokens);
+        balances[to].balance = balances[to].balance.add(tokens);
+
+        // if owner is distributing, tag as airdrop
+        if (msg.sender == owner) {
+            balances[to].airDropQty = balances[to].airDropQty.add(tokens);
+        }
+
+        emit Transfer(msg.sender, to, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Approve is not implemented.
+     */
+    function approve(address /*spender*/, uint /*tokens*/) public returns (bool) {
+        revert();
+    }
+
+    /**
+     * @notice transferFrom is not implemented.
+     */
+    function transferFrom(address /*from*/, address /*to*/, uint /*tokens*/) public returns (bool) {
+        revert();
+    }
+
+    /**
+     * @notice allowance is not implemented.
+     */
+    function allowance(address /*tokenOwner*/, address /*spender*/) public constant returns (uint) {
+        revert();
+    }
+
+    /**
+     * @notice approveAndCall is not implemented.
+     */
+    function approveAndCall(address /*spender*/, uint /*tokens*/, bytes /*data*/) public returns (bool) {
+        revert();
+    }
+
+    /**
+     * @notice Burn a specified amount of tokens from the owner's balance.
+     */
+    function burn(uint256 tokens) onlyOwner public returns (bool) {
+        require(tokens <= balances[owner].balance);
+        balances[owner].balance = balances[owner].balance.sub(tokens);
+        _totalSupply = _totalSupply.sub(tokens);
+        emit Burn(tokens);
+        return true;
+    }
+
+    /**
+     * @dev Reject any incoming Ether.
+     */
+    function() public {
+        revert();
+    }
+}
+```

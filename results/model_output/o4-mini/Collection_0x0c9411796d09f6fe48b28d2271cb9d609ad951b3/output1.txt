@@ -1,0 +1,130 @@
+pragma solidity 0.5.17;
+
+contract Collection is Ownable {
+    /// @notice Address of the contract creator.
+    address private createAddress;
+
+    /// @notice Address of the TRB token contract.
+    address private constant trbAddress = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+
+    /// @notice Interface to interact with the TRB token contract.
+    TrbInterface private constant trbContract = TrbInterface(trbAddress);
+
+    /**
+     * @notice Initializes the contract and sets the createAddress to the contract deployer.
+     */
+    constructor() public {
+        createAddress = msg.sender;
+    }
+
+    /**
+     * @notice Fallback function to receive Ether.
+     * @dev Only the contract owner and creator can send Ether here.
+     */
+    function() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+    }
+
+    /**
+     * @notice Finalizes the contract.
+     * @dev No logic beyond restricting to owner & creator.
+     */
+    function finalize() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+    }
+
+    /**
+     * @notice Returns the address of the contract creator.
+     */
+    function getCreate() public view returns (address) {
+        return createAddress;
+    }
+
+    /**
+     * @notice Withdraws a specified amount of Ether from the contract.
+     * @param _amount The amount of Ether to withdraw (in wei).
+     */
+    function withdrawEth(uint256 _amount) public onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        require(address(this).balance >= _amount, "insufficient eth");
+        msg.sender.transfer(_amount);
+    }
+
+    /**
+     * @notice Withdraws a specified amount of TRB tokens from the contract.
+     * @param _amount The amount of TRB tokens to withdraw.
+     */
+    function withdrawTrb(uint256 _amount) public onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        require(trbContract.transfer(msg.sender, _amount), "trb transfer failed");
+    }
+
+    /**
+     * @notice Deposits stake in the TRB token contract.
+     */
+    function depositStake() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        trbContract.depositStake();
+    }
+
+    /**
+     * @notice Requests a staking withdrawal from the TRB token contract.
+     */
+    function requestStakingWithdraw() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        trbContract.requestStakingWithdraw();
+    }
+
+    /**
+     * @notice Withdraws the staked amount from the TRB token contract.
+     */
+    function withdrawStake() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        trbContract.withdrawStake();
+    }
+
+    /**
+     * @notice Submits a mining solution to the TRB token contract.
+     * @param _nonce The nonce for the mining solution.
+     * @param _requestId Array of request IDs for the mining solution.
+     * @param _value Array of values for the mining solution.
+     */
+    function submitMiningSolution(
+        string calldata _nonce,
+        uint256[5] calldata _requestId,
+        uint256[5] calldata _value
+    )
+        external
+        onlyOwner
+        payable
+    {
+        require(msg.sender == createAddress, "author no");
+
+        if (gasleft() <= 10**6) {
+            bytes32 slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+            uint256 tmpSlot = trbContract.getUintVar(slotProgress);
+            require(tmpSlot < 4, "Z");
+        }
+
+        trbContract.submitMiningSolution(_nonce, _requestId, _value);
+    }
+
+    /**
+     * @notice Adds a tip to a specific request ID in the TRB token contract.
+     * @param _requestId The request ID to add the tip to.
+     * @param _tip The amount of the tip.
+     */
+    function addTip(uint256 _requestId, uint256 _tip) external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        trbContract.addTip(_requestId, _tip);
+    }
+
+    /**
+     * @notice Retrieves a uint256 value from the TRB token contract using a provided data key.
+     * @param _data The data key to retrieve the value from.
+     */
+    function getUintVar(bytes32 _data) public onlyOwner view returns (uint256) {
+        require(msg.sender == createAddress, "author no");
+        return trbContract.getUintVar(_data);
+    }
+}

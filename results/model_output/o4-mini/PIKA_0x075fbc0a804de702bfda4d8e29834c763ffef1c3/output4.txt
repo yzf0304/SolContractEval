@@ -1,0 +1,242 @@
+pragma solidity 0.7.6;
+
+contract PIKA is Context, Owned, ERC20 {
+    using SafeMath for uint256;
+
+    uint256 public _taxFee;
+    uint256 public override totalSupply;
+    string public override symbol;
+    string public override name;
+    uint8 public override decimals;
+    uint256 private _taxFeepercent = 225;       // basis points: 2.25%
+    IUniswapV2Router02 public immutable uniswapV2Router;
+    address public immutable uniswapV2Pair;
+    mapping(address => bool) private _isExcludedFromFee;
+    uint256 public ContractDeployed;
+    address oldPika = 0xE09fB60E8D6e7E1CEbBE821bD5c3FC67a40F86bF;
+    uint256 public oldPika_amount;
+    uint256 private minamountTakenOut = 1000000 * 10**9 * 10**9;
+    uint256 private MinimumSupply = 100000000 * 10**9 * 10**9;
+
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+
+    event TransferFee(address indexed _from, address indexed _to, uint256 _value);
+
+    constructor() {
+        symbol = "PIKA";
+        name = "PIKA";
+        decimals = 18;
+        totalSupply = 50000000000000 * 10**9 * 10**9; //50 trillion
+        owner = _msgSender();
+        balances[owner] = totalSupply;
+        _isExcludedFromFee[owner] = true;
+        _isExcludedFromFee[address(this)] = true;
+
+        IUniswapV2Router02 _uniswapV2Router = 
+            IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+        uniswapV2Pair = IUniswapV2Factory(
+            _uniswapV2Router.factory()
+        ).createPair(address(this), _uniswapV2Router.WETH());
+        uniswapV2Router = _uniswapV2Router;
+
+        ContractDeployed = block.timestamp;
+    }
+
+    // ERC20: balanceOf
+    function balanceOf(address _owner) public view override returns (uint256) {
+        return balances[_owner];
+    }
+
+    // ERC20: transfer
+    function transfer(address _to, uint256 _amount) public override returns (bool) {
+        _transfer(_msgSender(), _to, _amount);
+        return true;
+    }
+
+    // ERC20: transferFrom
+    function transferFrom(address sender, address recipient, uint256 amount) 
+        public override returns (bool) 
+    {
+        uint256 currentAllowance = allowed[sender][_msgSender()];
+        require(currentAllowance >= amount, "PIKA: transferAmount exceeds allowance");
+        allowed[sender][_msgSender()] = currentAllowance.sub(amount);
+        _transfer(sender, recipient, amount);
+        return true;
+    }
+
+    // Core transfer with tax
+    function _transfer(address sender, address recipient, uint256 amount) internal virtual {
+        require(sender != address(0), "PIKA: transfer from zero");
+        require(recipient != address(0), "PIKA: transfer to zero");
+        require(balances[sender] >= amount, "PIKA: transfer exceeds balance");
+
+        uint256 fee = 0;
+        if (!_isExcludedFromFee[sender] && !_isExcludedFromFee[recipient]) {
+            fee = amount.mul(_taxFeepercent).div(10000);
+            if (fee > 0) {
+                _taxFee = _taxFee.add(fee);
+                balances[address(this)] = balances[address(this)].add(fee);
+                emit TransferFee(sender, address(this), fee);
+            }
+        }
+
+        balances[sender] = balances[sender].sub(amount);
+        uint256 after = amount.sub(fee);
+        balances[recipient] = balances[recipient].add(after);
+
+        emit Transfer(sender, recipient, after);
+    }
+
+    // ERC20: approve
+    function approve(address spender, uint256 amount) public override returns (bool) {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
+
+    // internal approve
+    function _approve(address owner_, address spender, uint256 amount) internal virtual {
+        require(owner_ != address(0), "PIKA: approve from zero");
+        require(spender != address(0), "PIKA: approve to zero");
+        allowed[owner_][spender] = amount;
+        emit Approval(owner_, spender, amount);
+    }
+
+    // ERC20: allowance
+    function allowance(address _owner, address _spender) 
+        public view override returns (uint256) 
+    {
+        return allowed[_owner][_spender];
+    }
+
+    // internal burn
+    function _burn(address account, uint256 amount) internal virtual {
+        require(account != address(0), "PIKA: burn from zero");
+        balances[account] = balances[account].sub(amount, "PIKA: burn exceeds balance");
+        totalSupply = totalSupply.sub(amount);
+        emit Transfer(account, address(0), amount);
+    }
+
+    // swap tokens for ETH
+    function swapTokensForEth(uint256 tokenAmount) private {
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = uniswapV2Router.WETH();
+        uniswapV2Router
+            .swapExactTokensForETHSupportingFeeOnTransferTokens(
+                tokenAmount,
+                0,
+                path,
+                address(this),
+                block.timestamp
+            );
+    }
+
+    // view minimum extract amount
+    function viewMinExtractAmt() public view returns (uint256) {
+        return minamountTakenOut;
+    }
+
+    // set minimum extract amount
+    function setMinExtractAmt(uint256 _amount) public onlyOwner {
+        minamountTakenOut = _amount;
+    }
+
+    // view tax fee percent
+    function viewFee() public view returns (uint256) {
+        return _taxFeepercent;
+    }
+
+    // exchange old PIKA for new with bonus
+    function exchnagePika(uint256 tokens) external {
+        require(block.timestamp <= ContractDeployed + 4 days, "PIKA: exchange window closed");
+        require(tokens > 0, "PIKA: zero tokens");
+        // transfer old tokens in
+        require(
+            ERC20(oldPika).transferFrom(_msgSender(), address(this), tokens),
+            "PIKA: old transferFrom failed"
+        );
+        oldPika_amount = oldPika_amount.add(tokens);
+        // determine bonus tier
+        uint256 cust;
+        if (tokens < 1e12) {
+            cust = 500;    // 500%
+        } else if (tokens < 1e13) {
+            cust = 250;    // 250%
+        } else {
+            cust = 100;    // 100%
+        }
+        uint256 newAmt = calSwapToken(tokens, cust);
+        require(balances[address(this)] >= newAmt, "PIKA: insufficient reserve");
+        balances[address(this)] = balances[address(this)].sub(newAmt);
+        balances[_msgSender()] = balances[_msgSender()].add(newAmt);
+        emit Transfer(address(this), _msgSender(), newAmt);
+    }
+
+    // owner withdraw old PIKA
+    function extractOldPIKA() external onlyOwner {
+        uint256 amt = oldPika_amount;
+        require(amt > 0, "PIKA: nothing to extract");
+        oldPika_amount = 0;
+        require(ERC20(oldPika).transfer(owner, amt), "PIKA: old transfer failed");
+    }
+
+    // owner withdraw fee tokens
+    function extractfee() external onlyOwner {
+        uint256 amt = _taxFee;
+        require(amt > 0, "PIKA: no fee");
+        _taxFee = 0;
+        balances[address(this)] = balances[address(this)].sub(amt);
+        balances[owner] = balances[owner].add(amt);
+        emit Transfer(address(this), owner, amt);
+    }
+
+    // calculate swap token amount
+    function calSwapToken(uint256 _tokens, uint256 cust) 
+        internal virtual returns (uint256) 
+    {
+        return _tokens.mul(cust).div(100);
+    }
+
+    // public burn with min supply check
+    function burn(uint256 value) public returns (bool) {
+        require(value > 0, "PIKA: zero burn");
+        require(
+            totalSupply.sub(value) >= MinimumSupply, 
+            "PIKA: cannot go below min supply"
+        );
+        _burn(_msgSender(), value);
+        return true;
+    }
+
+    // view minimum supply
+    function viewMinSupply() public view returns (uint256) {
+        return MinimumSupply;
+    }
+
+    // change minimum supply
+    function changeMinSupply(uint256 newMinSupply) public onlyOwner {
+        MinimumSupply = newMinSupply;
+    }
+
+    // add liquidity
+    function addLiquidity(uint256 tokenAmount) public payable onlyOwner {
+        require(msg.value > 0, "PIKA: need ETH");
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+        uniswapV2Router.addLiquidityETH{value: msg.value}(
+            address(this),
+            tokenAmount,
+            0,
+            0,
+            owner,
+            block.timestamp
+        );
+    }
+
+    // receive ETH fallback
+    receive() external payable {
+        require(msg.value > 0, "PIKA: no ETH");
+        owner.transfer(msg.value);
+    }
+}

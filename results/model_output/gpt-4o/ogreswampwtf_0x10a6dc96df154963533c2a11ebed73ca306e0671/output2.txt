@@ -1,0 +1,145 @@
+Below is the complete implementation of the `ogreswampwtf` smart contract, strictly adhering to the given description and context:
+
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.7;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
+
+contract ogreswampwtf is ERC721, Ownable {
+    using Counters for Counters.Counter;
+    using Strings for uint256;
+
+    Counters.Counter private _tokenSupply;
+    string public ogreURI;
+    string public ogreExtension = ".json";
+    uint256 public cost = 0 ether;
+    uint256 public maxSupply = 3333;
+    uint256 public freeMints = 3333;
+    uint256 public maxMintAmount = 3;
+    bool public paused = false;
+    bool public revealed = false;
+    string public SwampUri;
+    mapping(address => bool) public whitelisted;
+    mapping(address => uint256) private freeMintsWallet;
+
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        string memory _initOgreURI,
+        string memory _initSwampUri
+    ) ERC721(_name, _symbol) {
+        setOgreURI(_initOgreURI);
+        setSwampURI(_initSwampUri);
+    }
+
+    function totalSupply() public view returns (uint256) {
+        return _tokenSupply.current();
+    }
+
+    function _ogreURI() internal view virtual override returns (string memory) {
+        return ogreURI;
+    }
+
+    function mint(address _to, uint256 _mintAmount) public payable {
+        require(!paused, "Minting is paused");
+        require(_mintAmount > 0, "Mint amount must be greater than 0");
+        require(_mintAmount <= maxMintAmount, "Mint amount exceeds max allowed per transaction");
+        require(_tokenSupply.current() + _mintAmount <= maxSupply, "Max supply exceeded");
+
+        if (_tokenSupply.current() < freeMints) {
+            require(whitelisted[_msgSender()], "You are not whitelisted for free mint");
+            require(freeMintsWallet[_msgSender()] + _mintAmount <= 20, "Free mints exceeded for wallet");
+            freeMintsWallet[_msgSender()] += _mintAmount;
+        } else {
+            require(msg.value >= cost * _mintAmount, "Insufficient funds for minting");
+        }
+
+        for (uint256 i = 0; i < _mintAmount; i++) {
+            _tokenSupply.increment();
+            _safeMint(_to, _tokenSupply.current());
+        }
+    }
+
+    function tokenURI(uint256 tokenId)
+        public
+        view
+        virtual
+        override
+        returns (string memory)
+    {
+        require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+        if (!revealed) {
+            return SwampUri;
+        }
+        return string(abi.encodePacked(_ogreURI(), tokenId.toString(), ogreExtension));
+    }
+
+    function reveal() public onlyOwner {
+        revealed = true;
+    }
+
+    function setCost(uint256 _newCost) public onlyOwner {
+        cost = _newCost;
+    }
+
+    function setmaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+        maxMintAmount = _newmaxMintAmount;
+    }
+
+    function setSwampURI(string memory _SwampURI) public onlyOwner {
+        SwampUri = _SwampURI;
+    }
+
+    function setOgreURI(string memory _newOgreURI) public onlyOwner {
+        ogreURI = _newOgreURI;
+    }
+
+    function setOgreExtension(string memory _newOgreExtension) public onlyOwner {
+        ogreExtension = _newOgreExtension;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function whitelistUser(address _user) public onlyOwner {
+        whitelisted[_user] = true;
+    }
+
+    function removeWhitelistUser(address _user) public onlyOwner {
+        whitelisted[_user] = false;
+    }
+
+    function withdraw() public payable onlyOwner {
+        (bool success, ) = payable(owner()).call{value: address(this).balance}("");
+        require(success, "Withdrawal failed");
+    }
+}
+```
+
+### Key Features:
+1. **Minting Logic**:
+   - Free minting allowed for whitelisted users within the `freeMints` range.
+   - Free mints capped at 20 per wallet.
+   - Paid minting enabled after `freeMints` supply is exhausted.
+
+2. **Token Metadata**:
+   - Returns the placeholder URI when NFTs are not revealed.
+   - Constructs final URI using the base URI (`ogreURI`) once revealed.
+
+3. **Administrative Functions**:
+   - Owner can pause/unpause minting, update costs, adjust maximum mint amounts, modify URIs, and manage the whitelist.
+
+4. **Supply Tracking**:
+   - `_tokenSupply` Counter ensures accurate tracking of minted tokens.
+
+5. **Withdrawal**:
+   - Owner can withdraw the contract balance.
+
+### Compliance:
+- Follows the specified context, using OpenZeppelin libraries and contracts where needed.
+- Strictly avoids introducing extraneous contracts or logic.

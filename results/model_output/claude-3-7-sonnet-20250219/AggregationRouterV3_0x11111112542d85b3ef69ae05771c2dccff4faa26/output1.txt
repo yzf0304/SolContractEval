@@ -1,0 +1,184 @@
+```solidity
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     * @dev This function calls the `swap` function internally and handles CHI token burning based on the provided flags.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     * @return chiSpent The amount of CHI tokens burned.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 gasStart = gasleft();
+        
+        chiSpent = 0;
+        if (desc.flags & _BURN_FROM_MSG_SENDER != 0) {
+            IChi chi = IChi(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c);
+            chiSpent = (gasStart / 34 + 8363) / 2;
+            chi.freeFromUpTo(msg.sender, chiSpent);
+        } else if (desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+            IChi chi = IChi(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c);
+            chiSpent = (gasStart / 34 + 8363) / 2;
+            chi.freeFromUpTo(tx.origin, chiSpent);
+        }
+        
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+        
+        // Adjust gas left to account for the gas spent in this function
+        gasLeft = gasleft();
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     * @dev This function checks the validity of the input parameters and performs the swap using the specified aggregation executor.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        // Validate parameters
+        require(desc.dstReceiver != address(0), "AggregationRouterV3: zero dst receiver");
+        require(desc.srcReceiver != address(0), "AggregationRouterV3: zero src receiver");
+        
+        uint256 initialGas = gasleft();
+        
+        // Handle permit if provided
+        if (desc.permit.length > 0) {
+            _permit(desc.srcToken, desc.amount, desc.permit);
+        }
+        
+        // Calculate value to send to caller
+        uint256 value = msg.value;
+        if (desc.srcToken.isETH()) {
+            require(desc.amount <= msg.value, "AggregationRouterV3: insufficient ETH");
+            value = desc.flags & _REQUIRES_EXTRA_ETH != 0 ? msg.value : desc.amount;
+        }
+        
+        // Transfer source tokens to srcReceiver if needed
+        if (!desc.srcToken.isETH()) {
+            desc.srcToken.safeTransferFrom(msg.sender, desc.srcReceiver, desc.amount);
+        }
+        
+        // Execute swap via the aggregation executor
+        uint256 initialSrcTokenBalance = desc.srcToken.uniBalanceOf(address(this));
+        uint256 initialDstTokenBalance = desc.dstToken.uniBalanceOf(address(this));
+        
+        caller.callBytes{value: value}(data);
+        
+        // Calculate spent and received amounts
+        uint256 spentAmount = initialSrcTokenBalance.add(
+            desc.srcToken.isETH() ? value : 0
+        ).sub(desc.srcToken.uniBalanceOf(address(this)));
+        
+        uint256 receivedAmount = desc.dstToken.uniBalanceOf(address(this)).sub(initialDstTokenBalance);
+        
+        // Check if partial fill is allowed
+        if (desc.flags & _PARTIAL_FILL != 0) {
+            spentAmount = spentAmount > desc.amount ? desc.amount : spentAmount;
+            require(
+                receivedAmount.mul(desc.amount) >= desc.minReturnAmount.mul(spentAmount),
+                "AggregationRouterV3: insufficient return amount"
+            );
+            returnAmount = receivedAmount;
+        } else {
+            require(desc.amount == spentAmount, "AggregationRouterV3: spent amount not equal to specified amount");
+            require(receivedAmount >= desc.minReturnAmount, "AggregationRouterV3: insufficient return amount");
+            returnAmount = receivedAmount;
+        }
+        
+        // Transfer destination tokens to the recipient
+        if (receivedAmount > 0) {
+            if (desc.flags & _SHOULD_CLAIM != 0) {
+                desc.dstToken.uniTransfer(payable(msg.sender), returnAmount);
+            } else {
+                desc.dstToken.uniTransfer(payable(desc.dstReceiver), returnAmount);
+            }
+        }
+        
+        // Refund unused ETH if source token is ETH
+        if (desc.srcToken.isETH() && msg.value > value) {
+            (bool success, ) = msg.sender.call{value: msg.value.sub(value)}("");
+            require(success, "AggregationRouterV3: failed to refund ETH");
+        }
+        
+        gasLeft = initialGas - gasleft();
+        
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            spentAmount,
+            returnAmount
+        );
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     * @dev This function transfers the specified amount of a given token to the owner.
+     * @param token The token to be rescued.
+     * @param amount The amount of the token to be transferred.
+     */
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        token.uniTransfer(payable(owner()), amount);
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send any remaining ETH to the owner.
+     * @dev This function self-destructs the contract and sends the remaining ETH to the owner.
+     */
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```

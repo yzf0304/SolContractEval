@@ -1,0 +1,148 @@
+Below is the complete implementation of the `EverMigrate` contract as per the context and provided description. The contract complies with Solidity version `0.8.8` and uses the provided interfaces and libraries without introducing extraneous code.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.8;
+
+contract EverMigrate is IEverMigrate, Context, Ownable {
+    using SafeMath for uint256;
+
+    struct TokenDetails {
+        address sourceToken;
+        address targetToken;
+        address devAddress;
+        uint256 ratio;
+        bool isPresent;
+    }
+
+    struct Transaction {
+        uint256 amount;
+        uint256 timestamp;
+        uint32 txnId;
+    }
+
+    mapping(address => TokenDetails) private _tokenList;
+    address[] private _allTokens;
+
+    uint32 private _txnId = 0;
+    mapping(address => mapping(address => Transaction[])) private _userTxns;
+
+    constructor() {}
+
+    function addTokenDetails(
+        address sourceToken,
+        address targetToken,
+        address devAddress,
+        uint256 ratio
+    ) external onlyOwner {
+        require(sourceToken != address(0), "Invalid source token address");
+        require(targetToken != address(0), "Invalid target token address");
+        require(devAddress != address(0), "Invalid dev address");
+        require(ratio > 0, "Ratio must be greater than zero");
+
+        TokenDetails storage details = _tokenList[sourceToken];
+        require(!details.isPresent, "Token pair already exists");
+
+        details.sourceToken = sourceToken;
+        details.targetToken = targetToken;
+        details.devAddress = devAddress;
+        details.ratio = ratio;
+        details.isPresent = true;
+
+        _allTokens.push(sourceToken);
+
+        emit TokenAdded(sourceToken, targetToken, ratio);
+    }
+
+    function migrateTokens(address sourceToken, address toAddress, uint256 amount) external {
+        require(supportsToken(sourceToken), "Source token not supported");
+        require(toAddress != address(0), "Invalid recipient address");
+        require(amount > 0, "Amount must be greater than zero");
+
+        TokenDetails memory details = _tokenList[sourceToken];
+        IERC20 sourceTokenContract = IERC20(sourceToken);
+        IERC20 targetTokenContract = IERC20(details.targetToken);
+
+        uint256 allowance = sourceTokenContract.allowance(_msgSender(), address(this));
+        require(allowance >= amount, "Insufficient allowance");
+
+        uint256 targetAmount = amount.mul(details.ratio);
+
+        sourceTokenContract.transferFrom(_msgSender(), details.devAddress, amount);
+        require(
+            targetTokenContract.balanceOf(address(this)) >= targetAmount,
+            "Insufficient target token balance"
+        );
+        targetTokenContract.transfer(toAddress, targetAmount);
+
+        _txnId++;
+        _userTxns[sourceToken][_msgSender()].push(Transaction(amount, block.timestamp, _txnId));
+
+        emit TokensMigrated(sourceToken, details.targetToken, amount, targetAmount);
+    }
+
+    function userTransactionsLength(address sourceToken, address userAddress) external view returns (uint256) {
+        return _userTxns[sourceToken][userAddress].length;
+    }
+
+    function userTransaction(address sourceToken, address userAddress, uint256 position)
+        external
+        view
+        returns (uint256, uint256, uint32)
+    {
+        require(position < _userTxns[sourceToken][userAddress].length, "Invalid position");
+        Transaction memory txn = _userTxns[sourceToken][userAddress][position];
+        return (txn.amount, txn.timestamp, txn.txnId);
+    }
+
+    function returnTokens(address sourceToken, address toAddress, uint256 amount) external onlyOwner {
+        require(supportsToken(sourceToken), "Source token not supported");
+        require(toAddress != address(0), "Invalid recipient address");
+        require(amount > 0, "Amount must be greater than zero");
+
+        TokenDetails memory details = _tokenList[sourceToken];
+        IERC20 targetTokenContract = IERC20(details.targetToken);
+
+        require(
+            targetTokenContract.balanceOf(address(this)) >= amount,
+            "Insufficient token balance to return"
+        );
+        targetTokenContract.transfer(toAddress, amount);
+
+        emit TokensReturned(details.targetToken, toAddress, amount);
+    }
+
+    function tokenMigrateDetails(address sourceToken) external view returns (address, uint256) {
+        require(supportsToken(sourceToken), "Source token not supported");
+
+        TokenDetails memory details = _tokenList[sourceToken];
+        return (details.targetToken, details.ratio);
+    }
+
+    function allSupportedTokens() external view returns (address[] memory) {
+        return _allTokens;
+    }
+
+    function allSupportedTokensLength() external view returns (uint256) {
+        return _allTokens.length;
+    }
+
+    function supportsToken(address sourceToken) public view returns (bool) {
+        return _tokenList[sourceToken].isPresent;
+    }
+}
+```
+
+### Key Features:
+1. **Add Token Details:** `addTokenDetails` allows the contract owner to add new token pairs with a specified conversion ratio and developer address.
+2. **Token Migration:** `migrateTokens` migrates source tokens to target tokens by transferring source tokens to the developer address and sending converted target tokens to the user.
+3. **Transaction Records:** Transactions are recorded per user and source token, enabling retrieval of transaction history via `userTransaction` and `userTransactionsLength`.
+4. **Return Tokens:** `returnTokens` allows the contract owner to return tokens from the contract's balance back to a specified address.
+5. **Token Support:** Utility functions like `supportsToken`, `allSupportedTokens`, and `allSupportedTokensLength` provide details on the tokens supported by the contract.
+
+### Events:
+- `TokenAdded`
+- `TokensMigrated`
+- `TokensReturned`
+
+This implementation adheres strictly to the given requirements, ensuring it is functional and complete while avoiding any unnecessary dependencies or unrelated code.

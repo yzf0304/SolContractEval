@@ -1,0 +1,118 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+interface INFT {
+    function mint(address _to) external;
+    function mintBatch(address _to, uint _amount) external;
+}
+
+interface INftPresale {
+    function buy(uint _amount, bytes memory _signature) external payable;
+}
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+    function _msgData() internal view virtual returns (bytes calldata) {
+        this;
+        return msg.data;
+    }
+}
+
+abstract contract Ownable is Context {
+    address private _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    constructor() {
+        address msgSender = _msgSender();
+        _owner = msgSender;
+        emit OwnershipTransferred(address(0), msgSender);
+    }
+    function owner() public view virtual returns (address) {
+        return _owner;
+    }
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+    function renounceOwnership() public virtual onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+contract NftPresale is INftPresale, Ownable {
+    uint public constant START_TIME     = 1634929200;
+    uint public constant FINISH_TIME    = 1635015600;
+    uint public constant PRE_SALE_PRICE = 0.2 ether;
+
+    INFT public nft;
+    address public verifyAddress = 0x142581fda5769fe7f8d3b50794dBda454DA4F3ac;
+    mapping(address => bool) public buyers;
+    address payable public receiver;
+
+    constructor(address _nftAddress, address payable _receiverAddress) {
+        nft = INFT(_nftAddress);
+        receiver = _receiverAddress;
+    }
+
+    function buy(uint _amount, bytes memory _signature) external override payable {
+        require(block.timestamp >= START_TIME && block.timestamp <= FINISH_TIME,
+                "Presale: not in presale window");
+        require(_amount == 1, "Presale: only one NFT per address");
+        require(msg.value == PRE_SALE_PRICE * _amount,
+                "Presale: incorrect ETH amount");
+        require(!buyers[msg.sender], "Presale: already purchased");
+        require(_verify(_signature), "Presale: invalid signature");
+
+        buyers[msg.sender] = true;
+        nft.mint(msg.sender);
+    }
+
+    function cashOut(address _to) public onlyOwner {
+        uint balance = address(this).balance;
+        require(balance > 0, "Presale: no funds to withdraw");
+        (bool success, ) = payable(_to).call{value: balance}("");
+        require(success, "Presale: transfer failed");
+    }
+
+    function _verify(bytes memory _signature) internal view returns (bool) {
+        bytes32 msgHash = keccak256(abi.encodePacked(msg.sender));
+        bytes32 ethSignedHash = _prefixed(msgHash);
+        return _recoverSigner(ethSignedHash, _signature) == verifyAddress;
+    }
+
+    function _recoverSigner(bytes32 _ethSignedMessageHash, bytes memory _sig)
+        internal
+        pure
+        returns (address)
+    {
+        require(_sig.length == 65, "Presale: invalid signature length");
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(_sig, 32))
+            s := mload(add(_sig, 64))
+            v := byte(0, mload(add(_sig, 96)))
+        }
+        if (v < 27) {
+            v += 27;
+        }
+        require(v == 27 || v == 28, "Presale: invalid 'v' value");
+        return ecrecover(_ethSignedMessageHash, v, r, s);
+    }
+
+    function _prefixed(bytes32 _hash) internal pure returns (bytes32) {
+        return keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", _hash)
+        );
+    }
+}
+```

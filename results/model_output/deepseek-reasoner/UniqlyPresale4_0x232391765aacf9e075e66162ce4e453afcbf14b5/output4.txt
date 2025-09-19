@@ -1,0 +1,135 @@
+Here is the complete and functional smart contract code for UniqlyPresale4:
+
+```solidity
+// SPDX-License-Identifier: Unlicense
+pragma solidity 0.8.2;
+
+abstract contract IERC20 {
+    function balanceOf(address _owner) external virtual returns (uint256 balance);
+    function transfer(address _to, uint256 _value) external virtual;
+}
+
+contract UniqlyPresale4 {
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+    uint256 constant failSafeTime = 2 weeks;
+    address public owner;
+    
+    bool public presaleEnded;
+    bool public presaleFailed;
+    bool public presaleStarted;
+    mapping(address => uint256) private balances;
+    address public newOwner;
+
+    constructor(
+        uint256 _presaleLimit, 
+        uint256 _minPerUser, 
+        uint256 _maxPerUser, 
+        uint256 _presaleEnd, 
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 amount = msg.value + balances[msg.sender];
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+        balances[msg.sender] = amount;
+
+        if (address(this).balance >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    function start() external {
+        require(msg.sender == owner, "Only owner");
+        require(!presaleStarted, "Already started");
+        presaleStarted = true;
+    }
+
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    function withdraw() external returns (bool) {
+        if (!presaleEnded && block.timestamp >= presaleEnd + failSafeTime) {
+            presaleFailed = true;
+            presaleEnded = true;
+        }
+
+        if (!presaleEnded) return false;
+
+        if (presaleFailed) {
+            uint256 amount = balances[msg.sender];
+            if (amount == 0) return false;
+            
+            bool sent = send(msg.sender, amount);
+            if (sent) {
+                balances[msg.sender] = 0;
+                return true;
+            }
+            return false;
+        } else {
+            if (msg.sender == owner) {
+                uint256 total = address(this).balance;
+                if (total == 0) return false;
+                return send(owner, total);
+            }
+            return false;
+        }
+    }
+
+    function send(address user, uint256 amount) private returns (bool) {
+        (bool success, ) = user.call{value: amount}("");
+        return success;
+    }
+
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Only owner");
+        uint256 balance = token.balanceOf(address(this));
+        token.transfer(owner, balance);
+    }
+
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Only owner");
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Not new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+```
+
+Key implementation details:
+1. `start()` function enables the presale and can only be called by the owner
+2. Withdrawal logic properly handles both successful and failed presale states
+3. ERC20 recovery function follows the provided interface specifications
+4. Ownership transfer uses a two-step verification process
+5. Failsafe mechanism automatically triggers after 2 weeks past presale end
+6. Contribution limits and time constraints are strictly enforced
+7. User balances are only cleared after successful ETH transfers
+8. Presale automatically closes when funding target is reached
+
+The contract maintains all specified requirements including compiler version compatibility, dependency-free implementation, and strict parameter enforcement.

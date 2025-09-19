@@ -1,0 +1,127 @@
+Certainly! Here is the complete implementation of the `UpgradeabilityProxy` contract based on your description and provided context, using Solidity version 0.6.8:
+
+```solidity
+pragma solidity ^0.6.8;
+
+library Address {
+    function isContract(address account) internal view returns (bool) {
+        uint256 size;
+        assembly { size := extcodesize(account) }
+        return size > 0;
+    }
+}
+
+abstract contract Proxy {
+    fallback() payable external {
+        _fallback();
+    }
+    
+    receive() payable external {
+        _fallback();
+    }
+    
+    function _implementation() internal virtual view returns (address);
+    
+    function _delegate(address implementation) internal {
+        assembly {
+            calldatacopy(0, 0, calldatasize())
+            let result := delegatecall(gas(), implementation, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            switch result
+            case 0 { revert(0, returndatasize()) }
+            default { return(0, returndatasize()) }
+        }
+    }
+    
+    function _willFallback() internal virtual {
+    }
+    
+    function _fallback() internal {
+        _willFallback();
+        _delegate(_implementation());
+    }
+}
+
+/**
+ * @notice This contract serves as an upgradeable proxy, allowing the logic implementation of a contract to be updated.
+ * @dev The contract uses the EIP-1967 standard for storing the implementation address. It provides functions to set and upgrade the implementation.
+ */
+contract UpgradeabilityProxy is Proxy {
+
+    /**
+     * @notice Initializes the proxy with an initial implementation and optionally calls a function on the implementation.
+     * @dev The constructor sets the initial implementation and, if provided, forwards the `_data` to the implementation.
+     * @param _logic The address of the initial implementation.
+     * @param _data Data to be passed to the initial implementation after it is set.
+     */
+    constructor(address _logic, bytes memory _data) public payable {
+        assert(IMPLEMENTATION_SLOT == bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1));
+        _setImplementation(_logic);
+        if (_data.length > 0) {
+            (bool success,) = _logic.delegatecall(_data);
+            require(success, "Address: failed to initialize with data");
+        }
+    }
+
+    /**
+     * @notice Emitted when the implementation is upgraded.
+     * @dev This event logs the new implementation address.
+     * @param implementation The address of the new implementation.
+     */
+    event Upgraded(address indexed implementation);
+
+    /**
+     * @notice Internal constant for the storage slot used to store the implementation address.
+     * @dev This slot is used in the EIP-1967 standard for storing the implementation address.
+     */
+    bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+
+    /**
+     * @notice Returns the current implementation address.
+     * @dev This function reads the implementation address from the storage slot.
+     * @return impl The address of the current implementation.
+     */
+    function _implementation() internal override view returns (address impl) {
+        bytes32 slot = IMPLEMENTATION_SLOT;
+        assembly {
+            impl := sload(slot)
+        }
+    }
+
+    /**
+     * @notice Upgrades the implementation to a new address.
+     * @dev This function sets the new implementation and emits the `Upgraded` event.
+     * @param newImplementation The address of the new implementation.
+     */
+    function _upgradeTo(address newImplementation) internal {
+        _setImplementation(newImplementation);
+        emit Upgraded(newImplementation);
+    }
+
+    /**
+     * @notice Sets the implementation to a new address.
+     * @dev This function ensures the new implementation is a contract and updates the storage slot.
+     * @param newImplementation The address of the new implementation.
+     */
+    function _setImplementation(address newImplementation) internal {
+        require(Address.isContract(newImplementation), "Address: new implementation is not a contract");
+        bytes32 slot = IMPLEMENTATION_SLOT;
+        assembly {
+            sstore(slot, newImplementation)
+        }
+    }
+
+    /**
+     * @notice Fallback function to receive Ether.
+     * @dev This function allows the contract to receive Ether.
+     */
+    receive() external payable {}
+}
+```
+
+In this implementation:
+- The `UpgradeabilityProxy` contract uses an EIP-1967-compliant slot to store the implementation address.
+- The `_implementation` function reads the current implementation address from the designated storage slot.
+- The `_upgradeTo` function updates the implementation address and emits the `Upgraded` event.
+- The `_setImplementation` function ensures that the address is a contract before storing it in the slot.
+- The constructor initializes the implementation and optionally forwards call data to it for initialization.

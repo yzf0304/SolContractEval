@@ -1,0 +1,177 @@
+```solidity
+pragma solidity ^0.4.18;
+
+contract BeatTokenCrowdsale is Ownable {
+    using SafeMath for uint256;
+
+    enum Stages {
+        Deployed,
+        PreIco,
+        IcoPhase1,
+        IcoPhase2,
+        IcoPhase3,
+        IcoEnded,
+        Finalized
+    }
+
+    Stages public stage;
+    BeatToken public token;
+    uint256 public contractStartTime;
+    uint256 public preIcoEndTime;
+    uint256 public icoPhase1EndTime;
+    uint256 public icoPhase2EndTime;
+    uint256 public icoPhase3EndTime;
+    uint256 public contractEndTime;
+    address public ethTeamWallet;
+    address public beatTeamWallet;
+    uint256 public ethWeiRaised;
+    mapping(address => uint256) public balanceOf;
+    uint256 public ethPriceInEuroCent;
+
+    event BeatTokenPurchased(address indexed purchaser, address indexed beneficiary, uint256 ethWeiAmount, uint256 beatWeiAmount);
+    event BeatTokenEthPriceChanged(uint256 newPrice);
+    event BeatTokenPreIcoStarted();
+    event BeatTokenIcoPhase1Started();
+    event BeatTokenIcoPhase2Started();
+    event BeatTokenIcoPhase3Started();
+    event BeatTokenIcoFinalized();
+
+    function BeatTokenCrowdsale(address _ethTeamWallet, address _beatTeamWallet) public {
+        require(_ethTeamWallet != address(0));
+        require(_beatTeamWallet != address(0));
+
+        token = new BeatToken(HARD_CAP);
+        stage = Stages.Deployed;
+        ethTeamWallet = _ethTeamWallet;
+        beatTeamWallet = _beatTeamWallet;
+        ethPriceInEuroCent = 0;
+
+        contractStartTime = 0;
+        preIcoEndTime = 0;
+        icoPhase1EndTime = 0;
+        icoPhase2EndTime = 0;
+        icoPhase3EndTime = 0;
+        contractEndTime = 0;
+    }
+
+    function setEtherPriceInEuroCent(uint256 _ethPriceInEuroCent) onlyOwner public {
+        ethPriceInEuroCent = _ethPriceInEuroCent;
+        emit BeatTokenEthPriceChanged(_ethPriceInEuroCent);
+    }
+
+    function start() onlyOwner public {
+        require(stage == Stages.Deployed);
+        contractStartTime = now;
+        preIcoEndTime = now.add(PRE_ICO_PERIOD);
+        stage = Stages.PreIco;
+        emit BeatTokenPreIcoStarted();
+    }
+
+    function finalize() onlyOwner public {
+        require(stage == Stages.IcoEnded);
+        require(now >= contractEndTime);
+        stage = Stages.Finalized;
+        
+        uint256 remainingTokens = HARD_CAP.sub(token.getTotalSupply());
+        if (remainingTokens > 0) {
+            token.mint(beatTeamWallet, remainingTokens);
+        }
+        token.finishMinting();
+        emit BeatTokenIcoFinalized();
+    }
+
+    function() payable public {
+        buyTokens(msg.sender);
+    }
+
+    function buyTokens(address beneficiary) payable public {
+        require(beneficiary != address(0));
+        require(msg.value > 0);
+        require(ethPriceInEuroCent > 0);
+
+        uint256 beatWeiAmount = calculateBeatWeiAmount(msg.value);
+        determineCurrentStage(beatWeiAmount);
+        require(isWithinValidIcoPhase());
+        require(isWithinTokenAllocLimit(beatWeiAmount));
+
+        ethWeiRaised = ethWeiRaised.add(msg.value);
+        token.mint(beneficiary, beatWeiAmount);
+        balanceOf[beneficiary] = balanceOf[beneficiary].add(beatWeiAmount);
+        ethTeamWallet.transfer(msg.value);
+        emit BeatTokenPurchased(msg.sender, beneficiary, msg.value, beatWeiAmount);
+    }
+
+    function isWithinValidIcoPhase() internal view returns (bool) {
+        if (stage == Stages.PreIco) {
+            return now <= preIcoEndTime;
+        } else if (stage == Stages.IcoPhase1) {
+            return now <= icoPhase1EndTime;
+        } else if (stage == Stages.IcoPhase2) {
+            return now <= icoPhase2EndTime;
+        } else if (stage == Stages.IcoPhase3) {
+            return now <= icoPhase3EndTime;
+        } else {
+            return false;
+        }
+    }
+
+    function calculateBeatWeiAmount(uint256 ethWeiAmount) internal view returns (uint256) {
+        uint256 bonus;
+        if (stage == Stages.PreIco) {
+            bonus = PRE_ICO_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase1) {
+            bonus = ICO_PHASE1_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase2) {
+            bonus = ICO_PHASE2_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase3) {
+            bonus = ICO_PHASE3_BONUS_PERCENTAGE;
+        } else {
+            revert();
+        }
+        return ethWeiAmount.mul(ethPriceInEuroCent).mul(100 + bonus).div(100);
+    }
+
+    function isWithinTokenAllocLimit(uint256 beatWeiAmount) internal view returns (bool) {
+        uint256 currentLimit;
+        if (stage == Stages.PreIco) {
+            currentLimit = PRE_ICO_LIMIT;
+        } else if (stage == Stages.IcoPhase1) {
+            currentLimit = ICO_PHASE1_LIMIT;
+        } else if (stage == Stages.IcoPhase2) {
+            currentLimit = ICO_PHASE2_LIMIT;
+        } else if (stage == Stages.IcoPhase3) {
+            currentLimit = ICO_PHASE3_LIMIT;
+        } else {
+            return false;
+        }
+        return token.getTotalSupply().add(beatWeiAmount) <= currentLimit;
+    }
+
+    function determineCurrentStage(uint256 beatWeiAmount) internal {
+        if (stage == Stages.PreIco) {
+            if (token.getTotalSupply().add(beatWeiAmount) > PRE_ICO_LIMIT || now >= preIcoEndTime) {
+                stage = Stages.IcoPhase1;
+                icoPhase1EndTime = now.add(ICO_PHASE1_PERIOD);
+                emit BeatTokenIcoPhase1Started();
+            }
+        } else if (stage == Stages.IcoPhase1) {
+            if (token.getTotalSupply().add(beatWeiAmount) > ICO_PHASE1_LIMIT || now >= icoPhase1EndTime) {
+                stage = Stages.IcoPhase2;
+                icoPhase2EndTime = now.add(ICO_PHASE2_PERIOD);
+                emit BeatTokenIcoPhase2Started();
+            }
+        } else if (stage == Stages.IcoPhase2) {
+            if (token.getTotalSupply().add(beatWeiAmount) > ICO_PHASE2_LIMIT || now >= icoPhase2EndTime) {
+                stage = Stages.IcoPhase3;
+                icoPhase3EndTime = now.add(ICO_PHASE3_PERIOD);
+                emit BeatTokenIcoPhase3Started();
+            }
+        } else if (stage == Stages.IcoPhase3) {
+            if (token.getTotalSupply().add(beatWeiAmount) > ICO_PHASE3_LIMIT || now >= icoPhase3EndTime) {
+                stage = Stages.IcoEnded;
+                contractEndTime = now;
+            }
+        }
+    }
+}
+```

@@ -1,0 +1,105 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.8;
+
+contract EverMigrate is IEverMigrate, Context, Ownable {
+    using SafeMath for uint256;
+
+    struct TokenDetails {
+        address sourceToken;
+        address targetToken;
+        address devAddress;
+        uint256 ratio;
+        bool isPresent;
+    }
+
+    struct Transaction {
+        uint256 amount;
+        uint256 timestamp;
+        uint32 txnId;
+    }
+
+    mapping(address => TokenDetails) private _tokenList;
+    address[] private _allTokens;
+
+    uint32 private _txnId = 0;
+    mapping(address => mapping(address => Transaction[])) private _userTxns;
+
+    function addTokenDetails(
+        address sourceToken,
+        address targetToken,
+        address devAddress,
+        uint256 ratio
+    ) external override onlyOwner {
+        require(!_tokenList[sourceToken].isPresent, "Token already added");
+        require(sourceToken != address(0), "Invalid source token");
+        require(targetToken != address(0), "Invalid target token");
+        require(devAddress != address(0), "Invalid dev address");
+        require(ratio > 0, "Ratio must be positive");
+
+        _tokenList[sourceToken] = TokenDetails(
+            sourceToken,
+            targetToken,
+            devAddress,
+            ratio,
+            true
+        );
+        _allTokens.push(sourceToken);
+        emit TokenAdded(sourceToken, targetToken, ratio);
+    }
+
+    function migrateTokens(address sourceToken, address toAddress, uint256 amount) external override {
+        require(supportsToken(sourceToken), "Token not supported");
+        TokenDetails memory details = _tokenList[sourceToken];
+        require(amount > 0, "Invalid amount");
+
+        IERC20(sourceToken).transferFrom(_msgSender(), details.devAddress, amount);
+        
+        uint256 targetAmount = amount.mul(details.ratio).div(1e18);
+        require(IERC20(details.targetToken).transfer(toAddress, targetAmount), "Transfer failed");
+        
+        _txnId += 1;
+        _userTxns[sourceToken][_msgSender()].push(Transaction(
+            amount,
+            block.timestamp,
+            _txnId
+        ));
+        
+        emit TokensMigrated(sourceToken, details.targetToken, amount, targetAmount);
+    }
+
+    function userTransactionsLength(address sourceToken, address userAddress) external view override returns (uint256) {
+        return _userTxns[sourceToken][userAddress].length;
+    }
+
+    function userTransaction(address sourceToken, address userAddress, uint256 position) external view override returns (uint256, uint256, uint32) {
+        Transaction memory txn = _userTxns[sourceToken][userAddress][position];
+        return (txn.amount, txn.timestamp, txn.txnId);
+    }
+
+    function returnTokens(address sourceToken, address toAddress, uint256 amount) external override onlyOwner {
+        require(supportsToken(sourceToken), "Token not supported");
+        TokenDetails memory details = _tokenList[sourceToken];
+        require(IERC20(details.targetToken).transfer(toAddress, amount), "Transfer failed");
+        emit TokensReturned(details.targetToken, toAddress, amount);
+    }
+
+    function tokenMigrateDetails(address sourceToken) external view override returns (address, uint256) {
+        require(supportsToken(sourceToken), "Token not supported");
+        TokenDetails memory details = _tokenList[sourceToken];
+        return (details.targetToken, details.ratio);
+    }
+
+    function allSupportedTokens() external view override returns (address[] memory) {
+        return _allTokens;
+    }
+
+    function allSupportedTokensLength() external view override returns (uint256) {
+        return _allTokens.length;
+    }
+
+    function supportsToken(address sourceToken) public view override returns(bool) {
+        return _tokenList[sourceToken].isPresent;
+    }
+}
+```

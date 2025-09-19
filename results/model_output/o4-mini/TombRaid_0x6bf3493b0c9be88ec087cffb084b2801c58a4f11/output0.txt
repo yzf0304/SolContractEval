@@ -1,0 +1,136 @@
+pragma solidity ^0.8.13;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface IBoneheadz {
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function totalSupply() external view returns (uint256);
+}
+
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+
+    uint256 internal cutoff;
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+    uint256 public raidPrice = 0.005 ether;
+
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    /// @notice Toggle raid on/off
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    /// @notice Set the price to raid
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    /// @notice Set the cutoff threshold for locking
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    /// @notice Toggle lock status of multiple tokens
+    function flipLockStatuses(uint256[] calldata tokenIds) public onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            uint256 id = tokenIds[i];
+            bool newStatus = !isLocked[id];
+            isLocked[id] = newStatus;
+            if (newStatus) {
+                emit Locked(id);
+            }
+        }
+    }
+
+    /// @notice Withdraw the contract balance
+    function withdraw(address recipient) external onlyOwner {
+        require(recipient != address(0), "Invalid recipient");
+        payable(recipient).transfer(address(this).balance);
+    }
+
+    /// @notice Raid a Boneheadz token to try increasing its tier or get locked
+    function raid(uint256 tokenId) public payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raiding is not active");
+        require(!isLocked[tokenId], "Token is locked");
+        require(tokenTiers[tokenId] < MAX_TIER, "Token is at max tier");
+        require(msg.value == raidPrice, "Incorrect ETH sent");
+
+        uint256 rnd = _genPseudoRandomNumber(tokenId);
+
+        if (rnd < cutoff) {
+            // token gets locked
+            isLocked[tokenId] = true;
+            emit Locked(tokenId);
+        } else {
+            // increase tier
+            tokenTiers[tokenId] += 1;
+            emit TierUpdated(tokenId, tokenTiers[tokenId]);
+        }
+    }
+
+    /// @notice Count how many tokens are in each tier
+    function numPerTier() public view returns (uint256[] memory) {
+        uint256 supply = Boneheadz.totalSupply();
+        uint256 size = MAX_TIER + 1;
+        uint256[] memory counts = new uint256[](size);
+
+        for (uint256 id = 1; id <= supply; id++) {
+            uint256 tier = tokenTiers[id];
+            if (tier <= MAX_TIER) {
+                counts[tier]++;
+            }
+        }
+        return counts;
+    }
+
+    /// @notice Count how many locked tokens are in each tier
+    function numLockedPerTier() public view returns (uint256[] memory) {
+        uint256 supply = Boneheadz.totalSupply();
+        uint256 size = MAX_TIER + 1;
+        uint256[] memory counts = new uint256[](size);
+
+        for (uint256 id = 1; id <= supply; id++) {
+            if (isLocked[id]) {
+                uint256 tier = tokenTiers[id];
+                if (tier <= MAX_TIER) {
+                    counts[tier]++;
+                }
+            }
+        }
+        return counts;
+    }
+
+    /// @dev Pseudo-random number generator
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        return uint256(
+            keccak256(
+                abi.encodePacked(block.difficulty, block.timestamp, tokenId)
+            )
+        );
+    }
+}

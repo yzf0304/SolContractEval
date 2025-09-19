@@ -1,0 +1,147 @@
+Below is the complete implementation of the `UniswapV2ERC20` contract based on the provided context and description. All placeholder functions have been implemented, adhering strictly to the provided requirements:
+
+```solidity
+pragma solidity 0.6.12;
+
+library SafeMathUniswap {
+    function add(uint x, uint y) internal pure returns (uint z) {
+        require((z = x + y) >= x, 'ds-math-add-overflow');
+    }
+
+    function sub(uint x, uint y) internal pure returns (uint z) {
+        require((z = x - y) <= x, 'ds-math-sub-underflow');
+    }
+
+    function mul(uint x, uint y) internal pure returns (uint z) {
+        require(y == 0 || (z = x * y) / y == x, 'ds-math-mul-overflow');
+    }
+}
+
+contract UniswapV2ERC20 {
+    using SafeMathUniswap for uint;
+
+    string public constant name = 'SushiSwap LP Token';
+    string public constant symbol = 'SLP';
+    uint8 public constant decimals = 18;
+    uint public totalSupply;
+    mapping(address => uint) public balanceOf;
+    mapping(address => mapping(address => uint)) public allowance;
+
+    bytes32 public DOMAIN_SEPARATOR;
+    bytes32 public constant PERMIT_TYPEHASH = 0x6e71edae12b1b97f4d1f60370fef10105fa2faae0126114a169c64845d6126c9;
+    mapping(address => uint) public nonces;
+
+    event Approval(address indexed owner, address indexed spender, uint value);
+    event Transfer(address indexed from, address indexed to, uint value);
+
+    constructor() public {
+        uint chainId;
+        assembly {
+            chainId := chainid()
+        }
+        DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                keccak256('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)'),
+                keccak256(bytes(name)),
+                keccak256(bytes('1')),
+                chainId,
+                address(this)
+            )
+        );
+    }
+
+    function _mint(address to, uint value) internal {
+        require(to != address(0), "ERC20: mint to the zero address");
+        totalSupply = totalSupply.add(value);
+        balanceOf[to] = balanceOf[to].add(value);
+        emit Transfer(address(0), to, value);
+    }
+
+    function _burn(address from, uint value) internal {
+        require(from != address(0), "ERC20: burn from the zero address");
+        balanceOf[from] = balanceOf[from].sub(value);
+        totalSupply = totalSupply.sub(value);
+        emit Transfer(from, address(0), value);
+    }
+
+    function _approve(address owner, address spender, uint value) private {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+        allowance[owner][spender] = value;
+        emit Approval(owner, spender, value);
+    }
+
+    function _transfer(address from, address to, uint value) private {
+        require(from != address(0), "ERC20: transfer from the zero address");
+        require(to != address(0), "ERC20: transfer to the zero address");
+        balanceOf[from] = balanceOf[from].sub(value);
+        balanceOf[to] = balanceOf[to].add(value);
+        emit Transfer(from, to, value);
+    }
+
+    function approve(address spender, uint value) external returns (bool) {
+        _approve(msg.sender, spender, value);
+        return true;
+    }
+
+    function transfer(address to, uint value) external returns (bool) {
+        _transfer(msg.sender, to, value);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint value) external returns (bool) {
+        uint allowed = allowance[from][msg.sender];
+        if (allowed != uint(-1)) {
+            allowance[from][msg.sender] = allowed.sub(value);
+        }
+        _transfer(from, to, value);
+        return true;
+    }
+
+    function permit(
+        address owner,
+        address spender,
+        uint value,
+        uint deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        require(deadline >= block.timestamp, "ERC20Permit: expired deadline");
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                DOMAIN_SEPARATOR,
+                keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline))
+            )
+        );
+        address recoveredAddress = ecrecover(digest, v, r, s);
+        require(recoveredAddress != address(0) && recoveredAddress == owner, "ERC20Permit: invalid signature");
+        _approve(owner, spender, value);
+    }
+}
+```
+
+### Key Features Implemented:
+1. **Token Minting and Burning** (`_mint` and `_burn`):
+   - `mint` increases `totalSupply` and assigns new tokens to an address.
+   - `burn` reduces `totalSupply` and destroys tokens from an address.
+
+2. **Token Transfers** (`transfer` and `transferFrom`):
+   - Implements `transfer` and `transferFrom` functions to move tokens between addresses.
+   - Enforces allowance checks in `transferFrom`.
+
+3. **Token Approval** (`approve` and `_approve`):
+   - Allows token owners to approve spenders via `approve`.
+   - Emits `Approval` events.
+
+4. **EIP-2612 Permit**:
+   - Implements permit-based approvals using off-chain signatures.
+   - Uses EIP-712 domain separation and `PERMIT_TYPEHASH` for secure validation of permits.
+
+5. **Events**:
+   - Emits `Transfer` and `Approval` events for all respective state changes.
+
+### Constraints Followed:
+- The implementation adheres strictly to the provided description and does not introduce unrelated code or dependencies.
+- Functions are implemented as described in the comments without deviation.

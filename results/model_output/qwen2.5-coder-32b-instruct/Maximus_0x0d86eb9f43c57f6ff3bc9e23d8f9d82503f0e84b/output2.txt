@@ -1,0 +1,150 @@
+Certainly! Below is the implementation of the `HEXToken` smart contract based on the provided context and the contract description. This implementation adheres to Solidity compiler version 0.8.13 and includes detailed comments explaining each section of the code.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+contract HEXToken {
+    // Events
+    event StakeStarted(address indexed staker, uint256 amount, uint256 duration);
+    event StakeEnded(address indexed staker, uint256 amount);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    // Variables
+    uint256 private _totalSupply;
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+    uint256 private _day;
+    struct Stake {
+        uint256 amount;
+        uint256 duration; // in days
+        uint40 id;
+    }
+    mapping(address => Stake[]) private _stakes;
+    uint40 private _stakeIdCounter = 1; // to uniquely identify each stake
+
+    // Modifier
+    modifier onlyValidAmount(uint256 amount) {
+        require(amount > 0, "Invalid amount");
+        _;
+    }
+
+    modifier onlySufficientBalance(address from, uint256 amount) {
+        require(_balances[from] >= amount, "Insufficient balance");
+        _;
+    }
+
+    modifier onlySpender(address owner, address spender, uint256 amount) {
+        require(_balances[owner] >= amount && (_allowances[owner][spender] >= amount || msg.sender == owner), "Not authorized");
+        _;
+    }
+
+    // Constructor
+    constructor(uint256 initialSupply) {
+        _totalSupply = initialSupply;
+        _balances[msg.sender] = initialSupply;
+    }
+
+    // View Functions
+    function totalSupply() external view returns (uint256) {
+        return _totalSupply;
+    }
+
+    function balanceOf(address account) external view returns (uint256) {
+        return _balances[account];
+    }
+
+    function currentDay() external view returns (uint256) {
+        return _day;
+    }
+
+    function allowance(address owner, address spender) external view returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return _stakes[stakerAddr].length;
+    }
+
+    // External Functions
+    function approve(address spender, uint256 amount) external returns (bool) {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address recipient, uint256 amount) public onlyValidAmount(amount) onlySufficientBalance(msg.sender, amount) returns (bool) {
+        _transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address recipient, uint256 amount) public onlyValidAmount(amount) onlySpender(from, msg.sender, amount) returns (bool) {
+        _transfer(from, recipient, amount);
+        _spendAllowance(from, msg.sender, amount);
+        return true;
+    }
+
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external onlyValidAmount(newStakedHearts) onlySufficientBalance(msg.sender, newStakedHearts) {
+        // Transfer the staked HEX to the contract (or lock it in some way)
+        _balances[msg.sender] -= newStakedHearts;
+
+        // Record the stake
+        _stakes[msg.sender].push(Stake({
+            amount: newStakedHearts,
+            duration: newStakedDays,
+            id: _stakeIdCounter++
+        }));
+
+        emit StakeStarted(msg.sender, newStakedHearts, newStakedDays);
+    }
+
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        Stake[] storage userStakes = _stakes[msg.sender];
+        require(stakeIndex < userStakes.length, "Invalid stake index");
+
+        Stake memory stake = userStakes[stakeIndex];
+        require(stake.id == stakeIdParam, "Invalid stake ID");
+        require(_day >= stake.duration, "Stake period not yet completed");
+
+        // Add the staked HEX back to the user's balance
+        _balances[msg.sender] += stake.amount;
+
+        // Remove the stake from the list
+        userStakes[stakeIndex] = userStakes[userStakes.length - 1];
+        userStakes.pop();
+
+        emit StakeEnded(msg.sender, stake.amount);
+    }
+
+    // Internal Functions
+    function _transfer(address from, address to, uint256 amount) internal {
+        _balances[from] -= amount;
+        _balances[to] += amount;
+
+        emit Transfer(from, to, amount);
+    }
+
+    function _approve(address owner, address spender, uint256 amount) internal {
+        _allowances[owner][spender] = amount;
+
+        emit Approval(owner, spender, amount);
+    }
+
+    function _spendAllowance(address owner, address spender, uint256 amount) internal {
+        uint256 currentAllowance = _allowances[owner][spender];
+        require(currentAllowance >= amount, "ERC20: insufficient allowance");
+
+        unchecked {
+            _approve(owner, spender, currentAllowance - amount);
+        }
+    }
+}
+```
+
+### Key Points:
+- **Staking Mechanism**: Users can stake their HEX tokens, which locks the tokens for a specified duration.
+- **Approval and Transfer**: The contract supports standard token approval and transfer functionalities.
+- **Event Emission**: Events are emitted for all critical actions like staking, unstaking, and transferring to facilitate off-chain tracking.
+- **Modifiers**: Custom modifiers ensure that operations respect constraints such as valid amounts and sufficient balances.
+
+This contract is a basic implementation and may need additional features or security considerations depending on the full requirements and context of the project.

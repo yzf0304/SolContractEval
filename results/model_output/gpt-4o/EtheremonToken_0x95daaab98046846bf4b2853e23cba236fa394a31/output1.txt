@@ -1,0 +1,122 @@
+Here's the complete and functional `TokenERC20` contract strictly adhering to the provided context, description, and compiler version 0.4.19:
+
+```solidity
+pragma solidity ^0.4.19;
+
+interface TokenRecipient { 
+    function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public; 
+}
+
+/**
+ * @notice A simple ERC20 token contract.
+ * @dev This contract implements the basic functionalities of an ERC20 token, including transfer, approve, and burn.
+ */
+contract TokenERC20 {
+
+    string public name; 
+    string public symbol; 
+    uint8 public decimals; 
+    uint256 public totalSupply;
+
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Burn(address indexed _from, uint256 _value);
+
+    /**
+     * @dev Constructor that initializes the token with a name, symbol, total supply, and decimals.
+     * @param initialSupply The total supply of the token.
+     * @param tokenName The name of the token.
+     * @param tokenSymbol The symbol of the token.
+     * @param decimalUnits The number of decimals the token uses.
+     */
+    function TokenERC20(uint256 initialSupply, string tokenName, string tokenSymbol, uint8 decimalUnits) public {
+        totalSupply = initialSupply;
+        balanceOf[msg.sender] = initialSupply;
+        name = tokenName;
+        symbol = tokenSymbol;
+        decimals = decimalUnits;
+    }
+
+    function _transfer(address _from, address _to, uint256 _value) internal {
+        require(_to != 0x0); // Prevent transfer to 0x0 address.
+        require(balanceOf[_from] >= _value); // Ensure sender has enough balance.
+        require(balanceOf[_to] + _value > balanceOf[_to]); // Prevent overflow.
+
+        uint previousBalances = balanceOf[_from] + balanceOf[_to];
+        balanceOf[_from] -= _value;
+        balanceOf[_to] += _value;
+
+        emit Transfer(_from, _to, _value);
+        assert(balanceOf[_from] + balanceOf[_to] == previousBalances); // Ensure no token loss.
+    }
+
+    function transfer(address _to, uint256 _value) public {
+        _transfer(msg.sender, _to, _value);
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_value <= allowance[_from][msg.sender]); // Check allowance.
+        allowance[_from][msg.sender] -= _value;
+        _transfer(_from, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowance[msg.sender][_spender] = _value;
+        return true;
+    }
+
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        TokenRecipient spender = TokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+        return false;
+    }
+
+    function burn(uint256 _value) public returns (bool success) {
+        require(balanceOf[msg.sender] >= _value); // Check if the sender has enough.
+        balanceOf[msg.sender] -= _value;
+        totalSupply -= _value;
+        emit Burn(msg.sender, _value);
+        return true;
+    }
+
+    function burnFrom(address _from, uint256 _value) public returns (bool success) {
+        require(balanceOf[_from] >= _value); // Check if the target has enough balance.
+        require(_value <= allowance[_from][msg.sender]); // Check allowance.
+        balanceOf[_from] -= _value;
+        allowance[_from][msg.sender] -= _value;
+        totalSupply -= _value;
+        emit Burn(_from, _value);
+        return true;
+    }
+}
+```
+
+### Explanation of the Implementation:
+
+1. **Core Functionalities:**
+   - The contract implements essential ERC20 functionalities: `transfer`, `transferFrom`, `approve`, and `allowance`.
+   - Includes `burn` and `burnFrom` for token destruction.
+
+2. **Events:**
+   - `Transfer` is emitted on successful transfers.
+   - `Burn` is emitted when tokens are burned.
+
+3. **Internal `_transfer` Function:**
+   - Manages the logic for safe token transfers, preventing common issues like overflows or sending to the zero address.
+
+4. **Approve and Call:**
+   - Allows integration with external contracts (`TokenRecipient`) by calling a callback function on approval.
+
+5. **Constructor:**
+   - Initializes the token with a name, symbol, decimals, and total supply, assigning all tokens to the deployer.
+
+6. **Compiler Version:**
+   - Specifically written for `pragma solidity ^0.4.19`.
+
+This contract adheres strictly to the given context and ERC20 requirements without introducing unnecessary dependencies or unrelated code.

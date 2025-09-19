@@ -1,0 +1,130 @@
+```solidity
+pragma solidity 0.8.7;
+
+contract OMNIDOORS is Ownable, ERC721, NonblockingReceiver {
+    // Public state
+    address public _owner;
+    // Base URI for token metadata
+    string private baseURI;
+    // Token id tracker
+    uint256 public nextTokenId = 5900;
+    // Maximum token id across this network
+    uint256 public constant MAX_NETWORK_MINT = 9300;
+    // Gas reserve for LZ receive on destination chain
+    uint256 public gasForDestinationLzReceive = 350000;
+
+    /**
+     * @notice Initializes the contract with base URI and LayerZero endpoint.
+     *         Mints 330 NFTs to deployer (owner).
+     */
+    constructor(string memory baseURI_, address _layerZeroEndpoint)
+        ERC721("Omni Doors", "odoors")
+    {
+        _owner = msg.sender;
+        // set LZ endpoint
+        endpoint = ILayerZeroEndpoint(_layerZeroEndpoint);
+        // set token metadata base URI
+        baseURI = baseURI_;
+        // mint initial 330 tokens to deployer
+        for (uint256 i = 0; i < 330; i++) {
+            _safeMint(_owner, ++nextTokenId);
+        }
+    }
+
+    /**
+     * @notice Mint exactly one NFT per call up to `MAX_NETWORK_MINT`.
+     * @param numTokens Must be 1.
+     */
+    function mint(uint8 numTokens) external payable {
+        require(numTokens == 1, "Mint: Can only mint 1");
+        require(nextTokenId + numTokens <= MAX_NETWORK_MINT, "Mint: Max supply reached");
+        _safeMint(msg.sender, ++nextTokenId);
+    }
+
+    /**
+     * @notice Transfer an NFT cross‐chain via LayerZero.
+     * @param _chainId  Destination chain identifier.
+     * @param tokenId   Token ID to transfer.
+     */
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        // verify ownership
+        require(ownerOf(tokenId) == msg.sender, "Traverse: Not token owner");
+        // verify destination is trusted
+        require(trustedRemoteLookup[_chainId].length > 0, "Traverse: Chain not trusted");
+        // burn on source chain
+        _burn(tokenId);
+
+        // build payload = (recipient, tokenId)
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+        // set adapter parameters (version=1 + gas)
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForDestinationLzReceive);
+        // estimate fees
+        (uint256 nativeFee, ) = endpoint.estimateFees(
+            _chainId,
+            address(this),
+            payload,
+            false,
+            adapterParams
+        );
+        require(msg.value >= nativeFee, "Traverse: Insufficient msg.value");
+        // send cross‐chain message
+        _lzSend(
+            _chainId,
+            payload,
+            payable(msg.sender), // refund excess to sender
+            address(0),          // pay in native token
+            adapterParams
+        );
+    }
+
+    /**
+     * @notice Set a new base URI for token metadata.
+     */
+    function setBaseURI(string memory URI) external onlyOwner {
+        baseURI = URI;
+    }
+
+    /**
+     * @notice Donate ETH to this contract.
+     */
+    function donate() external payable {
+        // intentionally left blank
+    }
+
+    /**
+     * @notice Withdraw `amt` ETH to the contract owner.
+     */
+    function withdraw(uint256 amt) external onlyOwner {
+        (bool success, ) = payable(owner()).call{value: amt}("");
+        require(success, "Withdraw: transfer failed");
+    }
+
+    /**
+     * @notice Adjust gas reserved for LZ receive on destination.
+     */
+    function setGasForDestinationLzReceive(uint256 newVal) external onlyOwner {
+        gasForDestinationLzReceive = newVal;
+    }
+
+    /**
+     * @dev Internal LZ receiver override — decode and mint on destination chain.
+     */
+    function _LzReceive(
+        uint16,
+        bytes memory,
+        uint64,
+        bytes memory _payload
+    ) internal override {
+        // payload = (recipient, tokenId)
+        (address to, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        _safeMint(to, tokenId);
+    }
+
+    /**
+     * @dev Override ERC721 base URI.
+     */
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+}
+```

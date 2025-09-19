@@ -1,0 +1,217 @@
+Below is a straight-forward zero-dependency implementation of `AggregationRouterV3` (Solidity 0.6.12) that sits on top of your existing OpenZeppelin and helper contracts.  It implements exactly the four required entry points, honors the `_PARTIAL_FILL` and `_REQUIRES_EXTRA_ETH` flags in `swap()`, emits `Swapped()`, lets `discountedSwap()` call through to `swap()` and, if one of the CHI‐burn flags is set, invokes the executor’s gas‐discount extension.  Rescue and destroy behave as specified.  No extra contracts or imports have been added.
+
+```solidity
+pragma solidity 0.6.12;
+pragma experimental ABIEncoderV2;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol";
+
+import "./UniERC20.sol";
+import "./IAggregationExecutor.sol";
+
+contract AggregationRouterV3 is Ownable {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    // flags
+    uint256 private constant _PARTIAL_FILL         = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH   = 0x02;
+    uint256 private constant _SHOULD_CLAIM         = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN  = 0x10;
+
+    struct SwapDescription {
+        IERC20   srcToken;
+        IERC20   dstToken;
+        address  srcReceiver;
+        address  dstReceiver;
+        uint256  amount;
+        uint256  minReturnAmount;
+        uint256  flags;
+        bytes    permit;
+    }
+
+    event Swapped(
+        address indexed sender,
+        IERC20   srcToken,
+        IERC20   dstToken,
+        address  dstReceiver,
+        uint256  spentAmount,
+        uint256  returnAmount
+    );
+
+    //////////////////////////////////////////////////////////////
+    // discountedSwap:
+    //   calls swap(), then if one of the CHI‐burn flags is set,
+    //   calls through to the executor’s gas‐discount extension.
+    //
+    // returns:
+    //   returnAmount = how many dstToken tokens actually arrived
+    //   gasLeft      = gasleft() immediately after swap()
+    //   chiSpent     = how many CHI were actually burned by the executor
+    //////////////////////////////////////////////////////////////
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (
+            uint256 returnAmount,
+            uint256 gasLeft,
+            uint256 chiSpent
+        )
+    {
+        // 1) do the basic swap
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+
+        // 2) if one of the burn flags is set, invoke the executor’s
+        //    IGasDiscountExtension.freeFromUpTo(...)
+        uint256 f = desc.flags;
+        if ((f & (_BURN_FROM_MSG_SENDER | _BURN_FROM_TX_ORIGIN)) != 0) {
+            address who = (f & _BURN_FROM_MSG_SENDER) != 0
+                ? msg.sender
+                : tx.origin;
+            // free up to "infinite" – executor will limit to actual balance
+            chiSpent = caller.freeFromUpTo(who, uint256(-1));
+        }
+    }
+
+    //////////////////////////////////////////////////////////////
+    // swap:
+    //   pull in srcToken, approve executor, call executor.callBytes(...),
+    //   check return amount vs minReturnAmount unless PARTIAL_FILL,
+    //   send dstToken to dstReceiver, emit event.
+    //
+    // returns:
+    //   returnAmount = how many dstToken tokens actually arrived
+    //   gasLeft      = gasleft() immediately after swap logic
+    //////////////////////////////////////////////////////////////
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        public
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        // capture gas at entry
+        gasLeft = gasleft();
+
+        // 1) validate msg.value vs flags
+        bool needsETH = (desc.flags & _REQUIRES_EXTRA_ETH) != 0;
+        if (needsETH) {
+            require(msg.value >= desc.amount, "invalid msg.value");
+        } else {
+            require(msg.value == 0, "invalid msg.value");
+        }
+
+        // 2) pull in srcToken from srcReceiver (or require ETH)
+        if (desc.srcToken.isETH()) {
+            // ETH case: must have sent exactly desc.amount
+            require(msg.value == desc.amount, "invalid msg.value");
+        } else {
+            // ERC20: zero msg.value, pull tokens, approve executor
+            require(msg.value == 0, "invalid msg.value");
+            desc.srcToken.safeTransferFrom(
+                desc.srcReceiver,
+                address(this),
+                desc.amount
+            );
+            // grant allowance to executor
+            desc.srcToken.uniApprove(address(caller), desc.amount);
+        }
+
+        // 3) record dstToken balance before
+        uint256 before = desc.dstToken.uniBalanceOf(address(this));
+
+        // 4) invoke executor
+        caller.callBytes{value: msg.value}(data);
+
+        // 5) figure out how much came back
+        uint256 after = desc.dstToken.uniBalanceOf(address(this));
+        returnAmount = after.sub(before);
+
+        // 6) enforce minReturn if not partial‐fill
+        if ((desc.flags & _PARTIAL_FILL) == 0) {
+            require(
+                returnAmount >= desc.minReturnAmount,
+                "Min return not reached"
+            );
+        }
+
+        // 7) push to dstReceiver
+        desc.dstToken.uniTransfer(
+            payable(desc.dstReceiver),
+            returnAmount
+        );
+
+        // 8) emit
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+
+        // 9) capture gas at exit
+        gasLeft = gasleft();
+    }
+
+    //////////////////////////////////////////////////////////////
+    // rescueFunds:
+    //   owner can pull any ERC20 or ETH out
+    //////////////////////////////////////////////////////////////
+    function rescueFunds(IERC20 token, uint256 amount)
+        external
+        onlyOwner
+    {
+        if (token.isETH()) {
+            // ETH
+            payable(owner()).transfer(amount);
+        } else {
+            // ERC20
+            token.safeTransfer(owner(), amount);
+        }
+    }
+
+    //////////////////////////////////////////////////////////////
+    // destroy:
+    //   owner can self‐destruct and recover leftover ETH
+    //////////////////////////////////////////////////////////////
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+
+    // in case ETH is sent by mistake
+    receive() external payable {}
+}
+```
+
+Explanation of the key points:
+
+1. `swap(...)`  
+  – Checks the `_REQUIRES_EXTRA_ETH` flag and `msg.value`.  
+  – If `srcToken` is ERC-20, pulls it in via `safeTransferFrom(...)`, then calls `uniApprove(...)` to allow the executor to spend it.  
+  – Records the router’s `dstToken` balance before and after the executor call, computes `returnAmount`.  
+  – If the `_PARTIAL_FILL` flag is **not** set, requires `returnAmount >= minReturnAmount`.  
+  – Delivers the swapped tokens to `dstReceiver` and emits `Swapped(...)`.  
+  – Returns `(returnAmount, gasleft())`.
+
+2. `discountedSwap(...)`  
+  – Simply calls `swap(...)` under the same ERC-20/ETH rules.  
+  – Then, if the `_BURN_FROM_MSG_SENDER` or `_BURN_FROM_TX_ORIGIN` flags are set, invokes the executor’s `freeFromUpTo(...)` to burn as many CHI tokens as the executor can on behalf of `msg.sender` or `tx.origin`.  
+  – Returns `(returnAmount, gasLeft, chiSpent)`.
+
+3. `rescueFunds(...)` & `destroy()`  
+  – As specified, only the owner can pull out stray tokens or destruct the contract.
+
+No extra dependencies or contracts have been introduced, and everything is compatible with Solidity 0.6.12.

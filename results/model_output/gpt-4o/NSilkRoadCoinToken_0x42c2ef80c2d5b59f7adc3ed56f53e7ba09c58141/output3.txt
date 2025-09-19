@@ -1,0 +1,101 @@
+Certainly! Below is the complete implementation of the `standardToken` contract, according to the specifications provided, utilizing Solidity version 0.4.18:
+
+```solidity
+pragma solidity ^0.4.18;
+
+/**
+ * @title ERC20Token
+ * @dev This is a basic version of the ERC20 standard token.
+ */
+contract ERC20Token {
+    uint256 public totalSupply;
+    
+    function balanceOf(address _owner) constant public returns (uint256 balance);
+    function transfer(address _to, uint256 _value) public returns (bool success);
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+    function approve(address _spender, uint256 _value) public returns (bool success);
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining);
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+}
+
+/**
+ * @title limitedFactor
+ * @dev Provides functionality to restrict certain actions if the sender is a foundation account.
+ */
+contract limitedFactor {
+    uint256 public FoundationAddressFreezeTime;
+    address public FoundationAddress;
+    address public TeamAddress;
+
+    modifier FoundationAccountNeedFreezeOneYear(address _address) {
+        if (_address == FoundationAddress) {
+            require(now >= FoundationAddressFreezeTime + 1 years);
+        }
+        _;
+    }
+}
+
+/**
+ * @title StandardToken
+ * @dev Implementation of a standard token with additional functionalities.
+ */
+contract standardToken is ERC20Token, limitedFactor {
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowances;
+
+    function balanceOf(address _owner) constant public returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _value) public FoundationAccountNeedFreezeOneYear(msg.sender) returns (bool success) {
+        require(balances[msg.sender] >= _value);
+        require(balances[_to] + _value > balances[_to]);
+
+        balances[msg.sender] -= _value;
+        balances[_to] += _value;
+
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowances[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        tokenRecipient recipient = tokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            recipient.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+        return false;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(balances[_from] >= _value);
+        require(allowances[_from][msg.sender] >= _value);
+        require(balances[_to] + _value > balances[_to]);
+
+        balances[_from] -= _value;
+        allowances[_from][msg.sender] -= _value;
+        balances[_to] += _value;
+
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining) {
+        return allowances[_owner][_spender];
+    }
+}
+```
+
+**Explanation:**
+- The `standardToken` contract inherits from both `ERC20Token` and `limitedFactor`.
+- The `FoundationAccountNeedFreezeOneYear` modifier ensures that the foundation address cannot transfer tokens until one year after the `FoundationAddressFreezeTime`.
+- The contract implements all the basic functions for a token, including `transfer`, `transferFrom`, `approve`, and `approveAndCall`, alongside the `balanceOf` and `allowance` functions.
+- The `approveAndCall` function allows for tokens to be approved and then utilized by another contract implementing the `tokenRecipient` interface.

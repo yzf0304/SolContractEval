@@ -1,0 +1,120 @@
+Certainly! Let's fill in the details for the `FaithCoin` contract based on the context provided. Below is the complete implementation:
+
+```solidity
+pragma solidity ^0.4.19;
+
+/**
+ * @title FaithCoin
+ * @dev This contract implements an ERC20 token with additional features such as distribution and foreign token withdrawal.
+ */
+contract FaithCoin is ERC20 {
+    address public owner = msg.sender;
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+    uint256 public totalSupply = 25000000 * 10**8;
+    bool public distributionFinished = false;
+
+    string public constant name = "FaithCoin";
+    string public constant symbol = "FAITH";
+    uint8 public constant decimals = 8;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event DistrFinished();
+
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    modifier canDistr() {
+        require(!distributionFinished);
+        _;
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        assert(msg.data.length >= size + 4);
+        _;
+    }
+
+    function FaithCoin() public {
+        balances[msg.sender] = totalSupply;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    function getEthBalance(address _addr) public constant returns(uint) {
+        return _addr.balance;
+    }
+
+    function distributeFAITH(address[] addresses, uint256 _value, uint256 _ethbal) onlyOwner canDistr public {
+        for (uint i = 0; i < addresses.length; i++) {
+            if (getEthBalance(addresses[i]) >= _ethbal) {
+                balances[owner] -= _value;
+                balances[addresses[i]] += _value;
+                Transfer(owner, addresses[i], _value);
+            }
+        }
+    }
+
+    function balanceOf(address _owner) public constant returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _amount) onlyPayloadSize(2 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(_amount <= balances[msg.sender]);
+
+        balances[msg.sender] -= _amount;
+        balances[_to] += _amount;
+        Transfer(msg.sender, _to, _amount);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _amount) onlyPayloadSize(3 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(_amount <= balances[_from]);
+        require(_amount <= allowed[_from][msg.sender]);
+
+        balances[_from] -= _amount;
+        balances[_to] += _amount;
+        allowed[_from][msg.sender] -= _amount;
+        Transfer(_from, _to, _amount);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public constant returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    function finishDistribution() onlyOwner public returns (bool) {
+        distributionFinished = true;
+        DistrFinished();
+        return true;
+    }
+
+    function withdrawForeignTokens(address _tokenContract) public onlyOwner returns (bool) {
+        ForeignToken token = ForeignToken(_tokenContract);
+        uint256 amount = token.balanceOf(address(this));
+        return token.transfer(owner, amount);
+    }
+}
+```
+
+### Explanation:
+- **Ownership & Access Control**: The contract defines an owner, who is initially the deployer. There are modifiers to restrict access to certain functions to the owner.
+- **Distribution Functionality**: The contract allows distribution of tokens to specified addresses based on their Ether balance, ensuring the distribution is only done once (controlled by `canDistr` modifier).
+- **ERC20 Implementation**: Implements standard ERC20 functions such as `transfer`, `transferFrom`, `approve`, and `allowance`.
+- **Finish Distribution**: The owner can finish the distribution phase, which cannot be undone.
+- **Withdraw Foreign Tokens**: Allows the owner to withdraw any ERC20 tokens that might have been sent to this contract accidentally.
+
+This implementation strictly adheres to the context and features specified in the description.

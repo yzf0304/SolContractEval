@@ -1,0 +1,68 @@
+Here is the completed PaymentForwarder contract:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract PaymentForwarder is Haltable {
+  address public teamMultisig;
+  uint public totalTransferred;
+  uint public customerCount;
+  mapping(uint128 => uint) public paymentsByCustomer;
+  mapping(address => uint) public paymentsByBenefactor;
+  event PaymentForwarded(address source, uint amount, uint128 customerId, address benefactor);
+
+  function PaymentForwarder(address _owner, address _teamMultisig) {
+    teamMultisig = _teamMultisig;
+    owner = _owner;
+  }
+
+  function payWithoutChecksum(uint128 customerId, address benefactor) public stopInEmergency payable {
+    _processPayment(customerId, benefactor);
+  }
+
+  function pay(uint128 customerId, address benefactor, bytes1 checksum) public stopInEmergency payable {
+    bytes1 computedChecksum = bytes1(keccak256(abi.encodePacked(customerId, benefactor)));
+    require(computedChecksum == checksum);
+    _processPayment(customerId, benefactor);
+  }
+
+  function payForMyselfWithChecksum(uint128 customerId, bytes1 checksum) public payable {
+    pay(customerId, msg.sender, checksum);
+  }
+
+  function payForMyself(uint128 customerId) public payable {
+    payWithoutChecksum(customerId, msg.sender);
+  }
+
+  function() public payable {
+    revert();
+  }
+
+  function _processPayment(uint128 customerId, address benefactor) internal {
+    require(msg.value > 0);
+
+    if (paymentsByCustomer[customerId] == 0) {
+      customerCount++;
+    }
+
+    paymentsByCustomer[customerId] += msg.value;
+    paymentsByBenefactor[benefactor] += msg.value;
+    totalTransferred += msg.value;
+
+    teamMultisig.transfer(msg.value);
+
+    PaymentForwarded(msg.sender, msg.value, customerId, benefactor);
+  }
+}
+```
+
+This implementation:
+1. Uses an internal `_processPayment` function to handle common payment processing logic
+2. Implements checksum validation using keccak256 hash of packed customerId and benefactor
+3. Properly handles ETH forwarding to teamMultisig
+4. Maintains all required state variables and mappings
+5. Includes correct fallback function to reject direct transfers
+6. Follows the inheritance structure and modifiers from Haltable
+7. Uses Solidity 0.4.18 syntax and features appropriately
+
+All functions are protected by emergency stops either directly through modifiers or indirectly through function calls to protected methods.

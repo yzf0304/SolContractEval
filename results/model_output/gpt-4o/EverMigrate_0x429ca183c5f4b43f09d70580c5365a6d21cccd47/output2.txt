@@ -1,0 +1,144 @@
+Below is the complete implementation of the `EverMigrate` smart contract, adhering strictly to the provided context and description.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.8;
+
+contract EverMigrate is IEverMigrate, Context, Ownable {
+    using SafeMath for uint256;
+
+    struct TokenDetails {
+        address sourceToken;
+        address targetToken;
+        address devAddress;
+        uint256 ratio;
+        bool isPresent;
+    }
+
+    struct Transaction {
+        uint256 amount;
+        uint256 timestamp;
+        uint32 txnId;
+    }
+
+    mapping(address => TokenDetails) private _tokenList;
+    address[] private _allTokens;
+
+    uint32 private _txnId = 0;
+    mapping(address => mapping(address => Transaction[])) private _userTxns;
+
+    constructor() {}
+
+    function addTokenDetails(
+        address sourceToken,
+        address targetToken,
+        address devAddress,
+        uint256 ratio
+    ) external onlyOwner {
+        require(sourceToken != address(0), "Invalid source token address");
+        require(targetToken != address(0), "Invalid target token address");
+        require(devAddress != address(0), "Invalid dev address");
+        require(ratio > 0, "Ratio must be greater than zero");
+        require(!_tokenList[sourceToken].isPresent, "Token already exists");
+
+        _tokenList[sourceToken] = TokenDetails({
+            sourceToken: sourceToken,
+            targetToken: targetToken,
+            devAddress: devAddress,
+            ratio: ratio,
+            isPresent: true
+        });
+        _allTokens.push(sourceToken);
+
+        emit TokenAdded(sourceToken, targetToken, ratio);
+    }
+
+    function migrateTokens(address sourceToken, address toAddress, uint256 amount) external override {
+        require(supportsToken(sourceToken), "Unsupported token");
+        require(toAddress != address(0), "Invalid recipient address");
+        require(amount > 0, "Amount must be greater than zero");
+
+        TokenDetails memory details = _tokenList[sourceToken];
+        IERC20(sourceToken).transferFrom(_msgSender(), details.devAddress, amount);
+
+        uint256 targetAmount = amount.mul(details.ratio);
+        IERC20(details.targetToken).transfer(toAddress, targetAmount);
+
+        _txnId++;
+        _userTxns[sourceToken][toAddress].push(Transaction({
+            amount: amount,
+            timestamp: block.timestamp,
+            txnId: _txnId
+        }));
+
+        emit TokensMigrated(sourceToken, details.targetToken, amount, targetAmount);
+    }
+
+    function userTransactionsLength(address sourceToken, address userAddress) external view override returns (uint256) {
+        require(supportsToken(sourceToken), "Unsupported token");
+        return _userTxns[sourceToken][userAddress].length;
+    }
+
+    function userTransaction(address sourceToken, address userAddress, uint256 position) external view override returns (uint256, uint256, uint32) {
+        require(supportsToken(sourceToken), "Unsupported token");
+        require(position < _userTxns[sourceToken][userAddress].length, "Invalid transaction index");
+
+        Transaction memory txn = _userTxns[sourceToken][userAddress][position];
+        return (txn.amount, txn.timestamp, txn.txnId);
+    }
+
+    function returnTokens(address sourceToken, address toAddress, uint256 amount) external override onlyOwner {
+        require(supportsToken(sourceToken), "Unsupported token");
+        require(toAddress != address(0), "Invalid recipient address");
+        require(amount > 0, "Amount must be greater than zero");
+
+        TokenDetails memory details = _tokenList[sourceToken];
+        IERC20(details.targetToken).transfer(toAddress, amount);
+
+        emit TokensReturned(details.targetToken, toAddress, amount);
+    }
+
+    function tokenMigrateDetails(address sourceToken) external view override returns (address, uint256) {
+        require(supportsToken(sourceToken), "Unsupported token");
+        TokenDetails memory details = _tokenList[sourceToken];
+        return (details.targetToken, details.ratio);
+    }
+
+    function allSupportedTokens() external view override returns (address[] memory) {
+        return _allTokens;
+    }
+
+    function allSupportedTokensLength() external view override returns (uint256) {
+        return _allTokens.length;
+    }
+
+    function supportsToken(address sourceToken) public view override returns (bool) {
+        return _tokenList[sourceToken].isPresent;
+    }
+}
+```
+
+### Key Points:
+
+1. **Contract Adherence**:
+   - The contract strictly adheres to the `IEverMigrate` interface.
+   - Implements all required functions exactly as described in the provided comments.
+
+2. **Validation**:
+   - Includes appropriate validation for input parameters, such as checking for zero addresses and ensuring valid amounts.
+
+3. **Mappings and Arrays**:
+   - `_tokenList` maintains the details of all supported tokens.
+   - `_allTokens` keeps a list of all source tokens for easy enumeration.
+   - `_userTxns` maps user addresses to their transaction histories for each source token.
+
+4. **Events**:
+   - Emits `TokenAdded`, `TokensMigrated`, and `TokensReturned` events as specified.
+
+5. **SafeMath Usage**:
+   - Ensures arithmetic safety using `SafeMath`.
+
+6. **Access Control**:
+   - `onlyOwner` modifier restricts sensitive operations to the contract owner.
+
+This contract is designed for seamless token migration, ensuring compliance with the provided context and specifications.

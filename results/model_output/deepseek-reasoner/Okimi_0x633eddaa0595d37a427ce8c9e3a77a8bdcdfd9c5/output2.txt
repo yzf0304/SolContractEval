@@ -1,0 +1,126 @@
+Here is the completed smart contract code for Okimi:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    uint256 public immutable maxPerAddressDuringMint;
+    uint256 public immutable amountForDevs;
+    uint256 public immutable amountForSaleAndDev;
+    uint256 internal immutable collectionSize;
+    uint256 internal immutable maxBatchSize;
+
+    struct SaleConfig {
+        uint32 publicSaleStartTime;
+        uint64 publicPriceWei;
+    }
+
+    SaleConfig public saleConfig;
+    string private _baseTokenURI;
+
+    constructor() ERC721A("Okimi", "OKM") {
+        maxPerAddressDuringMint = 5;
+        maxBatchSize = 5;
+        collectionSize = amountForDevs = amountForSaleAndDev = 1500;
+        saleConfig.publicPriceWei = 0.005 ether;
+        saleConfig.publicSaleStartTime = uint32(block.timestamp);
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function mint(uint256 quantity) external payable callerIsUser {
+        SaleConfig memory config = saleConfig;
+        uint256 publicPrice = config.publicPriceWei;
+        uint256 publicSaleStartTime = config.publicSaleStartTime;
+
+        require(isSaleOn(publicPrice, publicSaleStartTime), "Sale not active");
+        require(totalSupply() + quantity <= collectionSize, "Exceeds supply");
+        require(
+            numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint,
+            "Exceeds allowance"
+        );
+        require(quantity <= maxBatchSize, "Exceeds batch limit");
+
+        _safeMint(msg.sender, quantity);
+        refundIfOver(publicPrice * quantity);
+    }
+
+    function refundIfOver(uint256 price) private {
+        require(msg.value >= price, "Insufficient ETH");
+        if (msg.value > price) {
+            (bool success, ) = msg.sender.call{value: msg.value - price}("");
+            require(success, "Refund failed");
+        }
+    }
+
+    function isSaleOn(uint256 _price, uint256 _startTime) public view returns (bool) {
+        return _price != 0 && block.timestamp >= _startTime;
+    }
+
+    function getPrice() public view returns (uint256) {
+        return saleConfig.publicPriceWei;
+    }
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price) external onlyOwner {
+        saleConfig = SaleConfig(timestamp, price);
+    }
+
+    function reserve(uint256 quantity) external onlyOwner {
+        require(totalSupply() + quantity <= amountForDevs, "Exceeds dev limit");
+        uint256 batches = quantity / maxBatchSize;
+        uint256 remainder = quantity % maxBatchSize;
+        
+        for (uint256 i = 0; i < batches; i++) {
+            _safeMint(msg.sender, maxBatchSize);
+        }
+        if (remainder > 0) {
+            _safeMint(msg.sender, remainder);
+        }
+    }
+
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        (bool success, ) = msg.sender.call{value: address(this).balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted() public view returns (uint256) {
+        return _totalMinted();
+    }
+
+    receive() external payable {}
+}
+```
+
+This implementation includes:
+
+1. ERC721A optimized NFT standard integration
+2. Public sale management with configurable timing and pricing
+3. Minting limits per address and batch size restrictions
+4. Dev reservations with batch minting
+5. Secure payment handling with automatic refunds
+6. Owner controls for configuration and withdrawals
+7. Metadata URI management
+8. Reentrancy protection and contract safety checks
+9. Full compliance with the original specifications and interface requirements
+
+All functions have been implemented with proper access control, input validation, and state management according to the provided requirements and context.

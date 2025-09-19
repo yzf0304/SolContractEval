@@ -1,0 +1,123 @@
+Here's the completed `OperationalControl` smart contract based strictly on the provided context and description. It adheres to Solidity version `0.4.21` and does not introduce any additional dependencies or unrelated code:
+
+```solidity
+pragma solidity ^0.4.21;
+
+/**
+ * @title OperationalControl
+ * @notice This contract facilitates access and control for a game, with defined roles for Game Managers and Banker.
+ *         The Game Managers (Primary/Secondary) have universal control over all game elements but cannot withdraw funds.
+ *         The Banker can withdraw funds and adjust fees or prices.
+ * @dev The contract includes pausable and error handling functionalities to manage the state of the game.
+ */
+contract OperationalControl {
+    /// @dev Emitted when the contract is upgraded.
+    event ContractUpgrade(address newContract);
+
+    // The addresses of the accounts (or contracts) that can execute actions within each role.
+    address public gameManagerPrimary;
+    address public gameManagerSecondary;
+    address public bankManager;
+
+    // @dev Keeps track of whether the contract is paused. When true, most actions are blocked.
+    bool public paused = false;
+
+    // @dev Keeps track of whether the contract is in an error state. When true, most actions are blocked.
+    bool public error = false;
+
+    /// @dev Operation modifiers for limiting access.
+    modifier onlyGameManager() {
+        require(msg.sender == gameManagerPrimary || msg.sender == gameManagerSecondary);
+        _;
+    }
+
+    modifier onlyBanker() {
+        require(msg.sender == bankManager);
+        _;
+    }
+
+    modifier anyOperator() {
+        require(
+            msg.sender == gameManagerPrimary ||
+            msg.sender == gameManagerSecondary ||
+            msg.sender == bankManager
+        );
+        _;
+    }
+
+    /// @dev Modifier to allow actions only when the contract is not paused.
+    modifier whenNotPaused() {
+        require(!paused);
+        _;
+    }
+
+    /// @dev Modifier to allow actions only when the contract is paused.
+    modifier whenPaused() {
+        require(paused);
+        _;
+    }
+
+    /// @dev Modifier to allow actions only when the contract is in an error state.
+    modifier whenError() {
+        require(error);
+        _;
+    }
+
+    /// @dev Assigns a new address to act as the primary Game Manager.
+    function setPrimaryGameManager(address _newGM) external onlyGameManager {
+        require(_newGM != address(0));
+        gameManagerPrimary = _newGM;
+    }
+
+    /// @dev Assigns a new address to act as the secondary Game Manager.
+    function setSecondaryGameManager(address _newGM) external onlyGameManager {
+        require(_newGM != address(0));
+        gameManagerSecondary = _newGM;
+    }
+
+    /// @dev Assigns a new address to act as the Banker.
+    function setBanker(address _newBK) external onlyGameManager {
+        require(_newBK != address(0));
+        bankManager = _newBK;
+    }
+
+    /// @dev Called by any Operator role to pause the contract. Used only if a bug or exploit is discovered to limit losses or damage.
+    function pause() external onlyGameManager whenNotPaused {
+        paused = true;
+    }
+
+    /// @dev Unpauses the smart contract. Can only be called by the Game Manager.
+    /// @notice This is public rather than external so it can be called by derived contracts.
+    function unpause() public onlyGameManager whenPaused {
+        paused = false;
+    }
+
+    /// @dev Sets the contract to an error state. Can only be called by the Game Manager.
+    /// @notice This is public rather than external so it can be called by derived contracts.
+    function hasError() public onlyGameManager whenPaused {
+        error = true;
+    }
+
+    /// @dev Clears the contract's error state. Can only be called by the Game Manager.
+    /// @notice This is public rather than external so it can be called by derived contracts.
+    function noError() public onlyGameManager whenPaused {
+        error = false;
+    }
+}
+```
+
+### Explanation of Changes:
+1. **Role Assignment Functions**:
+   - `setPrimaryGameManager`, `setSecondaryGameManager`, and `setBanker` are implemented to assign new addresses to their respective roles. They ensure that the provided address is non-zero for safety.
+
+2. **Pause Functionality**:
+   - `pause` sets the contract to a paused state and can be called only by Game Managers when the contract is not already paused.
+   - `unpause` allows Game Managers to resume operations when the contract is paused.
+
+3. **Error Handling**:
+   - `hasError` sets the contract in an error state, while `noError` clears it. Both functions are restricted to Game Managers and require the contract to be paused before execution.
+
+4. **Access Modifiers**:
+   - Proper modifiers are applied to ensure only authorized roles can execute specific functions.
+
+The contract adheres to all specified constraints and is compatible with Solidity version `0.4.21`.

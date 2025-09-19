@@ -1,0 +1,93 @@
+pragma solidity 0.5.17;
+
+contract Collection is Ownable {
+    address public createAddress;
+    address constant trbAddress = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+    TrbInterface constant trbContract = TrbInterface(trbAddress);
+
+    constructor() public {
+        createAddress = msg.sender;
+    }
+
+    // Fallback to receive ETH only from the owner/creator
+    function() external payable onlyOwner {
+        require(createAddress == msg.sender, "author no");
+    }
+
+    // Finalize and destroy the contract, sending all ETH to the creator
+    function finalize() external payable onlyOwner {
+        require(createAddress == msg.sender, "author no");
+        address payable recipient = msg.sender;
+        selfdestruct(recipient);
+    }
+
+    // Return the original creator address
+    function getCreate() public view returns (address) {
+        return createAddress;
+    }
+
+    // Withdraw ETH from this contract to the creator
+    function withdrawEth(uint256 _amount) public onlyOwner payable {
+        require(createAddress == msg.sender, "author no");
+        require(address(this).balance >= _amount, "insufficient ETH");
+        address payable recipient = msg.sender;
+        recipient.transfer(_amount);
+    }
+
+    // Withdraw TRB tokens from this contract to the creator
+    function withdrawTrb(uint256 _amount) public onlyOwner payable {
+        require(createAddress == msg.sender, "author no");
+        require(trbContract.transfer(createAddress, _amount), "TRB transfer failed");
+    }
+
+    // Stake TRB via the TRB contract
+    function depositStake() external onlyOwner payable {
+        require(createAddress == msg.sender, "author no");
+        trbContract.depositStake();
+    }
+
+    // Request staking withdrawal via the TRB contract
+    function requestStakingWithdraw() external onlyOwner payable {
+        require(createAddress == msg.sender, "author no");
+        trbContract.requestStakingWithdraw();
+    }
+
+    // Complete staking withdrawal via the TRB contract
+    function withdrawStake() external onlyOwner payable {
+        require(createAddress == msg.sender, "author no");
+        trbContract.withdrawStake();
+    }
+
+    // Submit a mining solution to the TRB contract, with a gas‐based guard
+    function submitMiningSolution(
+        string calldata _nonce,
+        uint256[5] calldata _requestId,
+        uint256[5] calldata _value
+    )
+        external
+        payable
+        onlyOwner
+    {
+        require(createAddress == msg.sender, "author no");
+
+        if (gasleft() <= 10**6) {
+            bytes32 slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+            uint256 tmpSlot = trbContract.getUintVar(slotProgress);
+            require(tmpSlot < 4, "Z");
+        }
+
+        trbContract.submitMiningSolution(_nonce, _requestId, _value);
+    }
+
+    // Add a tip for a specific request via the TRB contract
+    function addTip(uint256 _requestId, uint256 _tip) external onlyOwner payable {
+        require(createAddress == msg.sender, "author no");
+        trbContract.addTip(_requestId, _tip);
+    }
+
+    // Read a uint variable from the TRB contract
+    function getUintVar(bytes32 _data) public view onlyOwner returns (uint256) {
+        require(createAddress == msg.sender, "author no");
+        return trbContract.getUintVar(_data);
+    }
+}

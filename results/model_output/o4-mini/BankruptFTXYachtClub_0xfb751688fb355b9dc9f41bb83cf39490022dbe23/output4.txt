@@ -1,0 +1,161 @@
+pragma solidity ^0.8.7;
+
+contract BankruptFTXYachtClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string private uriPrefix;
+    string private uriSuffix = ".json";
+    string public hiddenURL;
+
+    uint256 public cost = 0.0025 ether;
+
+    uint16 public maxSupply = 6969;
+    uint8 public maxMintAmountPerTx = 21;
+    uint8 public maxFreeMintAmountPerWallet = 1;
+
+    bool public paused = true;
+    bool public reveal = false;
+
+    // tracks how many free mints each address has used
+    mapping(address => uint8) public NFTPerPublicAddress;
+
+    constructor() ERC721A("Bankrupt FTX Yacht Club", "BFTX") {}
+
+    /**
+     * @notice Allows users to mint NFTs by paying the specified cost.
+     */
+    function mint(uint8 _mintAmount) external payable {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0, "Mint amount must be > 0");
+        require(_mintAmount <= maxMintAmountPerTx, "Exceeds max per transaction");
+        require(totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+
+        uint8 freeUsed = NFTPerPublicAddress[msg.sender];
+        uint8 freeLeft = 0;
+        if (freeUsed < maxFreeMintAmountPerWallet) {
+            freeLeft = maxFreeMintAmountPerWallet - freeUsed;
+        }
+        // how many free in this mint
+        uint8 freeToTake = _mintAmount <= freeLeft ? _mintAmount : freeLeft;
+        uint256 payableCount = _mintAmount - freeToTake;
+        require(msg.value >= cost * payableCount, "Insufficient ETH");
+
+        if (freeToTake > 0) {
+            NFTPerPublicAddress[msg.sender] = freeUsed + freeToTake;
+        }
+
+        _safeMint(msg.sender, _mintAmount);
+    }
+
+    /**
+     * @notice Allows the owner to reserve NFTs for a specific address.
+     */
+    function Reserve(uint16 _mintAmount, address _receiver) external onlyOwner {
+        require(_mintAmount > 0, "Must mint at least one");
+        require(totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+        _safeMint(_receiver, _mintAmount);
+    }
+
+    /**
+     * @notice Allows the owner to airdrop NFTs to multiple addresses.
+     */
+    function Airdrop(uint8 _amountPerAddress, address[] calldata addresses) external onlyOwner {
+        require(_amountPerAddress > 0, "Must airdrop at least one");
+        uint256 total = uint256(addresses.length) * _amountPerAddress;
+        require(totalSupply() + total <= maxSupply, "Exceeds max supply");
+        for (uint256 i = 0; i < addresses.length; i++) {
+            _safeMint(addresses[i], _amountPerAddress);
+        }
+    }
+
+    /**
+     * @notice Sets the maximum supply of NFTs.
+     */
+    function setMaxSupply(uint16 _maxSupply) external onlyOwner {
+        require(_maxSupply >= totalSupply(), "New max below totalSupply");
+        maxSupply = _maxSupply;
+    }
+
+    /**
+     * @notice Returns the token URI for a given token ID.
+     */
+    function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
+        require(_exists(_tokenId), "ERC721Metadata: URI query for nonexistent token");
+        if (!reveal) {
+            return hiddenURL;
+        }
+        return string(abi.encodePacked(uriPrefix, _tokenId.toString(), uriSuffix));
+    }
+
+    /**
+     * @notice Sets the maximum number of free mints per wallet.
+     */
+    function setFreeMaxLimitPerAddress(uint8 _limit) external onlyOwner {
+        maxFreeMintAmountPerWallet = _limit;
+    }
+
+    /**
+     * @notice Sets the URI prefix for the NFTs.
+     */
+    function setUriPrefix(string memory _uriPrefix) external onlyOwner {
+        uriPrefix = _uriPrefix;
+    }
+
+    /**
+     * @notice Sets the hidden URI for the NFTs.
+     */
+    function setHiddenUri(string memory _uriPrefix) external onlyOwner {
+        hiddenURL = _uriPrefix;
+    }
+
+    /**
+     * @notice Toggles the paused state of the contract.
+     */
+    function setPaused() external onlyOwner {
+        paused = !paused;
+    }
+
+    /**
+     * @notice Sets the cost for minting NFTs.
+     */
+    function setCost(uint _cost) external onlyOwner {
+        cost = _cost;
+    }
+
+    /**
+     * @notice Toggles the revealed state of the NFTs.
+     */
+    function setRevealed() external onlyOwner {
+        reveal = !reveal;
+    }
+
+    /**
+     * @notice Sets the maximum number of NFTs per transaction.
+     */
+    function setMaxMintAmountPerTx(uint8 _maxtx) external onlyOwner {
+        require(_maxtx > 0, "Must be > 0");
+        maxMintAmountPerTx = _maxtx;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the contract's balance.
+     */
+    function withdraw() external onlyOwner {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "No funds");
+        (bool success, ) = payable(owner()).call{value: bal}("");
+        require(success, "Withdraw failed");
+    }
+
+    /**
+     * @notice Returns the base URI for the NFTs.
+     */
+    function _baseURI() internal view override returns (string memory) {
+        return uriPrefix;
+    }
+
+    /**
+     * @notice Fallback to accept ETH.
+     */
+    receive() external payable {}
+}

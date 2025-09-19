@@ -1,0 +1,253 @@
+Here's the completed implementation of the CrowdSale contract according to the provided description:
+
+```solidity
+contract CrowdSale is Ownable {
+
+    // ERC20 Token
+    ERC20 public token;
+
+    // Address where funds are received
+    address public beneficiary;
+    // Address that provides tokens
+    address public tokenHolder;
+
+    // Rate of token units per wei
+    uint public rate;
+    // Goal amount in wei
+    uint public amountGoal;
+    // Current amount of raised money in wei
+    uint public amountRaised;
+    // Amount of tokens issued
+    uint public amountTokenIssued;
+
+    // Important Time
+    uint public startTime;
+    uint public endTime;
+
+    // Stages Info
+    struct Stage {
+        uint duration;      // Duration in seconds of the current stage
+        uint rate;          // Bonus rate (100 = 100%)
+    }
+    Stage[] public icoStages;
+    Stage[] public lockStages;
+
+    // Purchaser Info
+    struct PurchaserInfo {
+        uint amountEtherSpent;
+        uint amountTokenTaken;
+        uint[] lockedToken;
+    }
+    mapping(address => PurchaserInfo) public purchasers;
+    address[] public purchaserList;
+
+    // ----- Events -----
+    event TokenPurchase(address purchaser, uint value, uint buyTokens, uint bonusTokens);
+    event GoalReached(uint totalAmountRaised, uint totalTokenIssued);
+    event FundingWithdrawn(address beneficiaryAddress, uint value);
+    event UnlockToken(address purchaser, uint amountUnlockedTokens);
+
+    // ----- Modifiers -----
+    modifier afterEnded {
+        require(isEnded());
+        _;
+    }
+
+    modifier onlyOpenTime {
+        require(isStarted());
+        require(!isEnded());
+        _;
+    }
+
+    // ----- Functions -----
+    function CrowdSale(address beneficiaryAddr, address tokenHolderAddr, address tokenAddr, uint tokenRate) public {
+        require(beneficiaryAddr != address(0));
+        require(tokenHolderAddr != address(0));
+        require(tokenAddr != address(0));
+        require(tokenRate > 0);
+
+        beneficiary = beneficiaryAddr;
+        tokenHolder = tokenHolderAddr;
+        token = ERC20(tokenAddr);
+        rate = tokenRate;
+
+        _initStages();
+    }
+
+    function _initStages() internal {
+        // This function should be overridden by child contracts
+    }
+
+    function getTokenAddress() public view returns(address) {
+        return address(token);
+    }
+
+    function getLockedToken(address _purchaser, uint stageIdx) public view returns(uint) {
+        if (stageIdx >= purchasers[_purchaser].lockedToken.length) {
+            return 0;
+        }
+        return purchasers[_purchaser].lockedToken[stageIdx];
+    }
+
+    function canTokenUnlocked(uint stageIndex) public view returns(bool) {
+        if (stageIndex >= lockStages.length) {
+            return false;
+        }
+        
+        uint unlockTime = startTime;
+        for (uint i = 0; i <= stageIndex; i++) {
+            unlockTime += lockStages[i].duration;
+        }
+        
+        return now >= unlockTime;
+    }
+
+    function isStarted() public view returns(bool) {
+        return startTime > 0 && now >= startTime;
+    }
+
+    function isReachedGoal() public view returns(bool) {
+        return amountRaised >= amountGoal;
+    }
+
+    function isEnded() public view returns(bool) {
+        return startTime > 0 && (now >= endTime || isReachedGoal());
+    }
+
+    function getCurrentStage() public view returns(int) {
+        if (!isStarted() || isEnded()) {
+            return -1;
+        }
+        
+        uint elapsed = now - startTime;
+        uint totalDuration = 0;
+        
+        for (uint i = 0; i < icoStages.length; i++) {
+            totalDuration += icoStages[i].duration;
+            if (elapsed < totalDuration) {
+                return int(i);
+            }
+        }
+        
+        return -1;
+    }
+
+    function getRemainingTimeInSecond() public view returns(uint) {
+        if (!isStarted() || isEnded()) {
+            return 0;
+        }
+        
+        return endTime > now ? endTime - now : 0;
+    }
+
+    function _addPurchaser(address purchaser) internal {
+        if (purchasers[purchaser].amountEtherSpent == 0) {
+            purchaserList.push(purchaser);
+            purchasers[purchaser].lockedToken = new uint[](lockStages.length);
+        }
+    }
+
+    function start(uint fundingGoalInEther) public onlyOwner {
+        require(startTime == 0);
+        
+        amountGoal = fundingGoalInEther * 1 ether;
+        startTime = now;
+        
+        uint totalDuration = 0;
+        for (uint i = 0; i < icoStages.length; i++) {
+            totalDuration += icoStages[i].duration;
+        }
+        
+        endTime = startTime + totalDuration;
+    }
+
+    function stop() public onlyOwner {
+        require(isStarted());
+        
+        endTime = now;
+    }
+
+    function () payable public onlyOpenTime {
+        require(msg.value > 0);
+        
+        uint buyTokens;
+        uint bonusTokens;
+        (buyTokens, bonusTokens) = _getTokenCount(msg.value);
+        
+        _addPurchaser(msg.sender);
+        
+        // Update purchaser info
+        purchasers[msg.sender].amountEtherSpent += msg.value;
+        purchasers[msg.sender].amountTokenTaken += buyTokens;
+        
+        // Lock bonus tokens
+        if (bonusTokens > 0 && lockStages.length > 0) {
+            int currentStage = getCurrentStage();
+            if (currentStage >= 0 && uint(currentStage) < icoStages.length) {
+                uint bonusPerStage = bonusTokens / lockStages.length;
+                for (uint i = 0; i < lockStages.length; i++) {
+                    purchasers[msg.sender].lockedToken[i] += bonusPerStage;
+                }
+            }
+        }
+        
+        // Update contract state
+        amountRaised += msg.value;
+        amountTokenIssued += buyTokens + bonusTokens;
+        
+        // Transfer tokens
+        require(token.transferFrom(tokenHolder, msg.sender, buyTokens));
+        
+        TokenPurchase(msg.sender, msg.value, buyTokens, bonusTokens);
+        
+        if (isReachedGoal()) {
+            GoalReached(amountRaised, amountTokenIssued);
+        }
+    }
+
+    function _getTokenCount(uint amountInWei) internal view returns(uint buyTokenCount, uint bonusTokenCount) {
+        buyTokenCount = amountInWei * rate;
+        bonusTokenCount = 0;
+        
+        int currentStage = getCurrentStage();
+        if (currentStage >= 0 && uint(currentStage) < icoStages.length) {
+            bonusTokenCount = buyTokenCount * icoStages[uint(currentStage)].rate / 100;
+        }
+        
+        return (buyTokenCount, bonusTokenCount);
+    }
+
+    function safeWithdrawal() public onlyOwner {
+        uint amount = address(this).balance;
+        
+        if (amount > 0) {
+            beneficiary.transfer(amount);
+            FundingWithdrawn(beneficiary, amount);
+        }
+    }
+
+    function unlockBonusTokens(uint stageIndex, uint purchaserStartIdx, uint purchaserEndIdx) public afterEnded onlyOwner {
+        require(stageIndex < lockStages.length);
+        require(purchaserStartIdx < purchaserEndIdx);
+        require(purchaserEndIdx <= purchaserList.length);
+        require(canTokenUnlocked(stageIndex));
+        
+        for (uint i = purchaserStartIdx; i < purchaserEndIdx; i++) {
+            address purchaser = purchaserList[i];
+            uint unlockedTokens = purchasers[purchaser].lockedToken[stageIndex];
+            
+            if (unlockedTokens > 0) {
+                purchasers[purchaser].lockedToken[stageIndex] = 0;
+                purchasers[purchaser].amountTokenTaken += unlockedTokens;
+                amountTokenIssued += unlockedTokens;
+                
+                require(token.transferFrom(tokenHolder, purchaser, unlockedTokens));
+                
+                UnlockToken(purchaser, unlockedTokens);
+            }
+        }
+    }
+}
+```
+
+This implementation provides a complete crowdsale contract with staged bonuses and token locking capabilities. The contract follows all the specified requirements and includes all the necessary functions for managing the crowdsale process.

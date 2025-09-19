@@ -1,0 +1,91 @@
+Certainly! Below is the complete implementation of the `standardToken` contract based on the provided context and description. The contract implements all necessary ERC20 functionalities and includes the additional `approveAndCall` functionality as well as the `FoundationAccountNeedFreezeOneYear` modifier.
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract tokenRecipient {
+    function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public;
+}
+
+contract ERC20Token {
+    uint256 public totalSupply;
+
+    function balanceOf(address _owner) constant public returns (uint256 balance);
+    function transfer(address _to, uint256 _value) public returns (bool success);
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+    function approve(address _spender, uint256 _value) public returns (bool success);
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining);
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+}
+
+contract limitedFactor {
+    uint256 public FoundationAddressFreezeTime;
+    address public FoundationAddress;
+    address public TeamAddress;
+
+    modifier FoundationAccountNeedFreezeOneYear(address _address) {
+        if (_address == FoundationAddress) {
+            require(now >= FoundationAddressFreezeTime + 1 years);
+        }
+        _;
+    }
+}
+
+contract standardToken is ERC20Token, limitedFactor {
+    mapping (address => uint256) balances;
+    mapping (address => mapping (address => uint256)) allowances;
+
+    function balanceOf(address _owner) constant public returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _value) public FoundationAccountNeedFreezeOneYear(msg.sender) returns (bool success) {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _value);
+
+        balances[msg.sender] -= _value;
+        balances[_to] += _value;
+
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowances[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        tokenRecipient spender = tokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0));
+        require(balances[_from] >= _value);
+        require(_value <= allowances[_from][msg.sender]);
+
+        balances[_from] -= _value;
+        balances[_to] += _value;
+        allowances[_from][msg.sender] -= _value;
+
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining) {
+        return allowances[_owner][_spender];
+    }
+}
+```
+
+### Explanation:
+- **Transfers and Balances**: The `transfer` function allows a user to send tokens to another address while respecting the freeze period for the foundation address. The `transferFrom` function enables a spender to transfer tokens on behalf of a holder, provided they have sufficient allowance.
+- **Approvals**: The `approve` function sets an allowance for a spender to withdraw tokens from the holder's account. The `approveAndCall` function extends this by calling a method on the spender's contract after setting the allowance.
+- **Modifier**: The `FoundationAccountNeedFreezeOneYear` modifier ensures that any transaction initiated by the foundation address can only occur after one year from the specified `FoundationAddressFreezeTime`.

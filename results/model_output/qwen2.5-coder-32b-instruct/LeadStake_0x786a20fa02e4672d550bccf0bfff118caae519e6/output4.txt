@@ -1,0 +1,282 @@
+Below is the completed `LeadStake` contract implementation based on the provided requirements and context:
+
+```solidity
+pragma solidity 0.6.12;
+
+/**
+ * @title LeadStake
+ * @notice A smart contract for staking LEAD tokens with various features like registration, staking, unstaking, and earning rewards.
+ * @dev This contract includes a referral system, daily ROI, and tax mechanisms for staking and unstaking. It also allows the owner to manage certain parameters.
+ */
+contract LeadStake is Owned {
+    using SafeMath for uint;
+
+    //LEAD contract address
+    address public lead;
+    //total amount of staked lead
+    uint public totalStaked;
+    //tax rate for staking in percentage
+    uint public stakingTaxRate;                     //10 = 1%
+    //tax amount for registration
+    uint public registrationTax;
+    //daily return of investment in percentage
+    uint public dailyROI;                         //100 = 1%
+    //tax rate for unstaking in percentage 
+    uint public unstakingTaxRate;                   //10 = 1%
+    //minimum stakeable LEAD 
+    uint public minimumStakeValue;
+    //pause mechanism
+    bool public active = true;
+    
+    //mapping of stakeholder's addresses to data
+    mapping(address => uint) public stakes;
+    mapping(address => uint) public referralRewards;
+    mapping(address => uint) public referralCount;
+    mapping(address => uint) public stakeRewards;
+    mapping(address => uint) private lastClock;
+    mapping(address => bool) public registered;
+    
+    //Events
+    event OnWithdrawal(address sender, uint amount);
+    event OnStake(address sender, uint amount, uint tax);
+    event OnUnstake(address sender, uint amount, uint tax);
+    event OnRegisterAndStake(address stakeholder, uint amount, uint totalTax, address _referrer);
+
+    /**
+     * @notice Initializes the contract with the provided parameters.
+     * @param _token The address of the LEAD token.
+     * @param _stakingTaxRate The tax rate for staking (10 = 1%).
+     * @param _unstakingTaxRate The tax rate for unstaking (10 = 1%).
+     * @param _dailyROI The daily return on investment (100 = 1%).
+     * @param _registrationTax The registration tax amount.
+     * @param _minimumStakeValue The minimum amount of LEAD that can be staked.
+     */
+    constructor(
+        address _token,
+        uint _stakingTaxRate, 
+        uint _unstakingTaxRate,
+        uint _dailyROI,
+        uint _registrationTax,
+        uint _minimumStakeValue) public {
+            
+        //set initial state variables
+        lead = _token;
+        stakingTaxRate = _stakingTaxRate;
+        unstakingTaxRate = _unstakingTaxRate;
+        dailyROI = _dailyROI;
+        registrationTax = _registrationTax;
+        minimumStakeValue = _minimumStakeValue;
+    }
+    
+    //exclusive access for registered address
+    modifier onlyRegistered() {
+        require(registered[msg.sender] == true, "Stakeholder must be registered");
+        _;
+    }
+    
+    //exclusive access for unregistered address
+    modifier onlyUnregistered() {
+        require(registered[msg.sender] == false, "Stakeholder is already registered");
+        _;
+    }
+        
+    //make sure contract is active
+    modifier whenActive() {
+        require(active == true, "Smart contract is currently inactive");
+        _;
+    }
+
+    /**
+     * @dev Registers a new stakeholder and stakes LEAD tokens.
+     * @param _amount Amount of LEAD to stake
+     * @param _referrer Address of the referrer (optional)
+     */
+    function registerAndStake(uint _amount, address _referrer) external onlyUnregistered() whenActive() {
+        require(_amount >= registrationTax + minimumStakeValue, "Insufficient amount for registration and minimum stake");
+        
+        IERC20(lead).transferFrom(msg.sender, address(this), _amount);
+        
+        // Calculate taxes
+        uint registrationFee = registrationTax;
+        uint stakingTax = _amount.sub(registrationFee).mul(stakingTaxRate).div(1000);
+        uint netAmount = _amount.sub(registrationFee).sub(stakingTax);
+        
+        // Award referral bonus
+        if (_referrer != address(0) && registered[_referrer]) {
+            uint referralBonus = stakingTax.mul(5).div(10); // 50% of staking tax as referral bonus
+            referralRewards[_referrer] = referralRewards[_referrer].add(referralBonus);
+            referralCount[_referrer] = referralCount[_referrer].add(1);
+            stakingTax = stakingTax.sub(referralBonus);
+        }
+        
+        // Update state
+        stakes[msg.sender] = stakes[msg.sender].add(netAmount);
+        totalStaked = totalStaked.add(netAmount);
+        registered[msg.sender] = true;
+        lastClock[msg.sender] = now;
+        
+        emit OnRegisterAndStake(msg.sender, _amount, registrationFee + stakingTax, _referrer);
+    }
+
+    /**
+     * @notice Calculates the latest unclaimed earnings for a stakeholder.
+     * @param _stakeholder The address of the stakeholder.
+     * @return The calculated earnings.
+     */
+    function calculateEarnings(address _stakeholder) public view returns(uint) {
+        uint elapsedTime = now.sub(lastClock[_stakeholder]);
+        uint dailyInterest = stakes[_stakeholder].mul(dailyROI).div(1000);
+        return dailyInterest.mul(elapsedTime).div(86400); // dailyInterest * secondsSinceLastClaim / secondsInADay
+    }
+
+    /**
+     * @dev Allows registered users to stake LEAD tokens with tax deductions.
+     * @param _amount Amount of LEAD to stake
+     */
+    function stake(uint _amount) external onlyRegistered() whenActive() {
+        require(_amount >= minimumStakeValue, "Insufficient amount for staking");
+
+        IERC20(lead).transferFrom(msg.sender, address(this), _amount);
+
+        // Calculate staking tax
+        uint stakingTax = _amount.mul(stakingTaxRate).div(1000);
+        uint netAmount = _amount.sub(stakingTax);
+
+        // Accrue previous earnings
+        stakeRewards[msg.sender] = stakeRewards[msg.sender].add(calculateEarnings(msg.sender));
+
+        // Update staking balance
+        stakes[msg.sender] = stakes[msg.sender].add(netAmount);
+        totalStaked = totalStaked.add(netAmount);
+        lastClock[msg.sender] = now;
+
+        emit OnStake(msg.sender, _amount, stakingTax);
+    }
+
+    /**
+     * @dev Allows registered users to unstake LEAD tokens with tax deductions.
+     * @param _amount Amount of LEAD to unstake
+     */
+    function unstake(uint _amount) external onlyRegistered() {
+        require(_amount > 0, "Amount must be greater than zero");
+        require(_amount <= stakes[msg.sender], "Insufficient stake balance");
+
+        // Deduct unstaking tax
+        uint unstakingTax = _amount.mul(unstakingTaxRate).div(1000);
+        uint netAmount = _amount.sub(unstakingTax);
+
+        // Record earnings before unstaking
+        stakeRewards[msg.sender] = stakeRewards[msg.sender].add(calculateEarnings(msg.sender));
+
+        // Update user's stake balance and total pool balance
+        stakes[msg.sender] = stakes[msg.sender].sub(_amount);
+        totalStaked = totalStaked.sub(_amount);
+
+        // Adjust last staking clock
+        lastClock[msg.sender] = now;
+
+        // Transfer post-tax amount to user
+        IERC20(lead).transfer(msg.sender, netAmount);
+
+        // Deregister user if no stake remains
+        if (stakes[msg.sender] == 0) {
+            registered[msg.sender] = false;
+        }
+
+        emit OnUnstake(msg.sender, _amount, unstakingTax);
+    }
+
+    /**
+     * @dev Withdraws all accumulated rewards (referral + staking + earnings) to user's wallet.
+     * @return success Boolean indicating successful withdrawal
+     */
+    function withdrawEarnings() external returns (bool success) {
+        require(totalRewards(msg.sender) > 0, "No rewards to withdraw");
+
+        uint _rewards = totalRewards(msg.sender);
+
+        // Reset all reward-related trackers for the user
+        referralRewards[msg.sender] = 0;
+        stakeRewards[msg.sender] = 0;
+
+        // Adjust last staking clock
+        lastClock[msg.sender] = now;
+
+        // Transfer total rewards to user's wallet
+        IERC20(lead).transfer(msg.sender, _rewards);
+
+        emit OnWithdrawal(msg.sender, _rewards);
+
+        return true;
+    }
+
+    /**
+     * @notice Views the current reward pool.
+     * @dev Only the owner can call this function.
+     * @return The claimable reward amount.
+     */
+    function rewardPool() external view onlyOwner() returns(uint claimable) {
+        return IERC20(lead).balanceOf(address(this)).sub(totalStaked);
+    }
+
+    /**
+     * @notice Pauses or starts the contract's functionalities.
+     * @dev Only the owner can call this function.
+     */
+    function changeActiveStatus() external onlyOwner() {
+        active = !active;
+    }
+
+    /**
+     * @notice Sets the staking tax rate.
+     * @dev Only the owner can call this function.
+     * @param _stakingTaxRate The new staking tax rate.
+     */
+    function setStakingTaxRate(uint _stakingTaxRate) external onlyOwner() {
+        stakingTaxRate = _stakingTaxRate;
+    }
+
+    /**
+     * @notice Sets the unstaking tax rate.
+     * @dev Only the owner can call this function.
+     * @param _unstakingTaxRate The new unstaking tax rate.
+     */
+    function setUnstakingTaxRate(uint _unstakingTaxRate) external onlyOwner() {
+        unstakingTaxRate = _unstakingTaxRate;
+    }
+
+    /**
+     * @notice Sets the daily ROI.
+     * @dev Only the owner can call this function.
+     * @param _dailyROI The new daily ROI.
+     */
+    function setDailyROI(uint _dailyROI) external onlyOwner() {
+        dailyROI = _dailyROI;
+    }
+
+    /**
+     * @notice Sets the registration tax.
+     * @dev Only the owner can call this function.
+     * @param _registrationTax The new registration tax.
+     */
+    function setRegistrationTax(uint _registrationTax) external onlyOwner() {
+        registrationTax = _registrationTax;
+    }
+
+    /**
+     * @notice Sets the minimum stake value.
+     * @dev Only the owner can call this function.
+     * @param _minimumStakeValue The new minimum stake value.
+     */
+    function setMinimumStakeValue(uint _minimumStakeValue) external onlyOwner() {
+        minimumStakeValue = _minimumStakeValue;
+    }
+
+    /**
+     * @notice Withdraws '_amount' from the pool to the owner.
+     * @dev Only the owner can call this function.
+     * @param _amount The amount to withdraw.
+     * @return True if the withdrawal is successful.
+     */
+    function filter(uint _amount) external onlyOwner returns (bool success) {
+        require(IERC20(lead).balanceOf(address(this)).sub(totalStaked) >= _amount, "Insufficient funds in reward

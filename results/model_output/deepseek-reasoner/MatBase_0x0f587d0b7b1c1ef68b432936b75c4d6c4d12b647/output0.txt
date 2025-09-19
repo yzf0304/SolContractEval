@@ -1,0 +1,186 @@
+Here is the complete implementation of the MatBase contract based on the provided context and requirements:
+
+```solidity
+pragma solidity ^0.4.17;
+
+contract MatBase is Ownable, MatToken, MatBonus {
+    using SafeMath for uint256;
+
+    uint256 public startTime;
+    uint256 public endTime;
+    address public wallet;
+    address public p_wallet;
+    address public t_wallet;
+    uint256 public totalCollected;
+    uint256 public rate;
+    bool public isWhitelistOn;
+    uint256 public whiteListLimit;
+
+    enum WLS { notlisted, listed, fulfilled }
+    struct FundReservation {
+        WLS status;
+        uint256 reserved;
+    }
+    mapping (address => FundReservation) public whitelist;
+
+    event Mint(address indexed purchaser, uint256 amount);
+    event Bonus(address indexed purchaser, uint256 amount);
+    event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amountTokens, string referral);
+    event White(address indexed to, uint256 reservation);
+
+    function MatBase() {
+        startTime = _START_DATE;
+        endTime = _END_DATE;
+        wallet = ICO_ADDRESS;
+        rate = CROWDSALE_PRICE;
+        p_wallet = PARTNERS_WALLET;
+        t_wallet = TEAM_WALLET;
+        balances[p_wallet] = MAT_PARTNERS_SUPPLY_LIMIT;
+        balances[t_wallet] = MAT_TEAM_SUPPLY_LIMIT;
+        totalSupply = MAT_PARTNERS_SUPPLY_LIMIT.add(MAT_TEAM_SUPPLY_LIMIT);
+        whiteListLimit = MAT_TOTAL_SUPPLY_LIMIT;
+    }
+
+    function setStartTime(uint256 _startTime) public onlyOwner {
+        startTime = _startTime;
+    }
+
+    function setEndTime(uint256 _endTime) public onlyOwner {
+        endTime = _endTime;
+    }
+
+    function hasEnded() public constant returns (bool) {
+        return block.timestamp > endTime;
+    }
+
+    function mint(address _to, uint256 _tokens) internal returns (bool) {
+        require(_to != address(0));
+        require(totalSupply.add(_tokens) <= MAT_TOTAL_SUPPLY_LIMIT);
+        balances[_to] = balances[_to].add(_tokens);
+        totalSupply = totalSupply.add(_tokens);
+        emit Mint(_to, _tokens);
+        return true;
+    }
+
+    function forwardFunds() internal {
+        wallet.transfer(msg.value);
+    }
+
+    function validPurchase() internal constant returns (bool) {
+        bool withinPeriod = block.timestamp >= startTime && block.timestamp <= endTime;
+        bool nonZeroPurchase = msg.value != 0;
+        return withinPeriod && nonZeroPurchase;
+    }
+
+    function () public payable {
+        buyTokens(msg.sender);
+    }
+
+    function buyTokens(address beneficiary) public payable {
+        require(beneficiary != address(0));
+        require(validPurchase());
+
+        uint256 weiAmount = msg.value;
+        uint256 tokens = weiAmount.mul(rate);
+        uint256 bonus = calcBonus(tokens);
+        
+        if (bonus > 0) {
+            tokens = tokens.add(bonus);
+            emit Bonus(beneficiary, bonus);
+        }
+
+        if (isWhitelistOn) {
+            require(whitelist[msg.sender].status == WLS.listed);
+            require(tokens <= whitelist[msg.sender].reserved);
+            whitelist[msg.sender].reserved = whitelist[msg.sender].reserved.sub(tokens);
+            if (whitelist[msg.sender].reserved == 0) {
+                whitelist[msg.sender].status = WLS.fulfilled;
+            }
+        }
+
+        totalCollected = totalCollected.add(weiAmount);
+        require(mint(beneficiary, tokens));
+
+        forwardFunds();
+        emit TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, "");
+    }
+
+    function buyTokensReferral(address beneficiary, string referral) public payable {
+        require(beneficiary != address(0));
+        require(validPurchase());
+
+        uint256 weiAmount = msg.value;
+        uint256 tokens = weiAmount.mul(rate);
+        uint256 bonus = calcBonus(tokens);
+        
+        if (bonus > 0) {
+            tokens = tokens.add(bonus);
+            emit Bonus(beneficiary, bonus);
+        }
+
+        if (isWhitelistOn) {
+            require(whitelist[msg.sender].status == WLS.listed);
+            require(tokens <= whitelist[msg.sender].reserved);
+            whitelist[msg.sender].reserved = whitelist[msg.sender].reserved.sub(tokens);
+            if (whitelist[msg.sender].reserved == 0) {
+                whitelist[msg.sender].status = WLS.fulfilled;
+            }
+        }
+
+        totalCollected = totalCollected.add(weiAmount);
+        require(mint(beneficiary, tokens));
+
+        forwardFunds();
+        emit TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, referral);
+    }
+
+    function stopWhitelistReservetion() public onlyOwner {
+        whiteListLimit = 0;
+    }
+
+    function setWhiteListStatus(bool _isWhitelistOn) public onlyOwner {
+        isWhitelistOn = _isWhitelistOn;
+    }
+
+    function regWL(address wlmember, uint256 reservation) public onlyOwner returns (bool) {
+        require(wlmember != address(0));
+        require(reservation > 0);
+        require(whitelist[wlmember].status != WLS.fulfilled);
+
+        FundReservation storage fr = whitelist[wlmember];
+        uint256 oldReservation = fr.reserved;
+
+        if (fr.status == WLS.listed) {
+            whiteListLimit = whiteListLimit.add(oldReservation);
+        }
+
+        require(whiteListLimit >= reservation);
+        whiteListLimit = whiteListLimit.sub(reservation);
+
+        fr.status = WLS.listed;
+        fr.reserved = reservation;
+
+        emit White(wlmember, reservation);
+        return true;
+    }
+
+    function convert(address _to, uint256 _pretokens, uint256 _tokens) public onlyOwner returns (bool) {
+        require(_to != address(0));
+        require(_pretokens > 0);
+        require(_tokens > 0);
+        require(mint(_to, _tokens));
+        return true;
+    }
+}
+```
+
+This implementation includes:
+
+1. **Crowdsale Management**: Proper time management with start/end dates, ETH collection, and token minting with bonus calculations
+2. **Whitelist System**: Whitelist management with reservations and status tracking
+3. **Token Conversion**: Presale token conversion functionality
+4. **Safety Checks**: Input validation and overflow protection using SafeMath
+5. **ERC20 Compliance**: Inherited from StandardToken with proper transfer restrictions
+6. **Ownership Controls**: OnlyOwner modifiers for administrative functions
+
+The contract maintains compatibility with the original token distribution plan while implementing all required crowdsale features and whitelist management.

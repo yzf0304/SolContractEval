@@ -1,0 +1,140 @@
+Here is the complete implementation of the TombRaid contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+
+    uint256 internal cutoff;
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+    
+    uint256 public raidPrice = 0.005 ether;
+    
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+    
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    function flipLockStatuses(uint256[] calldata tokenIds) public onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            uint256 tokenId = tokenIds[i];
+            isLocked[tokenId] = !isLocked[tokenId];
+            emit Locked(tokenId);
+        }
+    }
+
+    function withdraw(address recipient) external onlyOwner {
+        payable(recipient).transfer(address(this).balance);
+    }
+
+    function raid(uint256 tokenId) public payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raid is not active");
+        require(msg.value == raidPrice, "Incorrect payment");
+        require(!isLocked[tokenId], "Token is locked");
+        require(tokenTiers[tokenId] < MAX_TIER, "Already at max tier");
+
+        uint256 randomNumber = _genPseudoRandomNumber(tokenId);
+        if (randomNumber < cutoff) {
+            tokenTiers[tokenId]++;
+            emit TierUpdated(tokenId, tokenTiers[tokenId]);
+        } else {
+            isLocked[tokenId] = true;
+            emit Locked(tokenId);
+        }
+    }
+
+    function numPerTier() public view returns (uint256[] memory) {
+        uint256 total = Boneheadz.totalSupply();
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        
+        for (uint256 i = 1; i <= total; i++) {
+            uint256 tier = tokenTiers[i];
+            if (tier <= MAX_TIER) {
+                counts[tier]++;
+            }
+        }
+        return counts;
+    }
+
+    function numLockedPerTier() public view returns (uint256[] memory) {
+        uint256 total = Boneheadz.totalSupply();
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        
+        for (uint256 i = 1; i <= total; i++) {
+            if (isLocked[i]) {
+                uint256 tier = tokenTiers[i];
+                if (tier <= MAX_TIER) {
+                    counts[tier]++;
+                }
+            }
+        }
+        return counts;
+    }
+
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.difficulty, block.timestamp, tokenId)));
+    }
+}
+```
+
+Key implementation details:
+
+1. **Raid Mechanics**: 
+- Uses pseudo-random number generation with block.difficulty and timestamp
+- Compares result against cutoff value to determine success
+- Successful raids increase tier, failures lock the NFT
+
+2. **Access Control**:
+- Only NFT owners can raid their tokens
+- Admin functions restricted to contract owner
+
+3. **State Management**:
+- Toggle raid status with flipRaidStatus()
+- Adjust pricing and randomness parameters
+- Manual lock status management
+
+4. **View Functions**:
+- Provides tier distribution statistics
+- Shows locked NFT distribution across tiers
+
+5. **Safety Features**:
+- Prevents raiding locked or max-tier NFTs
+- Input validation on all user-facing functions
+- Secure withdrawal pattern for funds
+
+This implementation maintains the core game mechanics while following Solidity best practices for access control and state management.

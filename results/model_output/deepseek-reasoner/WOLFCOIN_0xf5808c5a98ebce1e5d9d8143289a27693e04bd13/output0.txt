@@ -1,0 +1,66 @@
+To solve this problem, we need to create a Pausable contract that allows the contract owner to designate a pauser who can pause and unpause contract functionalities. The contract should ensure that certain functions can only be executed when the contract is not paused and that only the designated pauser can toggle the paused state. Additionally, the owner should be able to transfer the pauser role to another address.
+
+### Approach
+1. **Inheritance**: The Pausable contract inherits from Ownable and Context to utilize ownership and message sender functionalities.
+2. **Initialization**: The constructor initializes the pauser role to the contract owner upon deployment.
+3. **Modifiers**: 
+   - `whenNotPaused` ensures functions are only called when the contract is active.
+   - `onlyPauser` restricts access to functions that pause or unpause the contract.
+4. **Pause/Unpause Functions**: These functions allow the pauser to toggle the contract's paused state, emitting events to log state changes.
+5. **Update Pauser**: The owner can transfer the pauser role to another address, ensuring the new pauser is a valid address.
+
+### Solution Code
+
+```solidity
+contract Pausable is Context, Ownable {
+    event Pause();
+    event Unpause();
+    event PauserChanged(address indexed newAddress);
+
+    address public pauser;
+    bool public paused = false;
+
+    constructor() {
+        pauser = owner();
+        emit PauserChanged(pauser);
+    }
+
+    modifier whenNotPaused() {
+        require(!paused, "Network paused by administrator");
+        _;
+    }
+
+    modifier onlyPauser() {
+        require(msg.sender == pauser, "Caller is not the pause administrator");
+        _;
+    }
+
+    function pause() external onlyPauser {
+        require(!paused, "Contract is already paused");
+        paused = true;
+        emit Pause();
+    }
+
+    function unpause() external onlyPauser {
+        require(paused, "Contract is not paused");
+        paused = false;
+        emit Unpause();
+    }
+
+    function updatePauser(address _newPauser) external onlyOwner {
+        require(_newPauser != address(0), "Pauser: new pauser is the zero address");
+        pauser = _newPauser;
+        emit PauserChanged(_newPauser);
+    }
+}
+```
+
+### Explanation
+- **Constructor**: Initializes the pauser to the contract owner (deployer) and emits an event to log this initial setup.
+- **Modifiers**: 
+  - `whenNotPaused` checks if the contract is not paused before allowing function execution.
+  - `onlyPauser` ensures only the designated pauser can call pause/unpause functions.
+- **Pause/Unpause**: These functions check the current state before toggling it, preventing redundant state changes and emitting events to track each state transition.
+- **Update Pauser**: Allows the owner to securely transfer the pauser role, validating the new address and emitting an event for transparency.
+
+This approach ensures controlled access to critical functions, maintains contract state integrity, and provides clear event logging for transparency and auditability.

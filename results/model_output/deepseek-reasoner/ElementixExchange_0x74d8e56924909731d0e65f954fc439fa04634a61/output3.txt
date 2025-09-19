@@ -1,0 +1,64 @@
+Here is the completed `ProxyRegistry` contract:
+
+```solidity
+contract ProxyRegistry is Ownable {
+    address public delegateProxyImplementation;
+    mapping(address => OwnableDelegateProxy) public proxies;
+    mapping(address => uint256) public pending;
+    mapping(address => bool) public contracts;
+    uint256 public DELAY_PERIOD = 7 days;
+
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool opt);
+
+    constructor(address _delegateProxyImplementation) Ownable() {
+        delegateProxyImplementation = _delegateProxyImplementation;
+    }
+
+    function startGrantAuthentication(address addr) public onlyOwner {
+        require(!contracts[addr], "Already authenticated");
+        pending[addr] = block.timestamp;
+    }
+
+    function endGrantAuthentication(address addr) public onlyOwner {
+        require(pending[addr] != 0, "Not pending");
+        require(block.timestamp >= pending[addr] + DELAY_PERIOD, "Delay ongoing");
+        contracts[addr] = true;
+        delete pending[addr];
+        emit AuthenticationOperation(addr, true);
+    }
+
+    function revokeAuthentication(address addr) public onlyOwner {
+        require(contracts[addr], "Not authenticated");
+        contracts[addr] = false;
+        emit AuthenticationOperation(addr, false);
+    }
+
+    function registerProxy() public returns (OwnableDelegateProxy proxy) {
+        require(address(proxies[msg.sender]) == address(0), "Proxy exists");
+        proxy = new OwnableDelegateProxy(msg.sender, delegateProxyImplementation);
+        proxies[msg.sender] = proxy;
+        emit RegisterProxy(msg.sender, address(proxy));
+        return proxy;
+    }
+}
+```
+
+**Key Implementation Details:**
+
+1. **Constructor:** Initializes the `delegateProxyImplementation` address during deployment, which is crucial for proxy creation.
+
+2. **Access Control Functions:**
+   - `startGrantAuthentication`: Initiates the authentication process by setting a timestamp for the address.
+   - `endGrantAuthentication`: Completes authentication after the delay period, updating the `contracts` mapping.
+   - `revokeAuthentication`: Immediately revokes access, demonstrating different security timings for granting vs revoking.
+
+3. **Proxy Management:**
+   - `registerProxy`: Allows users to deploy their own proxy contract using the predefined implementation. Ensures each user has only one proxy.
+
+4. **Security Considerations:**
+   - Strict access control using `onlyOwner` modifier.
+   - Delay period enforcement to prevent instant authorization changes.
+   - State management with mappings to track pending/authorized contracts and user proxies.
+
+The contract maintains security while enabling flexible proxy management, following OpenZeppelin best practices for access control and state management.

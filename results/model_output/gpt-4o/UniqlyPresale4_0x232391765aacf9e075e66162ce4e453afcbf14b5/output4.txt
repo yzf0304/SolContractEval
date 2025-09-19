@@ -1,0 +1,122 @@
+Here is the completed smart contract `UniqlyPresale4` based on the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: Unlicense
+pragma solidity ^0.8.2;
+
+/**
+ * @title UniqlyPresale4
+ * @notice A smart contract for managing a presale of a token, allowing users to contribute ETH within certain limits and time frames.
+ * @dev The contract ensures that the presale is conducted within specified parameters and allows for the withdrawal of funds by users or the owner.
+ */
+contract UniqlyPresale4 {
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+    uint256 constant failSafeTime = 2 weeks;
+
+    address public owner;
+    address public newOwner;
+
+    bool presaleStarted = false;
+    bool presaleEnded = false;
+    bool presaleFailed = false;
+
+    mapping(address => uint256) private balances;
+
+    constructor(
+        uint256 _presaleLimit, 
+        uint256 _minPerUser, 
+        uint256 _maxPerUser, 
+        uint256 _presaleEnd, 
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 amount = msg.value + balances[msg.sender];
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+        balances[msg.sender] = amount;
+
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    function start() external {
+        require(msg.sender == owner, "Only owner can start");
+        require(!presaleStarted, "Presale already started");
+        presaleStarted = true;
+    }
+
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    function withdraw() external returns (bool) {
+        if (!presaleEnded && block.timestamp > presaleEnd + failSafeTime) {
+            presaleFailed = true;
+        }
+
+        if (presaleEnded && !presaleFailed) {
+            if (msg.sender == owner) {
+                return send(owner, address(this).balance);
+            }
+        } else if (presaleFailed) {
+            uint256 userBalance = balances[msg.sender];
+            require(userBalance > 0, "No funds to withdraw");
+            balances[msg.sender] = 0;
+            return send(msg.sender, userBalance);
+        }
+
+        return false;
+    }
+
+    function send(address user, uint256 amount) private returns (bool) {
+        (bool success, ) = user.call{value: amount}("");
+        return success;
+    }
+
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Only owner can withdraw tokens");
+        uint256 tokenBalance = token.balanceOf(address(this));
+        token.transfer(owner, tokenBalance);
+    }
+
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Only owner can give ownership");
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Only new owner can accept ownership");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+```
+
+### Key Functionalities:
+- **Presale Management:** Users can contribute ETH as long as the presale is active, meeting the specified min/max limits. The presale ends once the limit is reached.
+- **Withdrawals:** Users can withdraw their contributions if the presale fails. The owner can withdraw all funds if the presale succeeds.
+- **Ownership Transfer:** Ownership can be securely transferred in two steps: the owner nominates a new owner, and the new owner accepts the role.
+- **ERC20 Token Recovery:** The owner can recover any ERC20 tokens accidentally sent to the contract.

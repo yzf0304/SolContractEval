@@ -1,0 +1,86 @@
+To complete the `Kubera` contract in accordance with the provided context and requirements, I'll fill in the function implementations based on standard ERC20 functionality along with specified ICO constraints and burn logic. 
+
+The completed contract includes implementations for `transfer`, `approve`, `transferFrom`, and `burn` functions. Note that the contract must be compatible with Solidity 0.4.11, thus using features and practices available in that version.
+
+```solidity
+contract Kubera is SafeMath {
+
+    string public standard = 'ERC20';
+    string public name = 'Kubera token';
+    string public symbol = 'KBR';
+    uint8 public decimals = 0;
+    uint256 public totalSupply;
+    address public owner;
+    uint public tokensSoldToInvestors = 0;
+    uint public maxGoalInICO = 2100000000;
+    uint256 public startTime = 1510325999;
+    bool burned;
+    bool hasICOStarted;
+    address tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event TransferToReferral(address indexed referralAddress, uint256 value);
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+    event Burned(uint amount);
+
+    function Kubera() {
+        owner = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        balanceOf[owner] = 2205000000;
+        totalSupply = 2205000000;
+    }
+
+    function transfer(address _to, uint256 _value) returns(bool success) {
+        require(now >= startTime); // Ensures transfers are allowed post ICO
+        require(balanceOf[msg.sender] >= _value); // Checks for sufficient balance
+        balanceOf[msg.sender] = safeSub(balanceOf[msg.sender], _value);
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) returns(bool success) {
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) returns(bool success) {
+        require(now >= startTime || _from == owner); // ICO: only owner transfers or post ICO
+        require(balanceOf[_from] >= _value && allowance[_from][msg.sender] >= _value); // Check balances and allowance
+        if (now < startTime) {
+            require(tokensSoldToInvestors + _value <= maxGoalInICO); // Pre-ICO: Enforce max goal
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, _value);
+        }
+        balanceOf[_from] = safeSub(balanceOf[_from], _value);
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        allowance[_from][msg.sender] = safeSub(allowance[_from][msg.sender], _value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function burn() {
+        require(now > startTime); // Can only burn after ICO period
+        require(!burned); // Ensure burn only once
+        uint256 unsoldTokens = safeSub(totalSupply, tokensSoldToInvestors);
+        balanceOf[owner] = safeSub(balanceOf[owner], unsoldTokens);
+        totalSupply = safeSub(totalSupply, unsoldTokens);
+        burned = true;
+        Burned(unsoldTokens);
+
+        // Transfer a fixed amount of tokens to the tokensHolder
+        uint256 tokensForHolder = 1000000; // Assuming this is the fixed amount to transfer
+        balanceOf[tokensHolder] = safeAdd(balanceOf[tokensHolder], tokensForHolder);
+        balanceOf[owner] = safeSub(balanceOf[owner], tokensForHolder);
+        Transfer(owner, tokensHolder, tokensForHolder);
+    }
+}
+```
+
+### Explanation:
+- **Transfer Restrictions**: The `transfer` and `transferFrom` functions incorporate checks that enforce token transfer rules, particularly the restriction on transfers before a certain time and only allowing the owner to transfer during the ICO.
+- **Approval and Transfer Logic**: These functions adhere to the ERC20 standard, updating balances and allowances accordingly.
+- **Burn Functionality**: The `burn` function ensures that the total supply reflects only tokens sold during the ICO, with the ability to execute only once after the ICO. It also transfers a fixed amount to the `tokensHolder`.
+- **SafeMath Usage**: Utilized for all arithmetic operations to prevent overflow and underflow, ensuring safe computation.

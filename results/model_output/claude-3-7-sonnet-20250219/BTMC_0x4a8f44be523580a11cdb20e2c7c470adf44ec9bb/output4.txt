@@ -1,0 +1,278 @@
+I'll complete the BTMC smart contract implementation according to the specifications. Here's the fully implemented contract:
+
+```solidity
+/**
+ * @notice BTMC is a token contract that implements ERC20, Ownable, and Pausable functionalities. 
+ * It includes features for token distribution, team token vesting, and funding.
+ * @dev The contract is designed to manage the initial supply, mining, public funding, and team vesting of tokens.
+ */
+contract BTMC is ERC20, Ownable, Pausable {
+    using SafeMath for uint256;
+
+    // Base information of the token
+    string public constant name = "MinerCoin";
+    string public constant symbol = "BTMC";
+    string public constant version = "1.0";
+    uint256 public constant decimals = 18;
+
+    // Initial supply for the team
+    uint256 public constant INIT_SUPPLY = 100000000 * 10**decimals;
+
+    // Mining supply (not generated in the initial phase)
+    uint256 public constant MINING_SUPPLY = 500000000 * 10**decimals;
+
+    // Maximum supply for public funding
+    uint256 public constant MAX_FUNDING_SUPPLY = 200000000 * 10**decimals;
+
+    // Team keeping supply
+    uint256 public constant TEAM_KEEPING = 200000000 * 10**decimals;
+
+    // Total maximum supply
+    uint256 public constant MAX_SUPPLY = INIT_SUPPLY + MINING_SUPPLY + MAX_FUNDING_SUPPLY + TEAM_KEEPING;
+
+    // Public funding parameters
+    uint256 public totalFundingSupply;
+    uint256 public startTime;
+    uint256 public endTime;
+    uint256 public rate;
+
+    // Team unfreezing parameters
+    uint256 public constant TEAM_UNFREEZE = 40000000 * 10**decimals;
+    bool public hasOneStepWithdraw;
+    bool public hasTwoStepWithdraw;
+    bool public hasThreeStepWithdraw;
+    bool public hasFourStepWithdraw;
+    bool public hasFiveStepWithdraw;
+
+    // ERC20 balances
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+
+    /**
+     * @notice Constructor initializes the token with the initial supply and sets up the public funding parameters.
+     * @dev Sets the initial supply, balances, and funding parameters.
+     */
+    function BTMC() {
+        totalSupply = INIT_SUPPLY;
+        balances[msg.sender] = INIT_SUPPLY;
+        Transfer(0x0, msg.sender, INIT_SUPPLY);
+        totalFundingSupply = 0;
+        startTime = 1524499199; // 2018-04-23 23:59:59
+        endTime = 1526313600;   // 2018-05-15 00:00:00
+        rate = 5000;
+        hasOneStepWithdraw = false;
+        hasTwoStepWithdraw = false;
+        hasThreeStepWithdraw = false;
+        hasFourStepWithdraw = false;
+        hasFiveStepWithdraw = false;
+    }
+
+    event CreateBTMC(address indexed _to, uint256 _value);
+
+    /**
+     * @dev Modifier to ensure the total supply does not exceed the maximum supply.
+     */
+    modifier notReachTotalSupply(uint256 _value, uint256 _rate) {
+        assert(MAX_SUPPLY >= totalSupply.add(_value.mul(_rate)));
+        _;
+    }
+
+    /**
+     * @dev Modifier to ensure the total funding supply does not exceed the maximum funding supply.
+     */
+    modifier notReachFundingSupply(uint256 _value, uint256 _rate) {
+        assert(MAX_FUNDING_SUPPLY >= totalFundingSupply.add(_value.mul(_rate)));
+        _;
+    }
+
+    /**
+     * @dev Modifier to ensure a boolean status is false.
+     */
+    modifier assertFalse(bool withdrawStatus) {
+        assert(!withdrawStatus);
+        _;
+    }
+
+    /**
+     * @dev Modifier to ensure the current time is after a target time.
+     */
+    modifier notBeforeTime(uint256 targetTime) {
+        assert(now > targetTime);
+        _;
+    }
+
+    /**
+     * @dev Modifier to ensure the current time is before or equal to a target time.
+     */
+    modifier notAfterTime(uint256 targetTime) {
+        assert(now <= targetTime);
+        _;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw ETH from the contract.
+     * @dev Only the owner can call this function.
+     */
+    function etherProceeds() external onlyOwner {
+        owner.transfer(address(this).balance);
+    }
+
+    /**
+     * @notice Internal function to process token funding.
+     * @dev Ensures the total supply does not exceed the maximum supply.
+     */
+    function processFunding(address receiver, uint256 _value, uint256 _rate) internal notReachTotalSupply(_value, _rate) {
+        uint256 tokenAmount = _value.mul(_rate);
+        totalSupply = totalSupply.add(tokenAmount);
+        balances[receiver] = balances[receiver].add(tokenAmount);
+        CreateBTMC(receiver, tokenAmount);
+        Transfer(0x0, receiver, tokenAmount);
+    }
+
+    /**
+     * @notice Internal function to handle public funding.
+     * @dev Ensures the total funding supply does not exceed the maximum funding supply.
+     */
+    function funding(address receiver, uint256 _value, uint256 _rate) whenNotPaused internal notReachFundingSupply(_value, _rate) {
+        totalFundingSupply = totalFundingSupply.add(_value.mul(_rate));
+        processFunding(receiver, _value, _rate);
+    }
+
+    /**
+     * @notice Fallback function to handle ETH payments during the funding period.
+     * @dev Ensures the current time is within the funding period.
+     */
+    function () payable external notBeforeTime(startTime) notAfterTime(endTime) {
+        funding(msg.sender, msg.value, rate);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the first step of team tokens.
+     * @dev Ensures the current time is after the specified date and the withdrawal has not been done.
+     */
+    function withdrawForOneStep() external onlyOwner assertFalse(hasOneStepWithdraw) notBeforeTime(1587571200) {
+        hasOneStepWithdraw = true;
+        processFunding(owner, TEAM_UNFREEZE, 1);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the second step of team tokens.
+     * @dev Ensures the current time is after the specified date and the withdrawal has not been done.
+     */
+    function withdrawForTwoStep() external onlyOwner assertFalse(hasTwoStepWithdraw) notBeforeTime(1603382400) {
+        hasTwoStepWithdraw = true;
+        processFunding(owner, TEAM_UNFREEZE, 1);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the third step of team tokens.
+     * @dev Ensures the current time is after the specified date and the withdrawal has not been done.
+     */
+    function withdrawForThreeStep() external onlyOwner assertFalse(hasThreeStepWithdraw) notBeforeTime(1619107200) {
+        hasThreeStepWithdraw = true;
+        processFunding(owner, TEAM_UNFREEZE, 1);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the fourth step of team tokens.
+     * @dev Ensures the current time is after the specified date and the withdrawal has not been done.
+     */
+    function withdrawForFourStep() external onlyOwner assertFalse(hasFourStepWithdraw) notBeforeTime(1634918400) {
+        hasFourStepWithdraw = true;
+        processFunding(owner, TEAM_UNFREEZE, 1);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the fifth step of team tokens.
+     * @dev Ensures the current time is after the specified date and the withdrawal has not been done.
+     */
+    function withdrawForFiveStep() external onlyOwner assertFalse(hasFiveStepWithdraw) notBeforeTime(1650643200) {
+        hasFiveStepWithdraw = true;
+        processFunding(owner, TEAM_UNFREEZE, 1);
+    }
+
+    /**
+     * @notice Transfers tokens from the sender to the recipient.
+     * @dev Ensures the transfer is valid and updates the balances.
+     */
+    function transfer(address _to, uint256 _value) whenNotPaused public returns (bool) {
+        require(_to != address(0));
+        require(_value <= balances[msg.sender]);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the balance of the specified address.
+     * @dev Returns the token balance of the given address.
+     */
+    function balanceOf(address _owner) public constant returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another using an allowance.
+     * @dev Ensures the transfer is valid and updates the balances and allowances.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) whenNotPaused public returns (bool) {
+        require(_to != address(0));
+        require(_value <= balances[_from]);
+        require(_value <= allowed[_from][msg.sender]);
+
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Approves an address to spend a certain amount of tokens on behalf of the owner.
+     * @dev Sets the allowance for the spender.
+     */
+    function approve(address _spender, uint256 _value) whenNotPaused public returns (bool) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the remaining allowance of a spender for a given owner.
+     * @dev Returns the remaining allowance.
+     */
+    function allowance(address _owner, address _spender) public constant returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    /**
+     * @notice Allows the owner to set the funding rate.
+     * @dev Only the owner can call this function.
+     */
+    function setupFundingRate(uint256 _rate) external onlyOwner {
+        rate = _rate;
+    }
+
+    /**
+     * @notice Allows the owner to set the funding start and end times.
+     * @dev Only the owner can call this function.
+     */
+    function setupFundingTime(uint256 _startTime, uint256 _endTime) external onlyOwner {
+        startTime = _startTime;
+        endTime = _endTime;
+    }
+}
+```
+
+This implementation completes all the functions according to the provided description and structure. The contract includes:
+
+1. Token information (name, symbol, decimals)
+2. Supply management (initial, mining, funding, team keeping)
+3. Funding functionality with time constraints
+4. Team token vesting with time-locked withdrawals
+5. Standard ERC20 functionality (transfer, approve, transferFrom, balanceOf, allowance)
+6. Owner-specific functions for managing the contract
+
+All the functions follow the specified requirements and modifiers ensure that operations are performed only under the appropriate conditions.

@@ -1,0 +1,111 @@
+Based on the provided context and description, here is the completed smart contract OMNIDOORS:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface ILayerZeroEndpoint {
+    function send(
+        uint16 _dstChainId,
+        bytes calldata _destination,
+        bytes calldata _payload,
+        address payable _refundAddress,
+        address _zroPaymentAddress,
+        bytes calldata _adapterParams
+    ) external payable;
+
+    function getOutboundNonce(uint16 _dstChainId, address _srcAddress) external view returns (uint64);
+
+    function estimateFees(
+        uint16 _dstChainId,
+        address _userApplication,
+        bytes calldata _payload,
+        bool _payInZRO,
+        bytes calldata _adapterParam
+    ) external view returns (uint256 nativeFee, uint256 zroFee);
+
+    function retryPayload(uint16 _srcChainId, bytes calldata _srcAddress, bytes calldata _payload) external;
+
+    function hasStoredPayload(uint16 _srcChainId, bytes calldata _srcAddress) external view returns (bool);
+
+    function getSendLibraryAddress(address _userApplication) external view returns (address);
+
+    function getReceiveLibraryAddress(address _userApplication) external view returns (address);
+
+    function isSendingPayload() external view returns (bool);
+}
+
+contract OMNIDOORS is Ownable, ERC721 {
+    address public _owner;
+    string private baseURI;
+    uint256 nextTokenId = 5900;
+    uint256 MAX_NETWORK_MINT = 9300;
+
+    uint256 gasForDestinationLzReceive = 350000;
+    ILayerZeroEndpoint public endpoint;
+
+    constructor(string memory baseURI_, address _layerZeroEndpoint) ERC721("Omni Doors", "odoors") {
+        _owner = msg.sender;
+        endpoint = ILayerZeroEndpoint(_layerZeroEndpoint);
+        baseURI = baseURI_;
+        for (uint256 i = 0; i < 330; i++) {
+            _safeMint(_owner, ++nextTokenId);
+        }
+    }
+
+    function mint(uint8 numTokens) external payable {
+        require(numTokens == 1, "Can only mint one token at a time");
+        require(totalSupply() + numTokens <= MAX_NETWORK_MINT, "Exceeds maximum network mint limit");
+        _safeMint(msg.sender, ++nextTokenId);
+    }
+
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        require(ownerOf(tokenId) == msg.sender, "Caller must be the NFT owner");
+        require(endpoint.getSendLibraryAddress(address(this)) != address(0), "Invalid send library address");
+
+        uint64 nonce = endpoint.getOutboundNonce(_chainId, address(this));
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        (uint256 nativeFee, uint256 zroFee) = endpoint.estimateFees(_chainId, address(this), payload, true, "");
+
+        require(msg.value >= nativeFee, "Insufficient payment for message delivery");
+
+        endpoint.send{value: msg.value}(
+            _chainId,
+            abi.encodePacked(address(this)),
+            payload,
+            address(this),
+            msg.sender,
+            abi.encode(gasForDestinationLzReceive)
+        );
+
+        if (msg.value > nativeFee) {
+            payable(msg.sender).transfer(msg.value - nativeFee);
+        }
+    }
+
+    function setBaseURI(string memory URI) external onlyOwner {
+        baseURI = URI;
+    }
+
+    function donate() external payable {}
+
+    function withdraw(uint256 amt) external onlyOwner {
+        require(amt <= address(this).balance, "Insufficient balance");
+        payable(msg.sender).transfer(amt);
+    }
+
+    function setGasForDestinationLzReceive(uint256 newVal) external onlyOwner {
+        gasForDestinationLzReceive = newVal;
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+}
+```
+
+This completed smart contract OMNIDOORS includes the necessary functions for minting, transferring NFTs across different chains using LayerZero, setting base URI, donating, withdrawing funds, and setting gas for the destination LayerZero receive function.

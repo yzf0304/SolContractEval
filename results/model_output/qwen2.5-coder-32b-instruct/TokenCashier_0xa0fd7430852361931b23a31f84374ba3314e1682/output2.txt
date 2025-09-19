@@ -1,0 +1,177 @@
+Below is the completed `TokenCashier` smart contract based on your requirements and the provided context. This contract integrates the necessary functionality for managing token deposits and withdrawals, fee collection, and token whitelisting, while ensuring compatibility with Solidity version 0.5.12.
+
+```solidity
+pragma solidity ^0.5.12;
+
+/**
+ * @title Ownable
+ * @dev The Ownable contract has an owner address, and provides basic authorization control
+ * functions, this simplifies the implementation of "user permissions".
+ */
+contract Ownable {
+    address public owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+}
+
+/**
+ * @title Pausable
+ * @dev Base contract which allows children to implement an emergency stop mechanism.
+ */
+contract Pausable is Ownable {
+    event Pause();
+    event Unpause();
+
+    bool public paused = false;
+
+    modifier whenNotPaused() {
+        require(!paused);
+        _;
+    }
+
+    modifier whenPaused() {
+        require(paused);
+        _;
+    }
+
+    function pause() onlyOwner whenNotPaused public {
+        paused = true;
+        emit Pause();
+    }
+
+    function unpause() onlyOwner whenPaused public {
+        paused = false;
+        emit Unpause();
+    }
+}
+
+interface ITokenList {
+    function isAllowed(address) external returns (bool);
+    function maxAmount(address) external returns (uint256);
+    function minAmount(address) external returns (uint256);
+}
+
+interface IWrappedCoin {
+    function deposit() external payable;
+}
+
+/**
+ * @notice A smart contract for managing token deposits and withdrawals, including fee collection and token whitelisting.
+ * @dev This contract allows users to deposit tokens into a safe or burn them, with certain conditions. It also allows the owner to set fees, withdraw funds, and manage token safes.
+ */
+contract TokenCashier is Pausable {
+    event Receipt(address indexed token, uint256 indexed id, address sender, address recipient, uint256 amount, uint256 fee);
+
+    ITokenList[] public tokenLists;
+    address[] public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    constructor(IWrappedCoin _wrappedCoin, ITokenList[] memory _tokenLists, address[] memory _tokenSafes) public {
+        require(_tokenLists.length == _tokenSafes.length, "# of token lists is not equal to # of safes");
+        wrappedCoin = _wrappedCoin;
+        tokenLists = _tokenLists;
+        tokenSafes = _tokenSafes;
+    }
+
+    function() external {
+        revert();
+    }
+
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    function depositTo(address _token, address _to, uint256 _amount) public whenNotPaused payable {
+        require(_to != address(0), "Invalid recipient address");
+        
+        if (_token == address(0)) {
+            require(msg.value == _amount, "Insufficient ETH provided");
+            _amount = msg.value - depositFee;
+            wrappedCoin.deposit.value(depositFee)();
+        } else {
+            require(safeTransferFrom(_token, msg.sender, address(this), _amount), "Token transfer failed");
+            _amount = _amount - depositFee;
+        }
+
+        uint256 listIndex;
+        bool isValid;
+        for (listIndex = 0; listIndex < tokenLists.length; listIndex++) {
+            ITokenList list = tokenLists[listIndex];
+            isValid = list.isAllowed(_token);
+            uint256 max = list.maxAmount(_token);
+            uint256 min = list.minAmount(_token);
+            require(_amount >= min && _amount <= max, "Amount out of bounds");
+            if (isValid) break;
+        }
+        require(isValid, "Token not allowed");
+
+        counts[_token]++;
+        address safe = tokenSafes[listIndex];
+        bool result;
+        if (safe == address(0)) {
+            (result, ) = address(this).call(abi.encodeWithSignature("0x42966c68(uint256)", _amount)); // burn(uint256)
+        } else {
+            result = safeTransfer(_token, safe, _amount);
+        }
+        require(result, "Operation failed");
+
+        emit Receipt(_token, counts[_token], msg.sender, _to, _amount, depositFee);
+    }
+
+    function deposit(address _token, uint256 _amount) public payable {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    function withdraw() external onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    function withdrawToken(address _token) public onlyOwner {
+        bytes4 selectorBalance = bytes4(keccak256(bytes("balanceOf(address)")));
+        bytes4 selectorTransfer = bytes4(keccak256(bytes("transfer(address,uint256)")));
+
+        (bool successBalance, bytes memory data) = _token.staticcall(abi.encodeWithSelector(selectorBalance, owner));
+        require(successBalance, "Failed to get balance");
+        uint256 balance = abi.decode(data, (uint256));
+
+        require(balance > 0, "No tokens to withdraw");
+        (bool successTransfer, ) = _token.call(abi.encodeWithSelector(selectorTransfer, owner, balance));
+        require(successTransfer, "Failed to transfer tokens");
+    }
+
+    function safeTransferFrom(address _token, address _from, address _to, uint256 _amount) internal returns (bool) {
+        bytes4 selector = bytes4(keccak256(bytes("transferFrom(address,address,uint256)")));
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(selector, _from, _to, _amount));
+        return success && (data.length == 0 || abi.decode(data, (bool)));
+    }
+
+    function safeTransfer(address _token, address _to, uint256 _amount) internal returns (bool) {
+        bytes4 selector = bytes4(keccak256(bytes("transfer(address,uint256)")));
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(selector, _to, _amount));
+        return success && (data.length == 0 || abi.decode(data, (bool)));
+    }
+}
+```
+
+This implementation adheres to your specifications, including handling of both native currency and ERC20 tokens, enforcing token whitelisting rules, and ensuring that all operations respect the contract's state (paused or not).

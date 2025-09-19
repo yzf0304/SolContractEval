@@ -1,0 +1,130 @@
+pragma solidity 0.8.13;
+
+interface IBoneheadz {
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function totalSupply() external view returns (uint256);
+}
+
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+    uint256 internal cutoff;
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+    uint256 public raidPrice = 0.005 ether;
+
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    // OWNER FUNCTIONS
+
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    function flipLockStatuses(uint256[] calldata tokenIds) public onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            uint256 id = tokenIds[i];
+            isLocked[id] = !isLocked[id];
+        }
+    }
+
+    function withdraw(address recipient) external onlyOwner {
+        payable(recipient).transfer(address(this).balance);
+    }
+
+    // RAID FUNCTION
+
+    function raid(uint256 tokenId) public payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raid is not active");
+        require(msg.value == raidPrice, "Incorrect raid price");
+        require(!isLocked[tokenId], "Token is locked");
+
+        uint256 rand = _genPseudoRandomNumber(tokenId);
+        if (rand < cutoff) {
+            uint256 newTier = tokenTiers[tokenId] + 1;
+            if (newTier > MAX_TIER) {
+                newTier = MAX_TIER;
+            }
+            tokenTiers[tokenId] = newTier;
+            emit TierUpdated(tokenId, newTier);
+        } else {
+            isLocked[tokenId] = true;
+            emit Locked(tokenId);
+        }
+    }
+
+    // VIEW FUNCTIONS
+
+    function numPerTier() public view returns (uint256[] memory) {
+        uint256 total = Boneheadz.totalSupply();
+        uint256 size = MAX_TIER + 1;
+        uint256[] memory counts = new uint256[](size);
+
+        for (uint256 id = 1; id <= total; id++) {
+            uint256 tier = tokenTiers[id];
+            if (tier > MAX_TIER) {
+                tier = MAX_TIER;
+            }
+            counts[tier]++;
+        }
+        return counts;
+    }
+
+    function numLockedPerTier() public view returns (uint256[] memory) {
+        uint256 total = Boneheadz.totalSupply();
+        uint256 size = MAX_TIER + 1;
+        uint256[] memory counts = new uint256[](size);
+
+        for (uint256 id = 1; id <= total; id++) {
+            if (isLocked[id]) {
+                uint256 tier = tokenTiers[id];
+                if (tier > MAX_TIER) {
+                    tier = MAX_TIER;
+                }
+                counts[tier]++;
+            }
+        }
+        return counts;
+    }
+
+    // INTERNAL UTILITY
+
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        // returns a value in [0, 9999]
+        return
+            uint256(
+                keccak256(
+                    abi.encodePacked(block.difficulty, block.timestamp, tokenId)
+                )
+            ) % 10000;
+    }
+}

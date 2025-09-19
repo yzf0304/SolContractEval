@@ -1,0 +1,150 @@
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.7;
+
+contract ogreswampwtf is ERC721, Ownable {
+    using Counters for Counters.Counter;
+    using Strings for uint256;
+
+    Counters.Counter private _tokenSupply;
+
+    string public ogreURI;
+    string public ogreExtension = ".json";
+    string public SwampUri;
+
+    uint256 public cost = 0 ether;
+    uint256 public maxSupply = 3333;
+    uint256 public freeMints = 3333;
+    uint256 public maxMintAmount = 3;
+
+    bool public paused = false;
+    bool public revealed = false;
+
+    mapping(address => bool) public whitelisted;
+    mapping(address => uint256) private freeMintsWallet;
+
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        string memory _initOgreURI,
+        string memory _initSwampUri
+    ) ERC721(_name, _symbol) {
+        setOgreURI(_initOgreURI);
+        setSwampURI(_initSwampUri);
+    }
+
+    /** @notice total number of tokens minted so far */
+    function totalSupply() public view returns (uint256) {
+        return _tokenSupply.current();
+    }
+
+    /** @notice base URI override for ERC721 */
+    function _ogreURI() internal view virtual override returns (string memory) {
+        return ogreURI;
+    }
+
+    /**
+     * @notice mint tokens
+     * @dev free phase: only whitelisted, max 20 per wallet; after free phase: paid
+     */
+    function mint(address _to, uint256 _mintAmount) public payable {
+        require(!paused, "OG: minting is paused");
+        require(_mintAmount > 0 && _mintAmount <= maxMintAmount, "OG: invalid mint amount");
+
+        uint256 supply = totalSupply();
+        require(supply + _mintAmount <= maxSupply, "OG: exceeds max supply");
+
+        if (supply < freeMints) {
+            // still in free phase
+            require(whitelisted[msg.sender], "OG: not whitelisted for free mint");
+            require(
+                freeMintsWallet[msg.sender] + _mintAmount <= 20,
+                "OG: free mint wallet limit reached"
+            );
+            freeMintsWallet[msg.sender] += _mintAmount;
+        } else {
+            // paid phase
+            require(msg.value >= cost * _mintAmount, "OG: insufficient funds");
+        }
+
+        for (uint256 i = 0; i < _mintAmount; i++) {
+            _tokenSupply.increment();
+            uint256 tokenId = _tokenSupply.current();
+            _safeMint(_to, tokenId);
+        }
+    }
+
+    /**
+     * @notice token metadata URI
+     */
+    function tokenURI(uint256 tokenId)
+        public
+        view
+        virtual
+        override
+        returns (string memory)
+    {
+        require(_exists(tokenId), "OG: URI query for nonexistent token");
+
+        if (!revealed) {
+            return SwampUri;
+        }
+
+        return string(
+            abi.encodePacked(ogreURI, tokenId.toString(), ogreExtension)
+        );
+    }
+
+    /** @notice reveal final metadata */
+    function reveal() public onlyOwner {
+        revealed = true;
+    }
+
+    /** @notice set mint cost */
+    function setCost(uint256 _newCost) public onlyOwner {
+        cost = _newCost;
+    }
+
+    /** @notice set max mint per transaction */
+    function setmaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+        maxMintAmount = _newmaxMintAmount;
+    }
+
+    /** @notice set unrevealed placeholder URI */
+    function setSwampURI(string memory _SwampURI) public onlyOwner {
+        SwampUri = _SwampURI;
+    }
+
+    /** @notice set base metadata URI */
+    function setOgreURI(string memory _newOgreURI) public onlyOwner {
+        ogreURI = _newOgreURI;
+    }
+
+    /** @notice set metadata file extension */
+    function setOgreExtension(string memory _newOgreExtension) public onlyOwner {
+        ogreExtension = _newOgreExtension;
+    }
+
+    /** @notice pause or unpause minting */
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    /** @notice add an address to whitelist */
+    function whitelistUser(address _user) public onlyOwner {
+        whitelisted[_user] = true;
+    }
+
+    /** @notice remove an address from whitelist */
+    function removeWhitelistUser(address _user) public onlyOwner {
+        whitelisted[_user] = false;
+    }
+
+    /** @notice withdraw contract balance to owner */
+    function withdraw() public payable onlyOwner {
+        uint256 bal = address(this).balance;
+        (bool success, ) = payable(owner()).call{value: bal}("");
+        require(success, "OG: Withdraw failed");
+    }
+}
+```

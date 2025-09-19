@@ -1,0 +1,69 @@
+```solidity
+pragma solidity ^0.4.21;
+
+contract ICSTCrowSale is Ownable {
+    using SafeMath for uint256;
+
+    uint256 public totalFundingSupply;
+    ERC20 public token;
+    uint256 public startTime;
+    uint256 public endTime;
+    uint256 public airdropSupply;
+    uint256 public rate;
+
+    event Wasted(address to, uint256 value, uint256 date);
+
+    function ICSTCrowSale() public {
+        rate = 0;
+        startTime = 0;
+        endTime = 0;
+        airdropSupply = 0;
+        totalFundingSupply = 0;
+        token = ERC20(0xe6bc60a00b81c7f3cbc8f4ef3b0a6805b6851753);
+    }
+
+    function () payable external {
+        require(now > startTime && now <= endTime);
+        uint256 amount = msg.value.mul(rate);
+        processFunding(msg.sender, msg.value, rate);
+        totalFundingSupply = totalFundingSupply.add(amount);
+    }
+
+    function withdrawCoinToOwner(uint256 _value) external onlyOwner {
+        require(token.transfer(owner, _value));
+    }
+
+    function airdrop(address[] _holders, uint256 paySize) external onlyOwner {
+        uint256 count = _holders.length;
+        require(count > 0 && paySize > 0);
+        uint256 totalAmount = paySize.mul(count);
+        require(airdropSupply >= totalAmount);
+
+        for (uint256 i = 0; i < count; i++) {
+            require(token.transfer(_holders[i], paySize));
+            emit Wasted(_holders[i], paySize, now);
+        }
+        airdropSupply = airdropSupply.sub(totalAmount);
+    }
+
+    function processFunding(address receiver, uint256 _value, uint256 _rate) internal {
+        uint256 amount = _value.mul(_rate);
+        require(token.transfer(receiver, amount));
+    }
+
+    function etherProceeds() external onlyOwner {
+        owner.transfer(address(this).balance);
+    }
+
+    function init(uint256 _startTime, uint256 _endTime, uint256 _rate) external onlyOwner {
+        require(_startTime < _endTime);
+        startTime = _startTime;
+        endTime = _endTime;
+        rate = _rate;
+    }
+
+    function changeToken(address _tokenAddress) external onlyOwner {
+        token = ERC20(_tokenAddress);
+    }
+}
+```

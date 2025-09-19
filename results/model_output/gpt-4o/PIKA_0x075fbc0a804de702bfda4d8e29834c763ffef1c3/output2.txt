@@ -1,0 +1,228 @@
+Below is the complete implementation of the `PIKA` token smart contract strictly adhering to the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.7.6;
+
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "SafeMath: subtraction overflow");
+        return a - b;
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        require(c / a == b, "SafeMath: multiplication overflow");
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "SafeMath: division by zero");
+        return a / b;
+    }
+
+    function mod(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "SafeMath: modulo by zero");
+        return a % b;
+    }
+}
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address payable) {
+        return msg.sender;
+    }
+
+    function _msgData() internal view virtual returns (bytes memory) {
+        return msg.data;
+    }
+}
+
+contract Owned is Context {
+    modifier onlyOwner() virtual {
+        require(_msgSender() == owner, "Owned: caller is not the owner");
+        _;
+    }
+
+    address payable public owner;
+    address payable public newOwner;
+
+    constructor() {
+        owner = _msgSender();
+    }
+
+    function changeOwner(address payable _newOwner) external onlyOwner {
+        require(_newOwner != address(0), "Owned: new owner is the zero address");
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(_msgSender() == newOwner, "Owned: caller is not the new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+
+interface ERC20 {
+    function balanceOf(address _owner) external view returns (uint256 balance);
+    function transfer(address _to, uint256 _value) external returns (bool success);
+    function transferFrom(address _from, address _to, uint256 _value) external returns (bool success);
+    function approve(address _spender, uint256 _value) external returns (bool success);
+    function allowance(address _owner, address _spender) external view returns (uint256 remaining);
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+}
+
+interface IUniswapV2Factory {
+    function createPair(address tokenA, address tokenB) external returns (address pair);
+}
+
+interface IUniswapV2Router02 {
+    function WETH() external pure returns (address);
+    function factory() external pure returns (address);
+    function swapExactTokensForETHSupportingFeeOnTransferTokens(
+        uint amountIn, 
+        uint amountOutMin, 
+        address[] calldata path, 
+        address to, 
+        uint deadline
+    ) external;
+    function addLiquidityETH(
+        address token, 
+        uint amountTokenDesired, 
+        uint amountTokenMin, 
+        uint amountETHMin, 
+        address to, 
+        uint deadline
+    ) external payable returns (uint amountToken, uint amountETH, uint liquidity);
+}
+
+contract PIKA is Context, Owned, ERC20 {
+    using SafeMath for uint256;
+
+    string public symbol;
+    string public name;
+    uint8 public decimals;
+    uint256 public totalSupply;
+
+    uint256 public _taxFee;
+    uint256 private _taxFeepercent;
+    uint256 private minamountTakenOut;
+    uint256 private MinimumSupply;
+    uint256 public ContractDeployed;
+
+    address public immutable uniswapV2Pair;
+    IUniswapV2Router02 public immutable uniswapV2Router;
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowed;
+    mapping(address => bool) private _isExcludedFromFee;
+
+    address public oldPika;
+    uint256 public oldPika_amount;
+
+    event TransferFee(address indexed _from, address indexed _to, uint256 _value);
+
+    constructor() {
+        symbol = "PIKA";
+        name = "PIKA";
+        decimals = 18;
+        totalSupply = 50000000000000 * 10**18; // 50 trillion
+        _taxFeepercent = 225; // Default tax fee percentage
+        minamountTakenOut = 1000000 * 10**18;
+        MinimumSupply = 100000000 * 10**18; // Minimum supply
+        ContractDeployed = block.timestamp;
+
+        owner = _msgSender();
+        balances[owner] = totalSupply;
+        _isExcludedFromFee[owner] = true;
+        _isExcludedFromFee[address(this)] = true;
+
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D); // Uniswap Router
+        uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
+        uniswapV2Router = _uniswapV2Router;
+
+        oldPika = 0xE09fB60E8D6e7E1CEbBE821bD5c3FC67a40F86bF; // Old PIKA token address
+    }
+
+    function balanceOf(address _owner) public view override returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _amount) public override returns (bool) {
+        _transfer(_msgSender(), _to, _amount);
+        return true;
+    }
+
+    function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
+        _transfer(sender, recipient, amount);
+        uint256 currentAllowance = allowed[sender][_msgSender()];
+        require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
+        _approve(sender, _msgSender(), currentAllowance.sub(amount));
+        return true;
+    }
+
+    function approve(address spender, uint256 amount) public override returns (bool) {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public view override returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    function _transfer(address sender, address recipient, uint256 amount) internal {
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+
+        if (!_isExcludedFromFee[sender] && !_isExcludedFromFee[recipient]) {
+            uint256 fee = amount.mul(_taxFeepercent).div(10000);
+            _taxFee = _taxFee.add(fee);
+            amount = amount.sub(fee);
+            emit TransferFee(sender, recipient, fee);
+        }
+
+        balances[sender] = balances[sender].sub(amount, "ERC20: transfer amount exceeds balance");
+        balances[recipient] = balances[recipient].add(amount);
+        emit Transfer(sender, recipient, amount);
+    }
+
+    function _approve(address owner, address spender, uint256 amount) internal {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+        allowed[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    function viewFee() public view returns (uint256) {
+        return _taxFeepercent;
+    }
+
+    function swapTokensForEth(uint256 tokenAmount) private {
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = uniswapV2Router.WETH();
+
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0, // Accept any amount of ETH
+            path,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    receive() payable external {
+        require(msg.value > 0, "PIKA: zero ETH sent");
+        owner.transfer(msg.value);
+    }
+}
+```

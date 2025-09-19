@@ -1,0 +1,155 @@
+The provided contract implementation needs completion for functionality declared in the comments. Below is the full, corrected implementation of the `TBECrowdsale` contract based on the existing code and description:
+
+```solidity
+pragma solidity ^0.4.24;
+
+interface Token {
+    function transfer(address _to, uint256 _value) external;
+}
+
+contract TBECrowdsale {
+    
+    Token public tokenReward;
+    uint256 public price;
+    address public creator;
+    address public owner = 0x700635ad386228dEBCfBb5705d2207F529af8323;
+    uint256 public startDate;
+    uint256 public endDate;
+    
+    mapping(address => bool) public tokenAddress;
+    mapping(address => uint256) public balanceOfEther;
+    mapping(address => uint256) public balanceOf;
+
+    /**
+     * @notice Modifier to ensure that only the creator can call certain functions.
+     * @dev This modifier checks if the message sender is the creator of the contract.
+     */
+    modifier isCreator() {
+        require(msg.sender == creator, "Only the creator can call this function.");
+        _;
+    }
+
+    /**
+     * @notice Event emitted when a fund transfer occurs.
+     * @param backer The address of the backer.
+     * @param amount The amount of Ether or tokens transferred.
+     * @param isContribution Boolean indicating if the transfer is a contribution.
+     */
+    event FundTransfer(address backer, uint amount, bool isContribution);
+
+    /**
+     * @notice Initializes the crowdsale with the creator's address, price, start and end dates, and the token reward contract.
+     * @dev The constructor sets the initial values for the crowdsale parameters and the token reward contract.
+     */
+    constructor() public {
+        creator = msg.sender;
+        price = 100; // 1 token = 0.01 Ether by default
+        startDate = now;
+        endDate = startDate + 3 days; // Crowdsale lasts for 3 days.
+        tokenReward = Token(0xf18b97b312EF48C5d2b5C21c739d499B7c65Cf96); // Pre-set token contract address.
+    }
+
+    /**
+     * @notice Sets the owner of the contract.
+     * @param _owner The new owner's address.
+     * @dev Only the creator can call this function.
+     */
+    function setOwner(address _owner) public isCreator {
+        require(_owner != address(0), "Invalid owner address.");
+        owner = _owner;
+    }
+
+    /**
+     * @notice Sets the start date of the crowdsale.
+     * @param _startDate The new start date.
+     * @dev Only the creator can call this function.
+     */
+    function setStartDate(uint256 _startDate) public isCreator {
+        require(_startDate > now, "Start date must be in the future.");
+        startDate = _startDate;
+    }
+
+    /**
+     * @notice Sets the end date of the crowdsale.
+     * @param _endDate The new end date.
+     * @dev Only the creator can call this function.
+     */
+    function setEndtDate(uint256 _endDate) public isCreator {
+        require(_endDate > startDate, "End date must be after the start date.");
+        endDate = _endDate;
+    }
+
+    /**
+     * @notice Sets the price of the token in terms of Ether.
+     * @param _price The new price.
+     * @dev Only the creator can call this function.
+     */
+    function setPrice(uint256 _price) public isCreator {
+        require(_price > 0, "Price must be greater than zero.");
+        price = _price;
+    }
+
+    /**
+     * @notice Sets the token contract address.
+     * @param _token The new token contract address.
+     * @dev Only the creator can call this function.
+     */
+    function setToken(address _token) public isCreator {
+        require(_token != address(0), "Invalid token address.");
+        tokenReward = Token(_token);
+    }
+
+    /**
+     * @notice Sends a specified amount of tokens to a given address.
+     * @param _to The recipient's address.
+     * @param _value The amount of tokens to send.
+     * @dev Only the creator can call this function.
+     */
+    function sendToken(address _to, uint256 _value) public isCreator {
+        require(_to != address(0), "Invalid address.");
+        require(_value > 0, "Value must be greater than zero.");
+        tokenReward.transfer(_to, _value);
+        emit FundTransfer(_to, _value, false); // Not a contribution, just a manual transfer.
+    }
+
+    /**
+     * @notice Fallback function to handle incoming Ether and distribute tokens.
+     * @dev This function ensures that contributions are only accepted within the specified time frame, transfers tokens to the sender, and forwards the Ether to the owner.
+     */
+    function () public payable {
+        require(now >= startDate, "Crowdsale has not started yet.");
+        require(now <= endDate, "Crowdsale has ended.");
+        require(msg.value > 0, "No Ether sent.");
+
+        uint256 amount = (msg.value / 1 ether) * price; // Calculate token amount based on Ether sent.
+        require(amount > 0, "Insufficient Ether for token purchase.");
+
+        tokenReward.transfer(msg.sender, amount); // Send tokens to contributor.
+        
+        balanceOfEther[msg.sender] += msg.value; // Track Ether contributions.
+        balanceOf[msg.sender] += amount; // Track token amounts purchased.
+
+        emit FundTransfer(msg.sender, amount, true); // Log the contribution.
+
+        owner.transfer(msg.value); // Forward Ether to the owner's wallet.
+    }
+}
+```
+
+### Key Points:
+
+1. **Fallback Function Logic**:
+   - Validates the crowdsale time frame.
+   - Calculates the tokens based on the Ether sent (`amount = (msg.value / 1 ether) * price`).
+   - Ensures the tokens are sent and Ether is forwarded to the owner.
+
+2. **Setter Functions**:
+   - Parameters like `owner`, `startDate`, `endDate`, `price`, and `token` can only be modified by the contract creator.
+
+3. **Event Emission**:
+   - Emits the `FundTransfer` event for both contributions and manual token transfers.
+
+4. **Safety Checks**:
+   - Includes various checks for valid inputs and adherence to time constraints.
+
+This contract is robust, adhering to Solidity 0.4.24 standards, and fulfills the outlined requirements.

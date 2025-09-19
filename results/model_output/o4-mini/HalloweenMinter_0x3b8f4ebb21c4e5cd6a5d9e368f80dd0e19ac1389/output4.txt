@@ -1,0 +1,186 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+library MerkleProof {
+    function verifyCalldata(
+        bytes32[] calldata proof,
+        bytes32 root,
+        bytes32 leaf
+    ) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash < proofElement) {
+                // efficient hash of (computedHash, proofElement)
+                assembly {
+                    mstore(0x00, computedHash)
+                    mstore(0x20, proofElement)
+                    computedHash := keccak256(0x00, 0x40)
+                }
+            } else {
+                // efficient hash of (proofElement, computedHash)
+                assembly {
+                    mstore(0x00, proofElement)
+                    mstore(0x20, computedHash)
+                    computedHash := keccak256(0x00, 0x40)
+                }
+            }
+        }
+        return computedHash == root;
+    }
+}
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+}
+
+abstract contract Ownable is Context {
+    address private _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() {
+        _owner = _msgSender();
+        emit OwnershipTransferred(address(0), _owner);
+    }
+
+    modifier onlyOwner() {
+        require(_owner == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+interface iNFTCollection {
+    function externalMint(address _address, uint256 _amount) external payable;
+    function totalSupply() external view returns (uint256);
+}
+
+contract HalloweenMinter is Ownable {
+    address public constant withdrawAddress = 0xdEcf4B112d4120B6998e5020a6B4819E490F7db6;
+    iNFTCollection public NFTCollection = iNFTCollection(0x2d3C8D1A84cA778A3bba0F4fC389330AB96AF3Be);
+
+    uint256 public cost = 0;
+    uint256 public maxSupply = 5000;
+    uint256 public maxMintAmountPerTransaction = 3;
+    uint256 public publicSaleMaxMintAmountPerAddress = 300;
+    bool public paused = true;
+    bool public onlyWhitelisted = true;
+    bool public mintCount = true;
+    bytes32 public merkleRoot;
+
+    mapping(address => uint256) public whitelistMintedAmount;
+    mapping(address => uint256) public publicSaleMintedAmount;
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract.");
+        _;
+    }
+
+    constructor() {
+        // owner is set in Ownable
+        pause(false);
+        setMintCount(false);
+    }
+
+    function mint(
+        uint256 _mintAmount,
+        uint256 _maxMintAmount,
+        bytes32[] calldata _merkleProof
+    ) external payable callerIsUser {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0, "Must mint at least one");
+        require(_mintAmount <= maxMintAmountPerTransaction, "Exceeds per-transaction limit");
+        require(NFTCollection.totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+        require(msg.value >= cost * _mintAmount, "Insufficient payment");
+
+        if (onlyWhitelisted) {
+            // whitelist phase
+            bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _maxMintAmount));
+            require(
+                MerkleProof.verifyCalldata(_merkleProof, merkleRoot, leaf),
+                "Invalid Merkle proof"
+            );
+            if (mintCount) {
+                require(
+                    whitelistMintedAmount[msg.sender] + _mintAmount <= _maxMintAmount,
+                    "Exceeds allotted whitelist amount"
+                );
+                whitelistMintedAmount[msg.sender] += _mintAmount;
+            }
+        } else {
+            // public sale phase
+            if (mintCount) {
+                require(
+                    publicSaleMintedAmount[msg.sender] + _mintAmount <= publicSaleMaxMintAmountPerAddress,
+                    "Exceeds public sale limit per address"
+                );
+                publicSaleMintedAmount[msg.sender] += _mintAmount;
+            }
+        }
+
+        // mint NFTs from the collection contract
+        NFTCollection.externalMint{value: msg.value}(msg.sender, _mintAmount);
+    }
+
+    function setMaxSupply(uint256 _maxSupply) external onlyOwner {
+        require(_maxSupply >= NFTCollection.totalSupply(), "Cannot set below current supply");
+        maxSupply = _maxSupply;
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return NFTCollection.totalSupply();
+    }
+
+    function setMerkleRoot(bytes32 _merkleRoot) external onlyOwner {
+        merkleRoot = _merkleRoot;
+    }
+
+    function setPublicSaleMaxMintAmountPerAddress(uint256 _limit) external onlyOwner {
+        publicSaleMaxMintAmountPerAddress = _limit;
+    }
+
+    function setCost(uint256 _newCost) external onlyOwner {
+        cost = _newCost;
+    }
+
+    function setOnlyWhitelisted(bool _state) external onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    function setMaxMintAmountPerTransaction(uint256 _maxMint) external onlyOwner {
+        maxMintAmountPerTransaction = _maxMint;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function setMintCount(bool _state) public onlyOwner {
+        mintCount = _state;
+    }
+
+    function setNFTCollection(address _address) external onlyOwner {
+        require(_address != address(0), "Zero address");
+        NFTCollection = iNFTCollection(_address);
+    }
+
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "Nothing to withdraw");
+        (bool success, ) = withdrawAddress.call{value: balance}("");
+        require(success, "Withdraw failed");
+    }
+}
+```

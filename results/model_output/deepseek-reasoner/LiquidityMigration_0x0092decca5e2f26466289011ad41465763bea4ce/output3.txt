@@ -1,0 +1,328 @@
+Here is the complete implementation of the `LiquidityMigration` contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.2;
+
+contract LiquidityMigration is Timelocked, StrategyTypes {
+    using SafeERC20 for IERC20;
+
+    address public generic;
+    address public controller;
+    IStrategyProxyFactory public factory;
+
+    mapping(address => bool) public adapters;
+    mapping(address => uint256) public stakedCount;
+    mapping(address => mapping(address => uint256)) public staked;
+    mapping(address => bool) private _tempIsUnderlying;
+
+    event Staked(address adapter, address strategy, uint256 amount, address account);
+    event Migrated(address adapter, address lp, address strategy, address account);
+    event Created(address adapter, address lp, address strategy, address account);
+    event Refunded(address lp, uint256 amount, address account);
+
+    modifier onlyRegistered(address _adapter) {
+        require(adapters[_adapter], "Claimable#onlyState: not registered adapter");
+        _;
+    }
+
+    modifier onlyWhitelisted(address _adapter, address _lp) {
+        require(IAdapter(_adapter).isWhitelisted(_lp), "Claimable#onlyState: not whitelisted strategy");
+        _;
+    }
+
+    constructor(
+        address[] memory adapters_,
+        address generic_,
+        IStrategyProxyFactory factory_,
+        address controller_,
+        uint256 _unlock,
+        uint256 _modify,
+        address _owner
+    ) Timelocked(_unlock, _modify, _owner) {
+        for (uint256 i = 0; i < adapters_.length; i++) {
+            adapters[adapters_[i]] = true;
+        }
+        generic = generic_;
+        factory = factory_;
+        controller = controller_;
+    }
+
+    function stake(address _lp, uint256 _amount, address _adapter) public {
+        IERC20(_lp).safeTransferFrom(msg.sender, address(this), _amount);
+        _stake(_lp, _amount, _adapter);
+    }
+
+    function buyAndStake(
+        address _lp,
+        address _adapter,
+        address _exchange,
+        uint256 _minAmountOut,
+        uint256 _deadline
+    ) external payable {
+        uint256 balanceBefore = IERC20(_lp).balanceOf(address(this));
+        IAdapter(_adapter).buy{value: msg.value}(_lp, _exchange, _minAmountOut, _deadline);
+        uint256 balanceAfter = IERC20(_lp).balanceOf(address(this));
+        uint256 amount = balanceAfter - balanceBefore;
+        _stake(_lp, amount, _adapter);
+    }
+
+    function batchStake(
+        address[] memory _lp,
+        uint256[] memory _amount,
+        address[] memory _adapter
+    ) external {
+        require(
+            _lp.length == _amount.length && _lp.length == _adapter.length,
+            "Length mismatch"
+        );
+        for (uint256 i = 0; i < _lp.length; i++) {
+            stake(_lp[i], _amount[i], _adapter[i]);
+        }
+    }
+
+    function batchBuyAndStake(
+        address[] memory _lp,
+        uint256[] memory _amount,
+        address[] memory _adapter,
+        address[] memory _exchange,
+        uint256[] memory _minAmountOut,
+        uint256 _deadline
+    ) external payable {
+        require(
+            _lp.length == _amount.length &&
+                _lp.length == _adapter.length &&
+                _lp.length == _exchange.length &&
+                _lp.length == _minAmountOut.length,
+            "Length mismatch"
+        );
+        uint256 totalEth;
+        for (uint256 i = 0; i < _amount.length; i++) {
+            totalEth += _amount[i];
+        }
+        require(msg.value == totalEth, "Incorrect ETH amount");
+
+        for (uint256 i = 0; i < _lp.length; i++) {
+            uint256 balanceBefore = IERC20(_lp[i]).balanceOf(address(this));
+            IAdapter(_adapter[i]).buy{value: _amount[i]}(
+                _lp[i],
+                _exchange[i],
+                _minAmountOut[i],
+                _deadline
+            );
+            uint256 balanceAfter = IERC20(_lp[i]).balanceOf(address(this));
+            uint256 boughtAmount = balanceAfter - balanceBefore;
+            _stake(_lp[i], boughtAmount, _adapter[i]);
+        }
+    }
+
+    function migrate(
+        address _lp,
+        address _adapter,
+        IStrategy _strategy,
+        uint256 _slippage
+    ) external onlyUnlocked {
+        _migrate(msg.sender, _lp, _adapter, _strategy, _slippage);
+    }
+
+    function migrate(
+        address _user,
+        address _lp,
+        address _adapter,
+        IStrategy _strategy,
+        uint256 _slippage
+    ) external onlyOwner onlyUnlocked {
+        _migrate(_user, _lp, _adapter, _strategy, _slippage);
+    }
+
+    function batchMigrate(
+        address[] memory _lp,
+        address[] memory _adapter,
+        IStrategy[] memory _strategy,
+        uint256[] memory _slippage
+    ) external onlyUnlocked {
+        require(
+            _lp.length == _adapter.length &&
+                _lp.length == _strategy.length &&
+                _lp.length == _slippage.length,
+            "Length mismatch"
+        );
+        for (uint256 i = 0; i < _lp.length; i++) {
+            migrate(_lp[i], _adapter[i], _strategy[i], _slippage[i]);
+        }
+    }
+
+    function batchMigrate(
+        address[] memory _user,
+        address[] memory _lp,
+        address[] memory _adapter,
+        IStrategy[] memory _strategy,
+        uint256[] memory _slippage
+    ) external onlyOwner onlyUnlocked {
+        require(
+            _user.length == _lp.length &&
+                _user.length == _adapter.length &&
+                _user.length == _strategy.length &&
+                _user.length == _slippage.length,
+            "Length mismatch"
+        );
+        for (uint256 i = 0; i < _user.length; i++) {
+            migrate(_user[i], _lp[i], _adapter[i], _strategy[i], _slippage[i]);
+        }
+    }
+
+    function refund(address _user, address _lp) public onlyOwner {
+        _refund(_user, _lp);
+    }
+
+    function batchRefund(address[] memory _users, address _lp) public onlyOwner {
+        for (uint256 i = 0; i < _users.length; i++) {
+            refund(_users[i], _lp);
+        }
+    }
+
+    function _refund(address _user, address _lp) internal {
+        uint256 amount = staked[_lp][_user];
+        require(amount > 0, "No balance to refund");
+        staked[_lp][_user] = 0;
+        IERC20(_lp).safeTransfer(_user, amount);
+        emit Refunded(_lp, amount, _user);
+    }
+
+    function _migrate(
+        address _user,
+        address _lp,
+        address _adapter,
+        IStrategy _strategy,
+        uint256 _slippage
+    ) internal onlyRegistered(_adapter) onlyWhitelisted(_adapter, _lp) {
+        require(
+            IStrategyController(controller).initialized(address(_strategy)),
+            "Strategy not initialized"
+        );
+        uint256 amount = staked[_lp][_user];
+        require(amount > 0, "No staked balance");
+
+        IERC20(_lp).safeTransfer(generic, amount);
+
+        IAdapter.Call[] memory calls = IAdapter(_adapter).encodeMigration(
+            generic,
+            address(_strategy),
+            _lp,
+            amount
+        );
+        IStrategyController(controller).deposit(
+            _strategy,
+            IStrategyRouter(generic),
+            amount,
+            _slippage,
+            abi.encode(calls)
+        );
+
+        uint256 strategyBalance = _strategy.balanceOf(address(this));
+        require(strategyBalance > 0, "No strategy tokens received");
+        _strategy.transfer(_user, strategyBalance);
+
+        staked[_lp][_user] -= amount;
+        stakedCount[_adapter] -= 1;
+
+        emit Migrated(_adapter, _lp, address(_strategy), _user);
+    }
+
+    function _stake(
+        address _lp,
+        uint256 _amount,
+        address _adapter
+    ) internal onlyRegistered(_adapter) onlyWhitelisted(_adapter, _lp) {
+        staked[_lp][msg.sender] += _amount;
+        stakedCount[_adapter] += 1;
+        emit Staked(_adapter, _lp, _amount, msg.sender);
+    }
+
+    function createStrategy(
+        address _lp,
+        address _adapter,
+        bytes calldata data
+    ) public onlyRegistered(_adapter) onlyWhitelisted(_adapter, _lp) {
+        (
+            string memory name,
+            string memory symbol,
+            StrategyItem[] memory strategyItems,
+            InitialState memory init,
+            address router,
+            bytes memory factoryData
+        ) = abi.decode(data, (string, string, StrategyItem[], InitialState, address, bytes));
+
+        _validateItems(_adapter, _lp, strategyItems);
+
+        address strategy = factory.createStrategy{value: msg.value}(
+            msg.sender,
+            name,
+            symbol,
+            strategyItems,
+            init,
+            router,
+            factoryData
+        );
+
+        emit Created(_adapter, _lp, strategy, msg.sender);
+    }
+
+    function updateController(address _controller) external onlyOwner {
+        require(controller != _controller, "Same controller");
+        controller = _controller;
+    }
+
+    function updateGeneric(address _generic) external onlyOwner {
+        require(generic != _generic, "Same generic");
+        generic = _generic;
+    }
+
+    function updateFactory(address _factory) external onlyOwner {
+        require(address(factory) != _factory, "Same factory");
+        factory = IStrategyProxyFactory(_factory);
+    }
+
+    function addAdapter(address _adapter) external onlyOwner {
+        require(!adapters[_adapter], "Already added");
+        adapters[_adapter] = true;
+    }
+
+    function removeAdapter(address _adapter) external onlyOwner {
+        require(adapters[_adapter], "Not registered");
+        adapters[_adapter] = false;
+    }
+
+    function hasStaked(address _account, address _lp) external view returns (bool) {
+        return staked[_lp][_account] > 0;
+    }
+
+    function getStakeCount(address _adapter) external view returns (uint256) {
+        return stakedCount[_adapter];
+    }
+
+    function _validateItems(address adapter, address lp, StrategyItem[] memory strategyItems) private {
+        address[] memory outputs = IAdapter(adapter).outputTokens(lp);
+        for (uint256 i = 0; i < outputs.length; i++) {
+            _tempIsUnderlying[outputs[i]] = true;
+        }
+
+        for (uint256 i = 0; i < strategyItems.length; i++) {
+            StrategyItem memory item = strategyItems[i];
+            if (item.percentage == 0) continue;
+            require(_tempIsUnderlying[item.item], "Non-output token with non-zero percentage");
+            _tempIsUnderlying[item.item] = false;
+        }
+
+        for (uint256 i = 0; i < outputs.length; i++) {
+            require(!_tempIsUnderlying[outputs[i]], "Missing output token in strategy");
+        }
+
+        for (uint256 i = 0; i < outputs.length; i++) {
+            delete _tempIsUnderlying[outputs[i]];
+        }
+    }
+}
+```
+
+This implementation includes all the required functionality for staking, migrating, creating strategies, and handling refunds while adhering to the provided interfaces and context. The contract uses SafeERC20 for secure token transfers and implements proper access control through modifiers and ownership checks.

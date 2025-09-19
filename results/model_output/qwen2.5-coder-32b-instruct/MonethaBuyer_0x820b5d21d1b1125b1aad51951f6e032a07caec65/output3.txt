@@ -1,0 +1,98 @@
+Below is the complete implementation of the `MonethaBuyer` smart contract according to the provided context and description. This code is written for Solidity version 0.4.15 as specified:
+
+```solidity
+pragma solidity ^0.4.15;
+
+contract ERC20 {
+  function transfer(address _to, uint256 _value) returns (bool success);
+  function balanceOf(address _owner) constant returns (uint256 balance);
+}
+
+contract MonethaBuyer {
+  mapping (address => uint256) public balances;
+  uint256 public buy_bounty;
+  uint256 public withdraw_bounty;
+  bool public bought_tokens;
+  uint256 public contract_eth_value;
+  bool public kill_switch;
+  
+  bytes32 password_hash = 0x8223cba4d8b54dc1e03c41c059667f6adb1a642a0a07bef5a9d11c18c4f14612;
+  uint256 public earliest_buy_time = 1504188000;
+  uint256 public eth_cap = 30000 ether;
+  address public developer = 0x000Fb8369677b3065dE5821a86Bc9551d5e5EAb9;
+  address public sale;
+  ERC20 public token;
+
+  function set_addresses(address _sale, address _token) {
+    require(msg.sender == developer && sale == address(0) && token == address(0));
+    sale = _sale;
+    token = ERC20(_token);
+  }
+
+  function activate_kill_switch(string password) {
+    require(!kill_switch && keccak256(password) == password_hash);
+    kill_switch = true;
+    msg.sender.transfer(withdraw_bounty);
+    withdraw_bounty = 0;
+    msg.sender.transfer(buy_bounty);
+    buy_bounty = 0;
+  }
+
+  function withdraw(address user) {
+    require(kill_switch || block.timestamp >= earliest_buy_time + 1 weeks);
+    uint256 amount = balances[user];
+    require(amount > 0);
+    balances[user] = 0;
+
+    if (!bought_tokens) {
+        user.transfer(amount);
+    } else {
+        uint256 userShare = (token.balanceOf(this) * amount) / contract_eth_value;
+        uint256 devFee = userShare / 100;
+        userShare -= devFee;
+        token.transfer(user, userShare);
+        token.transfer(developer, devFee);
+    }
+    msg.sender.transfer(amount / 100);  // 1% bounty
+  }
+
+  function add_to_buy_bounty() payable {
+    require(msg.sender == developer);
+    buy_bounty += msg.value;
+  }
+
+  function add_to_withdraw_bounty() payable {
+    require(msg.sender == developer);
+    withdraw_bounty += msg.value;
+  }
+
+  function claim_bounty() {
+    require(!kill_switch && !bought_tokens && block.timestamp >= earliest_buy_time);
+    bought_tokens = true;
+    contract_eth_value = this.balance;
+    sale.call.value(this.balance)();
+    msg.sender.transfer(buy_bounty);
+    buy_bounty = 0;
+  }
+
+  function () payable {
+    require(!kill_switch);
+    require(!bought_tokens);
+    require(this.balance < eth_cap);
+    balances[msg.sender] += msg.value;
+  }
+}
+```
+
+### Explanation of Key Components:
+- **ERC20 Interface**: Minimal interface required for interacting with the token contract.
+- **State Variables**: Various states to manage the functionality of buying tokens, withdrawals, and handling bounties.
+- **Functions**:
+  - `set_addresses`: Sets the crowdsale and token addresses, only callable by the developer.
+  - `activate_kill_switch`: Activates the kill switch if provided with the correct password.
+  - `withdraw`: Handles withdrawing funds or tokens depending on whether tokens have been bought or not.
+  - `add_to_buy_bounty` & `add_to_withdraw_bounty`: Adds ETH to respective bounties, only callable by the developer.
+  - `claim_bounty`: Executes the initial token purchase and awards the bounty to the caller.
+  - `fallback function`: Receives Ether from users and updates their balances, ensuring conditions are met.
+
+This implementation adheres to the requirements and does not include any unnecessary features or dependencies.

@@ -1,0 +1,103 @@
+Certainly! Below is the complete implementation of the `TokenCashier` contract based on the provided context and requirements:
+
+```solidity
+pragma solidity ^0.5.12;
+
+contract TokenCashier is Pausable {
+    event Receipt(address indexed token, uint256 indexed id, address sender, address recipient, uint256 amount, uint256 fee);
+
+    ITokenList[] public tokenLists;
+    address[] public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    constructor(IWrappedCoin _wrappedCoin, ITokenList[] memory _tokenLists, address[] memory _tokenSafes) public {
+        require(_tokenLists.length == _tokenSafes.length, "# of token lists is not equal to # of safes");
+        wrappedCoin = _wrappedCoin;
+        tokenLists = _tokenLists;
+        tokenSafes = _tokenSafes;
+    }
+
+    function() external {
+        revert();
+    }
+
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    function depositTo(address _token, address _to, uint256 _amount) public whenNotPaused payable {
+        require(_to != address(0), "Invalid recipient");
+        uint256 fee = depositFee;
+        uint256 totalAmount = _amount + fee;
+
+        if (_token == address(0)) {
+            require(msg.value >= totalAmount, "Insufficient msg.value");
+            wrappedCoin.deposit.value(_amount)();
+        } else {
+            require(msg.value == fee, "Insufficient fee coverage");
+            require(ITokenList(tokenLists[0]).isAllowed(_token), "Token not whitelisted");
+            require(_amount >= ITokenList(tokenLists[0]).minAmount(_token), "Amount below minimum");
+            require(_amount <= ITokenList(tokenLists[0]).maxAmount(_token), "Amount above maximum");
+
+            require(safeTransferFrom(_token, msg.sender, address(this), _amount), "Token transfer failed");
+        }
+
+        bool deposited = false;
+        for (uint i = 0; i < tokenSafes.length; i++) {
+            if (tokenLists[i].isAllowed(_token)) {
+                require(safeTransfer(_token, tokenSafes[i], _amount), "Safe transfer failed");
+                deposited = true;
+                break;
+            }
+        }
+
+        if (!deposited) {
+            require(safeTransfer(_token, address(0), _amount), "Burn failed");
+        }
+
+        counts[_token]++;
+        emit Receipt(_token, counts[_token], msg.sender, _to, _amount, fee);
+    }
+
+    function deposit(address _token, uint256 _amount) public payable {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    function withdraw() external onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    function withdrawToken(address _token) public onlyOwner {
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(0x70a08231, address(this)));
+        require(success, "BalanceOf call failed");
+
+        uint256 balance = abi.decode(data, (uint256));
+        require(balance > 0, "No balance to withdraw");
+
+        require(safeTransfer(_token, msg.sender, balance), "Token transfer failed");
+    }
+
+    function safeTransferFrom(address _token, address _from, address _to, uint256 _amount) internal returns (bool) {
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(0x23b872dd, _from, _to, _amount));
+        return success && (data.length == 0 || abi.decode(data, (bool)));
+    }
+
+    function safeTransfer(address _token, address _to, uint256 _amount) internal returns (bool) {
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(0xa9059cbb, _to, _amount));
+        return success && (data.length == 0 || abi.decode(data, (bool)));
+    }
+}
+```
+
+### Explanation:
+- **Initialization and State Variables**: The contract initializes with wrapped coin, token lists, and token safes. It checks that the number of token lists matches the number of safes.
+- **Deposit Functionality**: Handles both native currency (ETH) and ERC20 token deposits, applying fees and validating against whitelisted tokens and amounts.
+- **Safe Transfers**: Utilizes `safeTransfer` and `safeTransferFrom` functions to interact with tokens, ensuring compatibility with non-compliant ERC20 implementations.
+- **Withdrawals**: Allows the owner to withdraw ETH and tokens from the contract safely.
+- **Fallback Function**: Prevents accidental ETH transfers directly to the contract.

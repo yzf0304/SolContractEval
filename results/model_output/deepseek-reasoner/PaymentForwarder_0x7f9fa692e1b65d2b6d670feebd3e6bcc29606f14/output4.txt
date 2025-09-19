@@ -1,0 +1,71 @@
+Here is the complete and functional `PaymentForwarder` contract code:
+
+```solidity
+contract PaymentForwarder is Haltable {
+  address public teamMultisig;
+  uint public totalTransferred;
+  uint public customerCount;
+  mapping(uint128 => uint) public paymentsByCustomer;
+  mapping(address => uint) public paymentsByBenefactor;
+  event PaymentForwarded(address source, uint amount, uint128 customerId, address benefactor);
+
+  function PaymentForwarder(address _owner, address _teamMultisig) {
+    teamMultisig = _teamMultisig;
+    owner = _owner;
+  }
+
+  function payWithoutChecksum(uint128 customerId, address benefactor) public stopInEmergency payable {
+    require(msg.value > 0);
+    
+    if (paymentsByCustomer[customerId] == 0) {
+      customerCount++;
+    }
+    paymentsByCustomer[customerId] += msg.value;
+    paymentsByBenefactor[benefactor] += msg.value;
+    totalTransferred += msg.value;
+    
+    teamMultisig.transfer(msg.value);
+    PaymentForwarded(msg.sender, msg.value, customerId, benefactor);
+  }
+
+  function pay(uint128 customerId, address benefactor, bytes1 checksum) public stopInEmergency payable {
+    bytes32 hash = keccak256(customerId, benefactor);
+    require(bytes1(hash) == checksum);
+    payWithoutChecksum(customerId, benefactor);
+  }
+
+  function payForMyselfWithChecksum(uint128 customerId, bytes1 checksum) public payable {
+    pay(customerId, msg.sender, checksum);
+  }
+
+  function payForMyself(uint128 customerId) public payable {
+    payWithoutChecksum(customerId, msg.sender);
+  }
+
+  function() payable {
+    revert();
+  }
+}
+```
+
+**Key Implementation Details:**
+
+1. **Payment Handling:**
+   - `payWithoutChecksum` handles core payment logic: tracks customer/benefactor payments, updates totals, and forwards ETH to `teamMultisig`
+   - Uses `teamMultisig.transfer()` for secure ETH forwarding
+   - Includes `msg.value > 0` check to prevent empty transactions
+
+2. **Checksum Verification:**
+   - `pay()` function validates checksum using first byte of `keccak256(customerId, benefactor)` hash
+   - Ensures parameters haven't been tampered with during transmission
+
+3. **Self-Payment Methods:**
+   - `payForMyself` variants automatically set `benefactor = msg.sender`
+   - Maintain consistent payment tracking while simplifying user experience
+
+4. **Safety Features:**
+   - Inherits emergency stop functionality from `Haltable`
+   - Fallback function prevents accidental ETH transfers
+   - All payment methods inherit `stopInEmergency` protection through nested calls
+
+This implementation strictly follows the provided requirements while maintaining compatibility with Solidity 0.4.18 and the original contract structure.

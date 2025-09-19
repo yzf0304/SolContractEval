@@ -1,0 +1,235 @@
+Below is the complete implementation of the `POWNFTv3` contract based on your requirements and context. Note that some functions like `generationOf`, `hashOf`, `mine`, and others have logic that needs to be implemented, but they follow the structure and requirements you provided.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface ERC721TokenReceiver {
+    function onERC721Received(address _operator, address _from, uint256 _tokenId, bytes calldata _data) external returns(bytes4);
+}
+
+interface POWNFTv2 {
+    function hashOf(uint _tokenId) external view returns(bytes32);
+    function ownerOf(uint256 _tokenId) external view returns(address);
+    function totalSupply() external view returns (uint256);
+}
+
+contract POWNFTv3 {
+
+    uint public UNMIGRATED = 0;
+    uint public V2_TOTAL = 0;
+    bytes32 public PREV_CHAIN_LAST_HASH;
+    POWNFTv2 CONTRACT_V2;
+
+    event Transfer(address indexed _from, address indexed _to, uint256 indexed _tokenId);
+    event Approval(address indexed _owner, address indexed _approved, uint256 indexed _tokenId);
+    event ApprovalForAll(address indexed _owner, address indexed _operator, bool _approved);
+    event Migrate(uint indexed _tokenId);
+    event Mined(uint indexed _tokenId, bytes32 hash);
+    event Withdraw(uint indexed _tokenId, uint value);
+
+    mapping(address => uint256) internal BALANCES;
+    mapping(uint256 => address) internal ALLOWANCE;
+    mapping(address => mapping(address => bool)) internal AUTHORISED;
+
+    bytes32[] TOKENS;
+    mapping(uint256 => address) OWNERS;
+    string private __name = "POW NFT";
+    string private __symbol = "POW";
+    bytes private __uriBase = bytes("https://www.pownftmetadata.com/t/");
+
+    mapping(address => uint[]) internal OWNER_INDEX_TO_ID;
+    mapping(uint256 => uint) internal OWNER_ID_TO_INDEX;
+    mapping(uint256 => uint) internal ID_TO_INDEX;
+    mapping(uint => uint) internal INDEX_TO_ID;
+
+    mapping(uint256 => uint256) WITHDRAWALS;
+
+    uint BASE_COST = 0.000045 ether;
+    uint BASE_DIFFICULTY = uint(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) / uint(300);
+    uint DIFFICULTY_RAMP = 3;
+
+    mapping (bytes4 => bool) internal supportedInterfaces;
+
+    constructor(address contract_v2) {
+        supportedInterfaces[0x80ac58cd] = true; // ERC721
+        supportedInterfaces[0x5b5e139f] = true; // ERC721Metadata
+        supportedInterfaces[0x780e9d63] = true; // ERC721Enumerable
+        supportedInterfaces[0x01ffc9a7] = true; // ERC165
+
+        CONTRACT_V2 = POWNFTv2(contract_v2);
+        V2_TOTAL = CONTRACT_V2.totalSupply();
+        UNMIGRATED = V2_TOTAL;
+        if (V2_TOTAL > 0) {
+            PREV_CHAIN_LAST_HASH = CONTRACT_V2.hashOf(V2_TOTAL);
+        }
+    }
+
+    function generationOf(uint _tokenId) private pure returns(uint generation) {
+        return _tokenId / 1000; // Example generation logic
+    }
+
+    function hashOf(uint _tokenId) public view returns(bytes32) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return TOKENS[ID_TO_INDEX[_tokenId]];
+    }
+
+    function migrate(uint _tokenId, uint _withdrawEthUntil) public {
+        _migrate(_tokenId);
+        withdraw(_tokenId, _withdrawEthUntil);
+    }
+
+    function _migrate(uint _tokenId) internal {
+        require(_tokenId <= V2_TOTAL, "Token ID exceeds V2 total");
+        require(CONTRACT_V2.ownerOf(_tokenId) == msg.sender, "Not the owner in V2");
+        require(!isValidToken(_tokenId), "Already migrated");
+
+        OWNERS[_tokenId] = msg.sender;
+        BALANCES[msg.sender]++;
+        uint index = TOKENS.length;
+        TOKENS.push(POWNFTv2(CONTRACT_V2).hashOf(_tokenId));
+        ID_TO_INDEX[_tokenId] = index;
+        INDEX_TO_ID[index] = _tokenId;
+
+        uint ownerTokenCount = OWNER_INDEX_TO_ID[msg.sender].length;
+        OWNER_INDEX_TO_ID[msg.sender].push(_tokenId);
+        OWNER_ID_TO_INDEX[_tokenId] = ownerTokenCount;
+        emit Migrate(_tokenId);
+    }
+
+    function migrateMultiple(uint[] calldata _tokenIds, uint[] calldata _withdrawUntil) public {
+        require(_tokenIds.length == _withdrawUntil.length, "Mismatched arrays");
+
+        for(uint i = 0; i < _tokenIds.length; i++) {
+            _migrate(_tokenIds[i]);
+            withdraw(_tokenIds[i], _withdrawUntil[i]);
+        }
+    }
+
+    function withdraw(uint _tokenId, uint _withdrawUntil) public {
+        uint amount = _withdraw(_tokenId, _withdrawUntil);
+        if(amount > 0) {
+            payable(msg.sender).transfer(amount);
+            emit Withdraw(_tokenId, amount);
+        }
+    }
+
+    function _withdraw(uint _tokenId, uint _withdrawUntil) internal returns(uint) {
+        require(isValidToken(_tokenId), "Invalid token");
+        require(_withdrawUntil >= WITHDRAWALS[_tokenId], "Already withdrawn");
+        require(block.number >= _withdrawUntil, "Cannot withdraw before block");
+
+        uint amount = (_withdrawUntil - WITHDRAWALS[_tokenId]) * 0.001 ether; // Example payout logic
+        WITHDRAWALS[_tokenId] = _withdrawUntil;
+        return amount;
+    }
+
+    function withdrawMultiple(uint[] calldata _tokenIds, uint[] calldata _withdrawUntil) public {
+        require(_tokenIds.length == _withdrawUntil.length, "Mismatched arrays");
+
+        uint totalAmount = 0;
+        for(uint i = 0; i < _tokenIds.length; i++) {
+            totalAmount += _withdraw(_tokenIds[i], _withdrawUntil[i]);
+        }
+
+        if(totalAmount > 0) {
+            payable(msg.sender).transfer(totalAmount);
+        }
+    }
+
+    function mine(uint nonce) external payable {
+        uint newTokenId = TOKENS.length;
+        uint generation = generationOf(newTokenId);
+        uint difficulty = BASE_DIFFICULTY / (DIFFICULTY_RAMP ** generation);
+        uint cost = BASE_COST * (generation + 1);
+
+        require(msg.value >= cost, "Insufficient funds");
+
+        bytes32 hash = keccak256(abi.encodePacked(nonce, newTokenId));
+        require(uint(hash) <= difficulty, "Hash does not meet difficulty");
+
+        OWNS[newTokenId] = msg.sender;
+        BALANCES[msg.sender]++;
+        TOKENS.push(hash);
+        uint index = TOKENS.length - 1;
+
+        ID_TO_INDEX[newTokenId] = index;
+        INDEX_TO_ID[index] = newTokenId;
+
+        uint ownerTokenCount = OWNER_INDEX_TO_ID[msg.sender].length;
+        OWNER_INDEX_TO_ID[msg.sender].push(newTokenId);
+        OWNER_ID_TO_INDEX[newTokenId] = ownerTokenCount;
+
+        emit Mined(newTokenId, hash);
+    }
+
+    function mint(uint tokenId, bytes32 hash) private {
+        require(!isValidToken(tokenId), "Token ID already exists");
+
+        OWNERS[tokenId] = msg.sender;
+        BALANCES[msg.sender]++;
+        TOKENS.push(hash);
+        uint index = TOKENS.length - 1;
+
+        ID_TO_INDEX[tokenId] = index;
+        INDEX_TO_ID[index] = tokenId;
+
+        uint ownerTokenCount = OWNER_INDEX_TO_ID[msg.sender].length;
+        OWNER_INDEX_TO_ID[msg.sender].push(tokenId);
+        OWNER_ID_TO_INDEX[tokenId] = ownerTokenCount;
+
+        emit Transfer(address(0), msg.sender, tokenId);
+    }
+
+    function isValidToken(uint256 _tokenId) internal view returns(bool) {
+        return OWNERS[_tokenId] != address(0);
+    }
+
+    function balanceOf(address _owner) external view returns (uint256) {
+        return BALANCES[_owner];
+    }
+
+    function ownerOf(uint256 _tokenId) public view returns(address) {
+        address owner = OWNERS[_tokenId];
+        require(owner != address(0), "Invalid token");
+        return owner;
+    }
+
+    function approve(address _approved, uint256 _tokenId) external {
+        require(msg.sender == OWNERS[_tokenId] || isApprovedForAll(OWNERS[_tokenId], msg.sender), "Not allowed to approve");
+        ALLOWANCE[_tokenId] = _approved;
+        emit Approval(OWNERS[_tokenId], _approved, _tokenId);
+    }
+
+    function getApproved(uint256 _tokenId) external view returns (address) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return ALLOWANCE[_tokenId];
+    }
+
+    function isApprovedForAll(address _owner, address _operator) external view returns (bool) {
+        return AUTHORISED[_owner][_operator];
+    }
+
+    function setApprovalForAll(address _operator, bool _approved) external {
+        AUTHORISED[msg.sender][_operator] = _approved;
+        emit ApprovalForAll(msg.sender, _operator, _approved);
+    }
+
+    function transferFrom(address _from, address _to, uint256 _tokenId) public {
+        require(msg.sender == _from || isApprovedForAll(_from, msg.sender) || ALLOWANCE[_tokenId] == msg.sender, "Not allowed to transfer");
+        require(OWNERS[_tokenId] == _from, "Not the owner");
+        require(_to != address(0), "Zero address not allowed");
+
+        BALANCES[_from]--;
+        BALANCES[_to]++;
+
+        uint lastIndex = OWNER_INDEX_TO_ID[_from].length - 1;
+        uint lastTokenId = OWNER_INDEX_TO_ID[_from][lastIndex];
+
+        if (_tokenId != lastTokenId) {
+            uint index = OWNER_ID_TO_INDEX[_tokenId];
+            OWNER_INDEX_TO_ID[_from][index] = lastTokenId;
+            OWNER_ID_TO_INDEX[lastTokenId] = index;
+        }
+
+        OWNER_INDEX_TO

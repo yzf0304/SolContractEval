@@ -1,0 +1,102 @@
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.6;
+
+contract ScammerGold is Context, Ownable, ERC20 {
+    address public slootContractAddress = 0xb12F78434AE7D12Ae548c51A5cb734Ecc4536594;
+    IERC721Enumerable public slootContract;
+
+    uint256 public scammerGoldPerTokenId = 10000 * (10**decimals());
+    uint256 public tokenIdStart = 1;
+    uint256 public tokenIdEnd = 8000;
+    uint256 public season = 0;
+
+    mapping(uint256 => mapping(uint256 => bool)) public seasonClaimedByTokenId;
+
+    constructor() Ownable() ERC20("Scammer Gold", "SGLD") {
+        transferOwnership(0x0000000000000000000000000000000000000000);
+        slootContract = IERC721Enumerable(slootContractAddress);
+    }
+
+    function claimById(uint256 tokenId) external {
+        require(tokenId >= tokenIdStart && tokenId <= tokenIdEnd, "Token ID not eligible");
+        address tokenOwner = slootContract.ownerOf(tokenId);
+        require(tokenOwner == _msgSender(), "Not the owner");
+        require(!seasonClaimedByTokenId[season][tokenId], "Already claimed this season");
+        _claim(tokenId, tokenOwner);
+    }
+
+    function claimAllForOwner() external {
+        uint256 balance = slootContract.balanceOf(_msgSender());
+        for (uint256 i = 0; i < balance; i++) {
+            uint256 tokenId = slootContract.tokenOfOwnerByIndex(_msgSender(), i);
+            if (tokenId < tokenIdStart || tokenId > tokenIdEnd) continue;
+            if (seasonClaimedByTokenId[season][tokenId]) continue;
+            address tokenOwner = slootContract.ownerOf(tokenId);
+            if (tokenOwner != _msgSender()) continue;
+            _claim(tokenId, tokenOwner);
+        }
+    }
+
+    function claimRangeForOwner(uint256 ownerIndexStart, uint256 ownerIndexEnd) external {
+        address claimant = _msgSender();
+        uint256 balance = slootContract.balanceOf(claimant);
+        require(ownerIndexStart <= ownerIndexEnd, "Start must be <= end");
+        require(ownerIndexEnd < balance, "End exceeds balance");
+        
+        for (uint256 i = ownerIndexStart; i <= ownerIndexEnd; i++) {
+            uint256 tokenId = slootContract.tokenOfOwnerByIndex(claimant, i);
+            if (tokenId < tokenIdStart || tokenId > tokenIdEnd) continue;
+            if (seasonClaimedByTokenId[season][tokenId]) continue;
+            address tokenOwner = slootContract.ownerOf(tokenId);
+            if (tokenOwner != claimant) continue;
+            _claim(tokenId, tokenOwner);
+        }
+    }
+
+    function _claim(uint256 tokenId, address tokenOwner) internal {
+        seasonClaimedByTokenId[season][tokenId] = true;
+        _mint(tokenOwner, scammerGoldPerTokenId);
+    }
+
+    function daoMint(uint256 amountDisplayValue) external onlyOwner {
+        uint256 amount = amountDisplayValue * (10**decimals());
+        _mint(owner(), amount);
+    }
+
+    function daoSetLootContractAddress(address slootContractAddress_) external onlyOwner {
+        slootContractAddress = slootContractAddress_;
+        slootContract = IERC721Enumerable(slootContractAddress_);
+    }
+
+    function daoSetTokenIdRange(uint256 tokenIdStart_, uint256 tokenIdEnd_) external onlyOwner {
+        require(tokenIdStart_ <= tokenIdEnd_, "Invalid range");
+        tokenIdStart = tokenIdStart_;
+        tokenIdEnd = tokenIdEnd_;
+    }
+
+    function daoSetSeason(uint256 season_) public onlyOwner {
+        season = season_;
+    }
+
+    function daoSetScammerGoldPerTokenId(uint256 scammerGoldDisplayValue) public onlyOwner {
+        scammerGoldPerTokenId = scammerGoldDisplayValue * (10**decimals());
+    }
+
+    function daoSetSeasonAndScammerGoldPerTokenID(uint256 season_, uint256 scammerGoldDisplayValue) external onlyOwner {
+        daoSetSeason(season_);
+        daoSetScammerGoldPerTokenId(scammerGoldDisplayValue);
+    }
+
+    receive() external payable {}
+}
+
+interface IERC721 {
+    function ownerOf(uint256 tokenId) external view returns (address);
+}
+
+interface IERC721Enumerable is IERC721 {
+    function balanceOf(address owner) external view returns (uint256);
+    function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256);
+}
+```

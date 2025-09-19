@@ -1,0 +1,257 @@
+Here is the completed ERC721A contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+contract ERC721A is Context, ERC165, IERC721, IERC721Metadata, IERC721Enumerable {
+    using Address for address;
+    using Strings for uint256;
+
+    struct TokenOwnership {
+        address addr;
+        uint64 startTimestamp;
+    }
+
+    struct AddressData {
+        uint128 balance;
+        uint128 numberMinted;
+    }
+
+    uint256 internal currentIndex;
+
+    string private _name;
+    string private _symbol;
+
+    mapping(uint256 => TokenOwnership) internal _ownerships;
+    mapping(address => AddressData) private _addressData;
+    mapping(uint256 => address) private _tokenApprovals;
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+
+    constructor(string memory name_, string memory symbol_) {
+        _name = name_;
+        _symbol = symbol_;
+    }
+
+    function totalSupply() public view override returns (uint256) {
+        return currentIndex;
+    }
+
+    function tokenByIndex(uint256 index) public view override returns (uint256) {
+        require(index < currentIndex, "ERC721A: index out of bounds");
+        return index;
+    }
+
+    function tokenOfOwnerByIndex(address owner, uint256 index) public view override returns (uint256) {
+        require(index < balanceOf(owner), "ERC721A: owner index out of bounds");
+        uint256 count;
+        for (uint256 i = 0; i < currentIndex; i++) {
+            if (owner == ownerOf(i)) {
+                if (count == index) return i;
+                count++;
+            }
+        }
+        revert("ERC721A: owner index out of bounds");
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return
+            interfaceId == type(IERC721).interfaceId ||
+            interfaceId == type(IERC721Metadata).interfaceId ||
+            interfaceId == type(IERC721Enumerable).interfaceId ||
+            super.supportsInterface(interfaceId);
+    }
+
+    function balanceOf(address owner) public view override returns (uint256) {
+        require(owner != address(0), "ERC721A: balance query for zero address");
+        return uint256(_addressData[owner].balance);
+    }
+
+    function _numberMinted(address owner) internal view returns (uint256) {
+        require(owner != address(0), "ERC721A: minted query for zero address");
+        return uint256(_addressData[owner].numberMinted);
+    }
+
+    function ownershipOf(uint256 tokenId) internal view returns (TokenOwnership memory) {
+        require(tokenId < currentIndex, "ERC721A: owner query for nonexistent token");
+        for (uint256 curr = tokenId; ; curr--) {
+            TokenOwnership memory ownership = _ownerships[curr];
+            if (ownership.addr != address(0)) {
+                return ownership;
+            }
+            if (curr == 0) break;
+        }
+        revert("ERC721A: unable to determine owner");
+    }
+
+    function ownerOf(uint256 tokenId) public view override returns (address) {
+        return ownershipOf(tokenId).addr;
+    }
+
+    function name() public view virtual override returns (string memory) {
+        return _name;
+    }
+
+    function symbol() public view virtual override returns (string memory) {
+        return _symbol;
+    }
+
+    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+        require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+        string memory baseURI = _baseURI();
+        return bytes(baseURI).length > 0 ? string(abi.encodePacked(baseURI, tokenId.toString())) : "";
+    }
+
+    function _baseURI() internal view virtual returns (string memory) {
+        return "";
+    }
+
+    function approve(address to, uint256 tokenId) public override {
+        address owner = ownerOf(tokenId);
+        require(to != owner, "ERC721A: approval to current owner");
+        require(
+            _msgSender() == owner || isApprovedForAll(owner, _msgSender()),
+            "ERC721A: approve caller is not owner nor approved"
+        );
+        _approve(to, tokenId, owner);
+    }
+
+    function getApproved(uint256 tokenId) public view override returns (address) {
+        require(_exists(tokenId), "ERC721A: approved query for nonexistent token");
+        return _tokenApprovals[tokenId];
+    }
+
+    function setApprovalForAll(address operator, bool approved) public override {
+        require(operator != _msgSender(), "ERC721A: approve to caller");
+        _operatorApprovals[_msgSender()][operator] = approved;
+        emit ApprovalForAll(_msgSender(), operator, approved);
+    }
+
+    function isApprovedForAll(address owner, address operator) public view virtual override returns (bool) {
+        return _operatorApprovals[owner][operator];
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public virtual override {
+        require(_isApprovedOrOwner(_msgSender(), tokenId, from), "ERC721A: transfer caller is not owner nor approved");
+        _transfer(from, to, tokenId);
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId) public virtual override {
+        safeTransferFrom(from, to, tokenId, "");
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public override {
+        transferFrom(from, to, tokenId);
+        require(_checkOnERC721Received(from, to, tokenId, _data), "ERC721A: transfer to non ERC721Receiver");
+    }
+
+    function _exists(uint256 tokenId) internal view returns (bool) {
+        return tokenId < currentIndex;
+    }
+
+    function _safeMint(address to, uint256 quantity) internal {
+        _safeMint(to, quantity, "");
+    }
+
+    function _safeMint(address to, uint256 quantity, bytes memory _data) internal {
+        _mint(to, quantity, _data, true);
+    }
+
+    function _mint(address to, uint256 quantity, bytes memory _data, bool safe) internal {
+        require(to != address(0), "ERC721A: mint to zero address");
+        require(quantity > 0, "ERC721A: quantity must be positive");
+        
+        uint256 startTokenId = currentIndex;
+        _beforeTokenTransfers(address(0), to, startTokenId, quantity);
+
+        unchecked {
+            _addressData[to].balance += uint128(quantity);
+            _addressData[to].numberMinted += uint128(quantity);
+            
+            _ownerships[startTokenId] = TokenOwnership(to, uint64(block.timestamp));
+            
+            uint256 end = startTokenId + quantity;
+            currentIndex = end;
+
+            for (uint256 i = startTokenId; i < end; i++) {
+                emit Transfer(address(0), to, i);
+            }
+        }
+
+        _afterTokenTransfers(address(0), to, startTokenId, quantity);
+
+        if (safe) {
+            for (uint256 i = startTokenId; i < currentIndex; i++) {
+                require(
+                    _checkOnERC721Received(address(0), to, i, _data),
+                    "ERC721A: transfer to non ERC721Receiver"
+                );
+            }
+        }
+    }
+
+    function _transfer(address from, address to, uint256 tokenId) private {
+        TokenOwnership memory prevOwnership = ownershipOf(tokenId);
+        require(prevOwnership.addr == from, "ERC721A: transfer from incorrect owner");
+        require(to != address(0), "ERC721A: transfer to zero address");
+
+        _beforeTokenTransfers(from, to, tokenId, 1);
+
+        _approve(address(0), tokenId, from);
+
+        unchecked {
+            _addressData[from].balance -= 1;
+            _addressData[to].balance += 1;
+            _ownerships[tokenId] = TokenOwnership(to, uint64(block.timestamp));
+
+            uint256 nextTokenId = tokenId + 1;
+            if (_ownerships[nextTokenId].addr == address(0) && nextTokenId < currentIndex) {
+                _ownerships[nextTokenId] = TokenOwnership(from, prevOwnership.startTimestamp);
+            }
+        }
+
+        emit Transfer(from, to, tokenId);
+        _afterTokenTransfers(from, to, tokenId, 1);
+    }
+
+    function _approve(address to, uint256 tokenId, address owner) private {
+        _tokenApprovals[tokenId] = to;
+        emit Approval(owner, to, tokenId);
+    }
+
+    function _checkOnERC721Received(address from, address to, uint256 tokenId, bytes memory _data) private returns (bool) {
+        if (to.isContract()) {
+            try IERC721Receiver(to).onERC721Received(_msgSender(), from, tokenId, _data) returns (bytes4 retval) {
+                return retval == IERC721Receiver.onERC721Received.selector;
+            } catch (bytes memory reason) {
+                if (reason.length == 0) revert("ERC721A: transfer to non ERC721Receiver");
+                assembly {
+                    revert(add(32, reason), mload(reason))
+                }
+            }
+        }
+        return true;
+    }
+
+    function _isApprovedOrOwner(address spender, uint256 tokenId, address from) private view returns (bool) {
+        require(_exists(tokenId), "ERC721A: operator query for nonexistent token");
+        address owner = ownerOf(tokenId);
+        return (spender == owner || getApproved(tokenId) == spender || isApprovedForAll(owner, spender));
+    }
+
+    function _beforeTokenTransfers(address from, address to, uint256 startTokenId, uint256 quantity) internal virtual {}
+    function _afterTokenTransfers(address from, address to, uint256 startTokenId, uint256 quantity) internal virtual {}
+}
+```
+
+This implementation:
+1. Implements all required ERC721 interfaces including enumeration
+2. Uses efficient batch minting with O(1) ownership storage per batch
+3. Handles token transfers with adjacent ownership updates
+4. Includes safe minting and transfer checks
+5. Maintains ERC721 metadata and enumeration functionality
+6. Uses optimized storage patterns similar to the original ERC721A specification
+7. Includes all necessary override functions from the interfaces
+8. Maintains compatibility with OpenZeppelin utility libraries
+
+The contract follows ERC721A's gas optimization patterns while maintaining full ERC721 compliance and enumeration functionality as required by the problem statement.

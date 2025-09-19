@@ -1,0 +1,101 @@
+Below is the completed implementation of the `CZRLocker` contract strictly based on the provided context and description using Solidity version `0.4.18`. The code adheres to the requirements specified in the comments.
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract CZRLocker is owned {
+    address public tokenAddr;
+    address public unlocker;
+
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+    event RemoveLock(address addr, uint index);
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        require(amount > 0, "Amount must be greater than zero");
+        require(lockMonth > 0, "Lock duration must be greater than zero");
+
+        LockedCZR memory newLock = LockedCZR({
+            startLockTime: startLockTime == 0 ? now : startLockTime,
+            lockMonth: lockMonth,
+            lockedAmount: amount,
+            unlockedAmount: 0
+        });
+
+        lockedCZRMap[addr].push(newLock);
+        emit AddLock(addr, lockedCZRMap[addr].length - 1, newLock.startLockTime, newLock.lockMonth, newLock.lockedAmount);
+    }
+
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length, "Invalid lock index");
+
+        delete lockedCZRMap[addr][index];
+        emit RemoveLock(addr, index);
+    }
+
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker, "Caller is not authorized");
+        require(lockedCZRMap[addr].length > 0, "No locks found for address");
+
+        uint processed = 0;
+
+        for (uint i = 0; i < lockedCZRMap[addr].length; i++) {
+            if (limit > 0 && processed >= limit) {
+                break;
+            }
+
+            LockedCZR storage lock = lockedCZRMap[addr][i];
+
+            uint monthsPassed = (now - lock.startLockTime) / 30 days;
+            uint unlockableAmount = monthsPassed * (lock.lockedAmount / lock.lockMonth) - lock.unlockedAmount;
+
+            if (unlockableAmount > 0) {
+                require(token(tokenAddr).transferFrom(owner, addr, unlockableAmount), "Token transfer failed");
+                
+                lock.unlockedAmount += unlockableAmount;
+                emit Unlock(addr, i, unlockableAmount);
+                processed++;
+            }
+        }
+    }
+
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        require(to != address(0), "Invalid address");
+        require(value > 0 && this.balance >= value, "Insufficient ETH balance");
+
+        to.transfer(value);
+    }
+
+    function() payable public {
+        // Fallback function to receive ETH
+    }
+}
+```
+
+### Explanation:
+1. **Constructor:** Initializes the contract with the CZR token address and the unlocker address. Sets up the `tokenAddr` and `unlocker` variables.
+2. **`addCZRLock`:** Allows the owner to create a lock for a specific address, specifying the lock start time, amount locked, and duration in months. Emits the `AddLock` event.
+3. **`removeCZRLock`:** Allows the owner to remove a specific lock by deleting it from the `lockedCZRMap`. Emits the `RemoveLock` event.
+4. **`unlockCZR`:** Unlocks CZR tokens for a user based on time passed since the lock start. Processes up to `limit` locks (if specified). Calculates unlockable tokens for each lock, logs the unlocking, and transfers tokens. Emits the `Unlock` event.
+5. **`withdrawEth`:** Allows the owner to withdraw ETH from the contract to a specified address. Performs input checks.
+6. **Fallback function:** Allows the contract to receive ETH. This function does not perform any other operations, adhering to its definition.
+
+### Constraints:
+- The `unlockCZR` function checks permissions to ensure only the `owner` or `unlocker` can invoke it.
+- The contract is optimized for version `0.4.18` and avoids introducing new contracts or libraries.
+
+This implementation matches the requirements outlined in the description.

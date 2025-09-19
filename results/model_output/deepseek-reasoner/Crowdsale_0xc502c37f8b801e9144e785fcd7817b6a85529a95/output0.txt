@@ -1,0 +1,121 @@
+Here is the completed code for the Crowdsale contract:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract Crowdsale is Ownable {
+  using SafeMath for uint256;
+
+  DragonToken public token;
+  address public tokenReserve;
+  uint256 public startTime;
+  uint256 public endTime;
+  address public wallet;
+  uint256 public rate;
+  uint256 public weiRaised;
+  uint256 public tokensSold;
+  mapping(address => uint256) public balances;
+  mapping(address => uint256) public releaseTime;
+
+  function Crowdsale() public {
+    owner = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    startTime = now;
+    endTime = 1521187200;
+    rate = 5000000000000000;
+    wallet = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    token = DragonToken(0x814F67fA286f7572B041D041b1D99b432c9155Ee);
+    tokenReserve = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+  }
+
+  function () external payable {
+    buyTokens(msg.sender);
+  }
+
+  function buyTokens(address beneficiary) public payable {
+    require(beneficiary != address(0));
+    require(validPurchase());
+
+    uint256 weiAmount = msg.value;
+    uint256 tokens = getTokenAmount(weiAmount);
+
+    weiRaised = weiRaised.add(weiAmount);
+    tokensSold = tokensSold.add(tokens);
+
+    uint256 time = assignTokens(beneficiary, tokens);
+    
+    TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, time);
+    forwardFunds();
+  }
+
+  function hasEnded() public view returns (bool) {
+    return now > endTime;
+  }
+
+  function getTokenAmount(uint256 weiAmount) internal view returns(uint256) {
+    return weiAmount.div(rate);
+  }
+
+  function forwardFunds() internal {
+    wallet.transfer(msg.value);
+  }
+
+  function validPurchase() internal view returns (bool) {
+    bool withinPeriod = now >= startTime && now <= endTime;
+    bool nonZeroPurchase = msg.value != 0;
+    return withinPeriod && nonZeroPurchase;
+  }
+
+  function updateEndTime(uint256 newTime) onlyOwner external {
+    require(newTime > startTime);
+    endTime = newTime;
+    EndTimeUpdated();
+  }
+
+  function updateDragonPrice(uint256 weiAmount) onlyOwner external {
+    rate = weiAmount;
+    DragonPriceUpdated();
+  }
+
+  function assignTokens(address beneficiary, uint256 amount) private returns(uint256) {
+    balances[beneficiary] = balances[beneficiary].add(amount);
+    uint256 newRelease = now + 30 days;
+    if (newRelease > releaseTime[beneficiary]) {
+        releaseTime[beneficiary] = newRelease;
+    }
+    return releaseTime[beneficiary];
+  }
+
+  function balanceOf(address _owner) public view returns (uint256) {
+    return balances[_owner];
+  }
+
+  function unlockTime(address _owner) public view returns (uint256) {
+    return releaseTime[_owner];
+  }
+
+  function releaseDragonTokens() public {
+    require(now >= releaseTime[msg.sender]);
+    require(balances[msg.sender] > 0);
+
+    uint256 amount = balances[msg.sender];
+    balances[msg.sender] = 0;
+    require(token.transferFrom(tokenReserve, msg.sender, amount));
+    
+    TokenReleased(msg.sender, amount);
+  }
+}
+```
+
+**Key Features:**
+1. **Token Lockup:** Purchased tokens are locked for 30 days from the time of purchase
+2. **Timed Sale:** Controlled by startTime and endTime parameters
+3. **Price Adjustments:** Owner can update token price (rate) during sale
+4. **Flexible Duration:** Owner can extend sale end time if needed
+5. **Secure Transfers:** Uses SafeMath for arithmetic operations
+6. **Token Release:** Users can claim tokens after lock period expires
+
+**Important Considerations:**
+- The token reserve must approve the crowdsale contract to transfer tokens
+- All time calculations use blockchain timestamp (now)
+- Users must manually call releaseDragonTokens after lockup period
+- Fallback function allows direct ETH transfers for token purchases

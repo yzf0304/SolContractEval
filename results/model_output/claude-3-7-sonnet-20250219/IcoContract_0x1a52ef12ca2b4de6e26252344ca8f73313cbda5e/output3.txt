@@ -1,0 +1,178 @@
+# Bonus Contract Implementation
+
+```solidity
+/**
+ * @notice This contract manages the bonus distribution for an ICO, allowing the owner to enable or disable bonuses,
+ *         calculate bonuses based on time and ETH amount, and manage bonus balances for participants.
+ * @dev This contract inherits from IcoPhase and Ownable. It uses SafeMath for arithmetic operations.
+ */
+contract Bonus is IcoPhase, Ownable {
+
+    using SafeMath for uint256;
+
+    //decimals of tokens
+    uint256 constant decimals = 18;
+
+    //enable/disable
+    bool public isBonus;
+
+    //storage
+    mapping(address => uint256) public bonusAccountBalances;
+    mapping(uint256 => address) public bonusAccountIndex;
+    uint256 public bonusAccountCount;
+
+    /**
+     * @notice Initializes the contract with bonuses enabled.
+     * @dev Constructor sets the initial state of the contract.
+     */
+    function Bonus() public {
+        isBonus = true;
+    }
+
+    /**
+     * @notice Enables the bonus system.
+     * @dev Can only be called by the contract owner and when bonuses are currently disabled.
+     * @return A boolean indicating the success of the operation.
+     */
+    function enableBonus() public onlyOwner returns (bool) {
+        require(!isBonus);
+        isBonus = true;
+        return true;
+    }
+
+    /**
+     * @notice Disables the bonus system.
+     * @dev Can only be called by the contract owner and when bonuses are currently enabled.
+     * @return A boolean indicating the success of the operation.
+     */
+    function disableBonus() public onlyOwner returns (bool) {
+        require(isBonus);
+        isBonus = false;
+        return true;
+    }
+
+    /**
+     * @notice Gets the bonus percentage based on the current time.
+     * @dev Checks the current time against predefined phases and returns the corresponding bonus percentage.
+     * @return The bonus percentage as a uint256.
+     */
+    function getBonusByTime() public constant returns(uint256) {
+        if (!isBonus) {
+            return 0;
+        }
+
+        uint256 currentTime = now;
+
+        // Presale phase: 50% bonus
+        if (currentTime >= phasePresale_From && currentTime <= phasePresale_To) {
+            return 50;
+        }
+        
+        // Public Sale phase 1: 30% bonus
+        if (currentTime >= phasePublicSale1_From && currentTime <= phasePublicSale1_To) {
+            return 30;
+        }
+        
+        // Public Sale phase 2: 20% bonus
+        if (currentTime >= phasePublicSale2_From && currentTime <= phasePublicSale2_To) {
+            return 20;
+        }
+        
+        // Public Sale phase 3: 10% bonus
+        if (currentTime >= phasePublicSale3_From && currentTime <= phasePublicSale3_To) {
+            return 10;
+        }
+        
+        // No bonus for other times
+        return 0;
+    }
+
+    /**
+     * @notice Calculates the bonus amount based on the provided ETH value.
+     * @dev Determines the bonus amount based on the current phase and the provided ETH value.
+     * @param _value The amount of ETH to convert to a bonus.
+     * @return The bonus amount as a uint256.
+     */
+    function getBonusByETH(uint256 _value) public constant returns(uint256) {
+        if (!isBonus || _value == 0) {
+            return 0;
+        }
+
+        uint256 bonusPercentage = getBonusByTime();
+        
+        // Calculate additional volume bonus
+        uint256 volumeBonus = 0;
+        
+        // Additional bonus based on ETH value
+        if (_value >= 100 ether) {
+            volumeBonus = 10; // 10% additional bonus for 100+ ETH
+        } else if (_value >= 50 ether) {
+            volumeBonus = 5;  // 5% additional bonus for 50-99 ETH
+        } else if (_value >= 20 ether) {
+            volumeBonus = 3;  // 3% additional bonus for 20-49 ETH
+        } else if (_value >= 10 ether) {
+            volumeBonus = 2;  // 2% additional bonus for 10-19 ETH
+        }
+        
+        // Total bonus percentage
+        uint256 totalBonusPercentage = bonusPercentage.add(volumeBonus);
+        
+        // Calculate and return bonus amount
+        return _value.mul(totalBonusPercentage).div(100);
+    }
+
+    /**
+     * @notice Returns the bonus balance of a specific account.
+     * @dev Fetches the bonus balance from the storage mapping.
+     * @param _owner The address of the account to check the bonus balance for.
+     * @return The bonus balance as a uint256.
+     */
+    function balanceBonusOf(address _owner) public constant returns (uint256 balance) {
+        return bonusAccountBalances[_owner];
+    }
+
+    /**
+     * @notice Pays a bonus to a specified address.
+     * @dev Only the contract owner can call this function. The actual implementation of paying the bonus should be defined.
+     * @param _address The address to which the bonus will be paid.
+     * @return A boolean indicating the success of the operation.
+     */
+    function payBonusToAddress(address _address) public onlyOwner returns (bool success) {
+        require(_address != address(0));
+        
+        uint256 bonusAmount = bonusAccountBalances[_address];
+        require(bonusAmount > 0);
+        
+        // Reset the bonus balance before transfer to prevent re-entrancy attacks
+        bonusAccountBalances[_address] = 0;
+        
+        // Transfer the bonus amount
+        _address.transfer(bonusAmount);
+        
+        return true;
+    }
+
+    /**
+     * @notice Fallback function to receive Ether.
+     * @dev This function allows the contract to receive Ether.
+     */
+    function() public payable {
+        // Allow contract to receive ETH
+        if (isBonus && msg.value > 0) {
+            // If this is a new address, add it to the index
+            if (bonusAccountBalances[msg.sender] == 0) {
+                bonusAccountIndex[bonusAccountCount] = msg.sender;
+                bonusAccountCount = bonusAccountCount.add(1);
+            }
+            
+            // Calculate bonus for this contribution
+            uint256 bonusAmount = getBonusByETH(msg.value);
+            
+            // Add to user's bonus balance
+            bonusAccountBalances[msg.sender] = bonusAccountBalances[msg.sender].add(bonusAmount);
+        }
+    }
+}
+```
+
+Note: In Solidity 0.4.18, the function was called `function()` rather than `receive()` as the `receive()` function was introduced in later Solidity versions. I've implemented the fallback function following the 0.4.18 convention.

@@ -1,0 +1,179 @@
+```solidity
+pragma solidity ^0.4.18;
+
+import "./SafeMath.sol";
+import "./Discounts.sol";
+import "./Limits.sol";
+import "./SeeToken.sol";
+import "./Pausable.sol";
+import "./Claimable.sol";
+
+contract Presale is Claimable, Pausable {
+
+  using Discounts for Discounts.Collection;
+  using Limits for Limits.Window;
+  using SafeMath for uint256;
+
+  struct Participant {
+    bool authorized;
+    uint256 minimumTier;
+  }
+
+  SeeToken public token;
+  Discounts.Collection public discounts;
+  Limits.Window public cap;
+  mapping (address => Participant) public participants;
+
+  event Tier(uint256 discount, uint256 available);
+
+  function Presale(address _token)
+    public
+  {
+    token = SeeToken(_token);
+    paused = true;
+  }
+
+  function claimToken() public onlyOwner {
+    token.claimOwnership();
+  }
+
+  function unpause()
+    onlyOwner
+    whenPaused
+    whenRateSet
+    whenCapped
+    whenOwnsToken
+    public
+  {
+    super.unpause();
+  }
+
+  function setRate(uint256 _purchaseRate)
+    onlyOwner
+    whenPaused
+    public
+  {
+    discounts.baseRate = _purchaseRate;
+  }
+
+  function limitPurchasing(uint256 _amount, uint256 _duration)
+    onlyOwner
+    whenPaused
+    public
+  {
+    cap.amount = _amount;
+    cap.duration = _duration;
+  }
+
+  function addTier(uint256 _discount, uint256 _available)
+    onlyOwner
+    whenPaused
+    public
+  {
+    discounts.addTier(_discount, _available);
+    emit Tier(_discount, _available);
+  }
+
+  function authorizeForTier(uint256 _minimumTier, address[] _authorized)
+    onlyOwner
+    public
+  {
+    for (uint256 i = 0; i < _authorized.length; i++) {
+      participants[_authorized[i]].authorized = true;
+      participants[_authorized[i]].minimumTier = _minimumTier;
+    }
+  }
+
+  function withdraw()
+    onlyOwner
+    public
+  {
+    owner.transfer(address(this).balance);
+  }
+
+  function ()
+    public
+    payable
+  {
+    purchaseTokens();
+  }
+
+  function purchaseTokens()
+    onlyAuthorized
+    whenNotPaused
+    public
+    payable
+  {
+    Participant storage participant = participants[msg.sender];
+    uint256 amount = msg.value.mul(discounts.baseRate);
+    (uint256 purchased, uint256 remainingFunds) = discounts.purchaseTokens(amount, msg.value, participant.minimumTier);
+    require(purchased > 0);
+
+    cap.recordPurchase(msg.sender, purchased);
+    token.issue(msg.sender, purchased);
+
+    if (remainingFunds > 0) {
+      msg.sender.transfer(remainingFunds);
+    }
+  }
+
+  function getPurchaseLimit()
+    public
+    view
+    returns (uint256 _amount, uint256 _duration)
+  {
+    return (cap.amount, cap.duration);
+  }
+
+  function getTiers()
+    public
+    view
+    returns (uint256[2][])
+  {
+    uint256[2][] memory tierData = new uint256[2][](discounts.tiers.length);
+    for (uint256 i = 0; i < discounts.tiers.length; i++) {
+      tierData[i][0] = discounts.tiers[i].discount;
+      tierData[i][1] = discounts.tiers[i].available;
+    }
+    return tierData;
+  }
+
+  function getAvailability(address _participant)
+    public
+    view
+    returns (uint256[])
+  {
+    if (!participants[_participant].authorized) {
+      return new uint256[](0);
+    }
+
+    uint256[] memory availability = new uint256[](discounts.tiers.length);
+    for (uint256 i = participants[_participant].minimumTier; i < discounts.tiers.length; i++) {
+      availability[i] = discounts.tiers[i].available;
+    }
+    return availability;
+  }
+
+  modifier onlyAuthorized() {
+    require(participants[msg.sender].authorized);
+    _;
+  }
+
+  modifier whenRateSet() {
+    require(discounts.baseRate != 0);
+    _;
+  }
+
+  modifier whenCapped() {
+    require(cap.amount != 0);
+    _;
+  }
+
+  modifier whenOwnsToken() {
+    require(token.owner() == address(this));
+    _;
+  }
+}
+```
+
+This `Presale` contract leverages various features such as tiered discounts, purchasing limits, and participant authorization. It includes essential admin functions for setting rates, limits, adding tiers, and authorizing participants. It also provides functions for purchasing tokens with checks on availability and participant authorization. The design includes modifiers for contract state checks such as being paused and owning the token contract.

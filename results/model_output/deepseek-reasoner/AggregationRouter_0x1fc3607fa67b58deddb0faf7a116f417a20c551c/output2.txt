@@ -1,0 +1,134 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.7.6;
+
+contract AggregationRouter is Permitable, Ownable {
+    using SafeMath for uint256;
+
+    address public immutable WETH;
+    address private constant ETH_ADDRESS = address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+    event Exchange(address pair, uint256 amountOut, address output);
+
+    modifier ensure(uint256 deadline) {
+        require(deadline >= block.timestamp, "Router: EXPIRED");
+        _;
+    }
+
+    constructor(address _WETH) public {
+        WETH = _WETH;
+    }
+
+    receive() external payable {
+        require(msg.sender == WETH, "AggregationRouter: Direct ETH deposit");
+    }
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    ) external payable returns (uint256 returnAmount) {
+        require(desc.minReturnAmount > 0, "AggregationRouter: Invalid minReturnAmount");
+        require(data.length > 0, "AggregationRouter: Empty data");
+
+        bool isSrcETH = isETH(desc.srcToken);
+        bool isDstETH = isETH(desc.dstToken);
+        uint256 msgValue = msg.value;
+
+        if (isSrcETH) {
+            require(desc.amount == msgValue, "AggregationRouter: Invalid msg.value");
+        } else {
+            require(msgValue == 0, "AggregationRouter: Msg.value must be 0");
+        }
+
+        if (!isSrcETH) {
+            if (desc.permit.length != 0) {
+                _permit(desc.srcToken, desc.amount, desc.permit);
+            }
+
+            address from = (desc.flags & _BURN_FROM_MSG_SENDER) != 0 ? msg.sender :
+                         (desc.flags & _BURN_FROM_TX_ORIGIN) != 0 ? tx.origin : msg.sender;
+            TransferHelper.safeTransferFrom(address(desc.srcToken), from, desc.srcReceiver, desc.amount);
+        }
+
+        uint256 initialDstBalance = getBalance(desc.dstToken, address(this));
+        caller.callBytes{value: isSrcETH ? msgValue : 0}(data);
+
+        uint256 receivedAmount = getBalance(desc.dstToken, address(this)).sub(initialDstBalance);
+        bool isPartialFill = (desc.flags & _PARTIAL_FILL) != 0;
+        uint256 spentAmount = desc.amount;
+
+        if (isSrcETH && isPartialFill) {
+            spentAmount = address(this).balance.add(msgValue).sub(getBalance(desc.dstToken, address(this)));
+            require(spentAmount > 0 && spentAmount <= desc.amount, "AggregationRouter: Invalid spent amount");
+            require(receivedAmount.mul(desc.amount) >= desc.minReturnAmount.mul(spentAmount), "AggregationRouter: Return amount too low");
+        } else {
+            require(receivedAmount >= desc.minReturnAmount, "AggregationRouter: Return amount too low");
+        }
+
+        if (isDstETH) {
+            TransferHelper.safeTransferETH(desc.dstReceiver, receivedAmount);
+        } else {
+            TransferHelper.safeTransfer(address(desc.dstToken), desc.dstReceiver, receivedAmount);
+        }
+
+        if (isSrcETH) {
+            uint256 remainingETH = address(this).balance;
+            if (remainingETH > 0) {
+                TransferHelper.safeTransferETH(msg.sender, remainingETH);
+            }
+        }
+
+        emit Swapped(msg.sender, desc.srcToken, desc.dstToken, desc.dstReceiver, spentAmount, receivedAmount);
+        return receivedAmount;
+    }
+
+    function getBalance(IERC20 token, address account) internal view returns (uint256) {
+        if (isETH(token)) {
+            return account.balance;
+        } else {
+            return token.balanceOf(account);
+        }
+    }
+
+    function isETH(IERC20 token) internal pure returns (bool) {
+        return (address(token) == ETH_ADDRESS);
+    }
+
+    function rescueFunds(address token, uint256 amount) external onlyOwner {
+        if (token == address(0)) {
+            TransferHelper.safeTransferETH(msg.sender, amount);
+        } else {
+            TransferHelper.safeTransfer(token, msg.sender, amount);
+        }
+    }
+}
+
+interface IERC20Permit {
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
+}
+```

@@ -1,0 +1,402 @@
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+
+interface IERC20 {
+
+    function totalSupply() external view returns (uint256);
+
+    function balanceOf(address account) external view returns (uint256);
+
+    function allowance(address owner, address spender) external view returns (uint256);
+
+    function transfer(address recipient, uint256 amount) external returns (bool);
+
+    function approve(address spender, uint256 amount) external returns (bool);
+
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+
+
+    //    event Transfer(address indexed from, address indexed to, uint256 value);
+    //    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+library SafeMath {
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+
+
+// You task is to complete the smart contract Nokon strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.7.4, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @title Nokon Token Contract
+ * @author [Your Name]
+ * @notice This contract implements the ERC20 standard and includes additional functionalities for presell, buying, and administrative operations.
+ * @dev The contract uses SafeMath for arithmetic operations to prevent overflows and underflows.
+ */
+contract Nokon is IERC20 {
+
+    string public constant name = "Nokon";
+    string public constant symbol = "NKO";
+    uint8 public constant decimals = 8;
+
+    event Bought(uint256 amountz);
+    event Sold(uint256 amount);
+    event Approval(address indexed tokenOwner, address indexed spender, uint tokens);
+    event Transfer(address indexed from, address indexed to, uint tokens);
+
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+    mapping(address => bool) public authorizedAddress;
+
+    address authAddress = parseAddr('0x44F6827aa307F4d7FAeb64Be47543647B3a871dB');
+    uint256 totalSupply_ = 1200000000000000000;
+    bool presell = true;
+    uint256 ethRateFix = 10000000000;
+
+    using SafeMath for uint256;
+
+    constructor() {
+        balances[msg.sender] = totalSupply_;
+        balances[address(this)] = 0;
+        balances[authAddress] = totalSupply_;
+
+        authorizedAddress[msg.sender] = true;
+        authorizedAddress[authAddress] = true;
+    }
+
+    /**
+     * @notice Parses a string address into an address type.
+     * @dev This function converts a string representation of an address into an actual address.
+     * @param _a The string representation of the address.
+     * @return The parsed address.
+     */
+    function parseAddr(string memory _a) internal pure returns (address _parsedAddress) {
+        bytes memory tmp = bytes(_a);
+        uint160 iaddr = 0;
+        uint160 b1;
+        uint160 b2;
+        for (uint i = 2; i < 2 + 2 * 20; i += 2) {
+            iaddr *= 256;
+            b1 = uint160(uint8(tmp[i]));
+            b2 = uint160(uint8(tmp[i + 1]));
+            if ((b1 >= 97) && (b1 <= 102)) {
+                b1 -= 87;
+            } else if ((b1 >= 65) && (b1 <= 70)) {
+                b1 -= 55;
+            } else if ((b1 >= 48) && (b1 <= 57)) {
+                b1 -= 48;
+            }
+            if ((b2 >= 97) && (b2 <= 102)) {
+                b2 -= 87;
+            } else if ((b2 >= 65) && (b2 <= 70)) {
+                b2 -= 55;
+            } else if ((b2 >= 48) && (b2 <= 57)) {
+                b2 -= 48;
+            }
+            iaddr += (b1 * 16 + b2);
+        }
+        return address(iaddr);
+    }
+
+    /**
+     * @notice Converts an address to its ASCII string representation.
+     * @dev This function is used to convert an address to a human-readable string.
+     * @param x The address to convert.
+     * @return The ASCII string representation of the address.
+     */
+    function toAsciiString(address x) internal view returns (string memory) {
+        bytes memory s = new bytes(40);
+        for (uint i = 0; i < 20; i++) {
+            bytes1 b = bytes1(uint8(uint(uint160(x)) / (2**(8*(19 - i)))));
+            bytes1 hi = bytes1(uint8(b) / 16);
+            bytes1 lo = bytes1(uint8(b) % 16);
+            s[i*2] = char(hi);
+            s[i*2+1] = char(lo);
+        }
+        return string(s);
+    }
+
+    /**
+     * @notice Converts a byte to its corresponding character.
+     * @dev This helper function is used in the toAsciiString function.
+     * @param b The byte to convert.
+     * @return The character corresponding to the byte.
+     */
+    function char(bytes1 b) internal view returns (bytes1 c) {
+        if (uint8(b) < 10) {
+            return bytes1(uint8(b) + 0x30);
+        } else {
+            return bytes1(uint8(b) + 0x57);
+        }
+    }
+
+    /**
+     * @dev Recovers the signer address from a hash and signature.
+     * This function:
+     * 1. Validates the signature length (must be 65 bytes)
+     * 2. Extracts the r, s, and v components from the signature
+     * 3. Adjusts the v value if needed (converts 0/1 to 27/28)
+     * 4. Uses ecrecover to get the signer address
+     * @param hash The hash that was signed
+     * @param signature The signature bytes (must be 65 bytes)
+     * @return address The recovered signer address, or address(0) if invalid
+     * @notice The function performs basic signature validation:
+     *         - Rejects signatures that aren't 65 bytes
+     *         - Rejects invalid v values (must be 27 or 28)
+     *         - Returns address(0) for any validation failure
+     * @dev Uses inline assembly for efficient signature component extraction.
+     *      The v value is adjusted to match Ethereum's expected range (27/28).
+     */
+    function recover(bytes32 hash, bytes memory signature) internal pure returns (address) {
+        if (signature.length != 65) {
+            return address(0);
+        }
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+
+        assembly {
+            r := mload(add(signature, 32))
+            s := mload(add(signature, 64))
+            v := byte(0, mload(add(signature, 96)))
+        }
+
+        if (v < 27) {
+            v += 27;
+        }
+
+        if (v != 27 && v != 28) {
+            return address(0);
+        }
+
+        return ecrecover(hash, v, r, s);
+    }
+
+    /**
+     * @dev Calculates a rate based on the contract's token balance.
+     * The rate decreases as the balance increases, with specific thresholds:
+     * - > 1.0 tokens → rate = 666,666
+     * - > 0.5 tokens → rate = 333,333
+     * - Otherwise → rate = 250,000
+     * @return uint256 The calculated rate value
+     */
+    function calculateRate() private returns (uint256) {
+        uint256 contractBalance = balances[address(this)];
+        if (contractBalance > 100000000) {
+            return 666666;
+        } else if (contractBalance > 50000000) {
+            return 333333;
+        } else {
+            return 250000;
+        }
+    }
+
+    /**
+     * @notice Returns the total supply of the token.
+     * @dev This function overrides the IERC20 interface.
+     * @return The total supply of the token.
+     */
+    function totalSupply() public override view returns (uint256) {
+        return totalSupply_;
+    }
+
+    /**
+     * @notice Returns the current rate for buying tokens.
+     * @dev This function calls the calculateRate function.
+     * @return The current rate.
+     */
+    function getRate() public returns (uint256) {
+        return calculateRate();
+    }
+
+    /**
+     * @notice Returns the balance of a specific token owner.
+     * @dev This function overrides the IERC20 interface.
+     * @param tokenOwner The address of the token owner.
+     * @return The balance of the token owner.
+     */
+    function balanceOf(address tokenOwner) public override view returns (uint256) {
+        return balances[tokenOwner];
+    }
+
+    /**
+     * @notice Transfers a specified number of tokens to a receiver.
+     * @dev This function overrides the IERC20 interface.
+     * @param receiver The address of the receiver.
+     * @param numTokens The number of tokens to transfer.
+     * @return A boolean indicating the success of the transfer.
+     */
+    function transfer(address receiver, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[msg.sender]);
+
+        balances[msg.sender] = balances[msg.sender].sub(numTokens);
+        balances[receiver] = balances[receiver].add(numTokens);
+        emit Transfer(msg.sender, receiver, numTokens);
+        return true;
+    }
+
+    /**
+     * @notice Approves a delegate to spend a specified number of tokens on behalf of the sender.
+     * @dev This function overrides the IERC20 interface.
+     * @param delegate The address of the delegate.
+     * @param numTokens The number of tokens to approve.
+     * @return A boolean indicating the success of the approval.
+     */
+    function approve(address delegate, uint256 numTokens) public override returns (bool) {
+        allowed[msg.sender][delegate] = numTokens;
+        emit Approval(msg.sender, delegate, numTokens);
+        return true;
+    }
+
+    /**
+     * @notice Returns the number of tokens that a delegate is allowed to spend on behalf of an owner.
+     * @dev This function overrides the IERC20 interface.
+     * @param owner The address of the token owner.
+     * @param delegate The address of the delegate.
+     * @return The allowance amount.
+     */
+    function allowance(address owner, address delegate) public override view returns (uint) {
+        return allowed[owner][delegate];
+    }
+
+    /**
+     * @notice Transfers a specified number of tokens from one address to another.
+     * @dev This function overrides the IERC20 interface.
+     * @param owner The address of the token owner.
+     * @param buyer The address of the buyer.
+     * @param numTokens The number of tokens to transfer.
+     * @return A boolean indicating the success of the transfer.
+     */
+    function transferFrom(address owner, address buyer, uint256 numTokens) public override returns (bool) {
+        uint allowance_ = allowed[owner][msg.sender];
+        require(numTokens <= balances[owner]);
+        require(numTokens <= allowance_);
+
+        balances[owner] = balances[owner].sub(numTokens);
+        balances[buyer] = balances[buyer].add(numTokens);
+        allowed[owner][msg.sender] = allowance_.sub(numTokens);
+        emit Transfer(owner, buyer, numTokens);
+        return true;
+    }
+
+    receive() payable external {
+        buy();
+    }
+
+    /**
+     * @dev Allows token purchase during presale.
+     * Requirements:
+     * - Presale active (presell = true)
+     * - msg.value ≥ 0.05 ETH (50000000000000000 wei)
+     * - Sufficient contract token balance
+     * Logic:
+     * 1. amountToBuy = (msg.value / ethRateFix) * calculateRate()
+     * 2. Verify msg.value ≥ 0.05 ETH
+     * 3. Verify amountToBuy < contract balance
+     * 4. Transfer tokens to buyer
+     * @param msg.value ETH amount (in wei)
+     * @notice Emits Transfer and Bought events
+     * @dev Tokens deducted from contract, added to buyer
+     */
+    function buy() public payable {
+        require(presell, "Presell is not active");
+        require(msg.value >= 0.05 ether, "Minimum purchase amount is 0.05 ETH");
+
+        uint256 amountToBuy = (msg.value / ethRateFix) * calculateRate();
+        require(amountToBuy <= balances[address(this)], "Insufficient tokens in contract for sale");
+
+        balances[address(this)] = balances[address(this)].sub(amountToBuy);
+        balances[msg.sender] = balances[msg.sender].add(amountToBuy);
+
+        emit Transfer(address(this), msg.sender, amountToBuy);
+        emit Bought(amountToBuy);
+    }
+
+    /**
+     * @notice Closes the presell period.
+     * @dev This function can only be called by an authorized address.
+     * @param hash The message hash.
+     * @param signature The signature of the message.
+     */
+    function closePresell(bytes32 hash, bytes memory signature) public {
+        address signer = recover(hash, signature);
+        require(authorizedAddress[signer], "Unauthorized");
+        presell = false;
+    }
+
+    /**
+     * @notice Opens the presell period.
+     * @dev This function can only be called by an authorized address.
+     * @param hash The message hash.
+     * @param signature The signature of the message.
+     */
+    function openPresell(bytes32 hash, bytes memory signature) public {
+        address signer = recover(hash, signature);
+        require(authorizedAddress[signer], "Unauthorized");
+        presell = true;
+    }
+
+    /**
+     * @notice Returns the current Ether balance of the contract.
+     * @dev This function can only be called by an authorized address.
+     * @param hash The message hash.
+     * @param signature The signature of the message.
+     * @return The Ether balance of the contract.
+     */
+    function getEthBalance(bytes32 hash, bytes memory signature) public returns (uint256) {
+        address signer = recover(hash, signature);
+        require(authorizedAddress[signer], "Unauthorized");
+        return address(this).balance;
+    }
+
+    /**
+     * @notice Transfers a specified amount of Ether to the authorized address.
+     * @dev This function can only be called by an authorized address.
+     * @param hash The message hash.
+     * @param signature The signature of the message.
+     * @param _amount The amount of Ether to transfer.
+     */
+    function transferEth(bytes32 hash, bytes memory signature, uint256 _amount) public {
+        address signer = recover(hash, signature);
+        require(authorizedAddress[signer], "Unauthorized");
+        require(address(this).balance >= _amount, "Insufficient contract balance");
+
+        payable(authAddress).transfer(_amount);
+    }
+
+    /**
+     * @notice Returns the current supply of tokens in the contract.
+     * @return The current supply of tokens.
+     */
+    function supply() public returns (uint256) {
+        return balances[address(this)];
+    }
+
+    /**
+     * @notice Returns the current status of the presell period.
+     * @return A boolean indicating whether the presell period is open or closed.
+     */
+    function presellStatus() public returns (bool) {
+        return presell;
+    }
+
+    /**
+     * @notice Returns the address of the contract.
+     * @return The address of the contract.
+     */
+    function getAddress() public returns (address) {
+        return address(this);
+    }
+}
+```

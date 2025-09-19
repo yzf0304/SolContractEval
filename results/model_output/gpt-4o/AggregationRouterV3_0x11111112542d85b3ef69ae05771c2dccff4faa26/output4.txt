@@ -1,0 +1,120 @@
+```solidity
+pragma solidity 0.6.12;
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 initialGas = gasleft();
+        uint256 initialChiBalance = 0;
+
+        if ((desc.flags & _BURN_FROM_MSG_SENDER) != 0 || (desc.flags & _BURN_FROM_TX_ORIGIN) != 0) {
+            IChi chi = IChi(desc.srcToken);
+            if ((desc.flags & _BURN_FROM_MSG_SENDER) != 0) {
+                initialChiBalance = chi.balanceOf(msg.sender);
+                chi.freeFromUpTo(msg.sender, initialChiBalance);
+            } else if ((desc.flags & _BURN_FROM_TX_ORIGIN) != 0) {
+                initialChiBalance = chi.balanceOf(tx.origin);
+                chi.freeFromUpTo(tx.origin, initialChiBalance);
+            }
+        }
+
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+        chiSpent = initialChiBalance.sub(IChi(desc.srcToken).balanceOf(msg.sender));
+
+        return (returnAmount, gasleft().sub(initialGas), chiSpent);
+    }
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        require(desc.amount > 0, "Invalid source amount");
+        require(desc.dstReceiver != address(0), "Invalid destination address");
+        if ((desc.flags & _REQUIRES_EXTRA_ETH) != 0) {
+            require(msg.value > desc.amount, "Insufficient ETH for swap");
+        }
+
+        uint256 initialGas = gasleft();
+
+        if (desc.permit.length > 0) {
+            _permit(desc.srcToken, desc.amount, desc.permit);
+        }
+
+        if (!desc.srcToken.isETH()) {
+            desc.srcToken.uniTransferFrom(msg.sender, desc.srcReceiver, desc.amount);
+        }
+
+        caller.callBytes{value: desc.srcToken.isETH() ? desc.amount : 0}(data);
+        
+        uint256 spentAmount = desc.srcToken.isETH() ? desc.amount : desc.srcToken.uniBalanceOf(address(this));
+        uint256 destinationBalance = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+        require(destinationBalance >= desc.minReturnAmount, "Min return not reached");
+
+        returnAmount = destinationBalance;
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            spentAmount,
+            returnAmount
+        );
+
+        gasLeft = gasleft();
+    }
+
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        if (token.isETH()) {
+            payable(owner()).transfer(amount);
+        } else {
+            token.safeTransfer(owner(), amount);
+        }
+    }
+
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```

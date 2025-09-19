@@ -1,0 +1,100 @@
+pragma solidity ^0.4.21;
+
+contract DNCEQUITY is ERC223BasicToken {
+    using SafeMath for uint256;
+
+    address public admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping(address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    /// @notice Initializes the contract, setting the deployer as admin.
+    function DNCEQUITY() public {
+        admin = msg.sender;
+    }
+
+    /// @dev Restricts function to admin only.
+    modifier onlyadmin {
+        require(msg.sender == admin);
+        _;
+    }
+
+    /// @notice Change the admin to a new address.
+    /// @param _newAdminAddr The address of the new admin.
+    function changeAdmin(address _newAdminAddr) public onlyadmin {
+        require(_newAdminAddr != address(0));
+        admin = _newAdminAddr;
+    }
+
+    /// @notice Grant minting rights to a new user.
+    /// @param newAddr The address to be granted minting rights.
+    function createNewMintableUser(address newAddr) public onlyadmin {
+        require(newAddr != address(0));
+        require(!mintable[newAddr]);
+        require(balances[newAddr] == 0);
+        mintable[newAddr] = true;
+    }
+
+    /// @notice Revoke minting rights from an existing user.
+    /// @param addr The address whose minting rights will be revoked.
+    function deleteMintable(address addr) public onlyadmin {
+        require(mintable[addr]);
+        mintable[addr] = false;
+    }
+
+    /// @notice Allows admin to move tokens from one address to another.
+    /// @param from The address to transfer tokens from (must be mintable).
+    /// @param to The address to transfer tokens to.
+    /// @param value The amount of tokens to transfer.
+    function adminTransfer(address from, address to, uint256 value) public onlyadmin {
+        require(mintable[from]);
+        require(to != address(0));
+
+        // Detect if 'to' is a contract and invoke tokenFallback if so
+        uint256 codeLength;
+        bytes memory empty;
+        assembly { codeLength := extcodesize(to) }
+
+        balances[from] = balances[from].sub(value);
+        balances[to]   = balances[to].add(value);
+
+        if (codeLength > 0) {
+            DNCReceivingContract(to).tokenFallback(from, value, empty);
+        }
+
+        Transfer(from, to, value);
+    }
+
+    /// @notice Mint new tokens to a mintable user.
+    /// @param user The address to receive newly minted tokens.
+    /// @param quantity The number of tokens to mint.
+    function mintNewDNC(address user, uint256 quantity) public onlyadmin {
+        require(user != address(0));
+        require(mintable[user]);
+
+        totalSupply = totalSupply.add(quantity);
+        balances[user] = balances[user].add(quantity);
+
+        Minted(user, quantity);
+        Transfer(address(0), user, quantity);
+    }
+
+    /// @notice Burn tokens from a mintable user.
+    /// @param user The address whose tokens will be burned.
+    /// @param quantity The number of tokens to burn.
+    function burnDNC(address user, uint256 quantity) public onlyadmin {
+        require(user != address(0));
+        require(mintable[user]);
+        require(balances[user] >= quantity);
+
+        balances[user]   = balances[user].sub(quantity);
+        totalSupply      = totalSupply.sub(quantity);
+
+        Burned(user, quantity);
+        Transfer(user, address(0), quantity);
+    }
+}

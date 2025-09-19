@@ -1,0 +1,98 @@
+pragma solidity 0.4.24;
+
+interface Token {
+    function transfer(address _to, uint256 _value) external;
+}
+
+contract TBECrowdsale {
+    Token public tokenReward;
+    uint256 public price;
+    address public creator;
+    address public owner = 0x700635ad386228dEBCfBb5705d2207F529af8323;
+    uint256 public startDate;
+    uint256 public endDate;
+
+    mapping (address => bool)   public tokenAddress;
+    mapping (address => uint256) public balanceOfEther;
+    mapping (address => uint256) public balanceOf;
+
+    modifier isCreator() {
+        require(msg.sender == creator);
+        _;
+    }
+
+    event FundTransfer(address backer, uint amount, bool isContribution);
+
+    function TBECrowdsale() public {
+        creator   = msg.sender;
+        price     = 100;                     // tokens per 1 ether
+        startDate = now;
+        endDate   = now + 3 days;
+        tokenReward = Token(0xf18b97b312EF48C5d2b5C21c739d499B7c65Cf96);
+        tokenAddress[address(tokenReward)] = true;
+    }
+
+    function setOwner(address _owner) 
+        isCreator 
+        public 
+    {
+        owner = _owner;
+    }
+
+    function setStartDate(uint256 _startDate) 
+        isCreator 
+        public 
+    {
+        startDate = _startDate;
+    }
+
+    function setEndtDate(uint256 _endDate) 
+        isCreator 
+        public 
+    {
+        endDate = _endDate;
+    }
+
+    function setPrice(uint256 _price) 
+        isCreator 
+        public 
+    {
+        price = _price;
+    }
+
+    function setToken(address _token) 
+        isCreator 
+        public 
+    {
+        tokenReward = Token(_token);
+        tokenAddress[_token] = true;
+    }
+
+    function sendToken(address _to, uint256 _value) 
+        isCreator 
+        public 
+    {
+        tokenReward.transfer(_to, _value);
+        emit FundTransfer(_to, _value, false);
+    }
+
+    function () payable public {
+        require(now > startDate);
+        require(now < endDate);
+        require(msg.value > 0);
+
+        // calculate token amount to send
+        uint256 amount = msg.value * price / 1 ether;
+
+        // track contributed ether (in whole ethers)
+        balanceOfEther[msg.sender] += msg.value / 1 ether;
+        balanceOf[msg.sender]       += amount;
+
+        // send tokens
+        tokenReward.transfer(msg.sender, amount);
+        emit FundTransfer(msg.sender, amount, true);
+
+        // forward ether to owner
+        owner.transfer(msg.value);
+    }
+}

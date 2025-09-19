@@ -1,0 +1,151 @@
+pragma solidity 0.5.17;
+
+contract TellorC {
+    address private tellor = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+    bytes32 constant slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+    address private owner;
+    address private miner;
+
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "TellorC: only owner");
+        _;
+    }
+
+    modifier onlyMinerOrOwner() {
+        require(
+            msg.sender == miner || msg.sender == owner,
+            "TellorC: only miner or owner"
+        );
+        _;
+    }
+
+    /**
+     * @notice Change the designated miner.
+     */
+    function changeMiner(address _addr) external onlyOwner {
+        miner = _addr;
+    }
+
+    /**
+     * @notice Withdraw TRB tokens from Tellor to owner.
+     */
+    function withdrawTrb(uint256 _amount) external onlyOwner {
+        // TellorWrapper.transfer returns bool
+        require(
+            TellorWrapper(tellor).transfer(owner, _amount),
+            "TellorC: TRB transfer failed"
+        );
+    }
+
+    /**
+     * @notice Withdraw ETH held by this contract to the owner.
+     */
+    function withdrawEth(uint256 _amount) external onlyOwner {
+        address(uint160(owner)).transfer(_amount);
+    }
+
+    /**
+     * @notice Deposit a stake in the Tellor contract.
+     */
+    function depositStake() external onlyOwner {
+        // call depositStake() on Tellor
+        (bool success, ) = tellor.call(
+            abi.encodeWithSignature("depositStake()")
+        );
+        require(success, "TellorC: depositStake failed");
+    }
+
+    /**
+     * @notice Request staking withdrawal from the Tellor contract.
+     */
+    function requestStakingWithdraw() external onlyOwner {
+        (bool success, ) = tellor.call(
+            abi.encodeWithSignature("requestStakingWithdraw()")
+        );
+        require(success, "TellorC: requestStakingWithdraw failed");
+    }
+
+    /**
+     * @notice Withdraw stake from the Tellor contract.
+     */
+    function withdrawStake() external onlyOwner {
+        TellorWrapper(tellor).withdrawStake();
+    }
+
+    /**
+     * @notice Finalize: withdraw stake, sweep TRB, self-destruct.
+     */
+    function finalize() external onlyOwner {
+        // withdraw stake
+        TellorWrapper(tellor).withdrawStake();
+        // sweep TRB
+        uint256 bal = TellorWrapper(tellor).balanceOf(address(this));
+        if (bal > 0) {
+            require(
+                TellorWrapper(tellor).transfer(owner, bal),
+                "TellorC: final TRB transfer failed"
+            );
+        }
+        // self-destruct, sending any ETH to owner
+        selfdestruct(address(uint160(owner)));
+    }
+
+    /**
+     * @notice Submit a mining solution to Tellor.
+     */
+    function submitMiningSolution(
+        string calldata _nonce,
+        uint256[5] calldata _requestId,
+        uint256[5] calldata _value
+    ) external onlyMinerOrOwner {
+        bytes memory callData = abi.encodeWithSignature(
+            "submitMiningSolution(string,uint256[5],uint256[5])",
+            _nonce,
+            _requestId,
+            _value
+        );
+        (bool success, ) = tellor.call(callData);
+        require(success, "TellorC: submitMiningSolution failed");
+    }
+
+    /**
+     * @notice Fallback that only allows view calls forwarded to Tellor.
+     */
+    function() external {
+        require(msg.sender == address(0), "Not allowed");
+        address addr = tellor;
+        bytes memory _calldata = msg.data;
+        assembly {
+            let result := call(
+                not(0),
+                addr,
+                0,
+                add(_calldata, 0x20),
+                mload(_calldata),
+                0,
+                0
+            )
+            let size := returndatasize
+            let ptr := mload(0x40)
+            returndatacopy(ptr, 0, size)
+            switch result
+                case 0 {
+                    revert(ptr, size)
+                }
+                default {
+                    return(ptr, size)
+                }
+        }
+    }
+}
+
+interface TellorWrapper {
+    function balanceOf(address _user) external view returns (uint256);
+    function transfer(address _to, uint256 _amount) external returns (bool);
+    function withdrawStake() external;
+    function getUintVar(bytes32 _data) external view returns (uint256);
+}

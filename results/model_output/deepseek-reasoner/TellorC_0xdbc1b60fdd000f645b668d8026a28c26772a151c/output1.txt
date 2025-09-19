@@ -1,0 +1,120 @@
+Here's the complete implementation of the TellorC contract based on the provided context and requirements:
+
+```solidity
+pragma solidity 0.5.17;
+
+contract TellorWrapper {
+    function balanceOf(address _user) external view returns (uint256);
+    function transfer(address _to, uint256 _amount) external returns (bool);
+    function withdrawStake() external;
+    function getUintVar(bytes32 _data) public view returns (uint256);
+}
+
+contract TellorC {
+    address private tellor = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+    bytes32 constant slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+    address private owner;
+    address private miner;
+    
+    constructor() public {
+        owner = msg.sender;
+    }
+    
+    function changeMiner(address _addr) external {
+        require(msg.sender == owner, "Only owner");
+        miner = _addr;
+    }
+
+    function withdrawTrb(uint256 _amount) external {
+        require(msg.sender == owner, "Only owner");
+        TellorWrapper wrapper = TellorWrapper(tellor);
+        uint256 balance = wrapper.balanceOf(address(this));
+        require(balance >= _amount, "Insufficient balance");
+        bool success = wrapper.transfer(owner, _amount);
+        require(success, "Transfer failed");
+    }
+
+    function withdrawEth(uint256 _amount) external {
+        require(msg.sender == owner, "Only owner");
+        require(address(this).balance >= _amount, "Insufficient ETH");
+        msg.sender.transfer(_amount);
+    }
+
+    function depositStake() external {
+        require(msg.sender == owner, "Only owner");
+        (bool success, ) = tellor.call(abi.encodeWithSignature("depositStake()"));
+        require(success, "Deposit failed");
+    }
+
+    function requestStakingWithdraw() external {
+        require(msg.sender == owner, "Only owner");
+        (bool success, ) = tellor.call(abi.encodeWithSignature("requestStakingWithdraw()"));
+        require(success, "Request failed");
+    }
+
+    function withdrawStake() external {
+        require(msg.sender == owner, "Only owner");
+        TellorWrapper(tellor).withdrawStake();
+    }
+
+    function finalize() external {
+        require(msg.sender == owner, "Only owner");
+        TellorWrapper wrapper = TellorWrapper(tellor);
+        
+        // Withdraw stake
+        wrapper.withdrawStake();
+        
+        // Transfer all TRB to owner
+        uint256 trbBalance = wrapper.balanceOf(address(this));
+        if (trbBalance > 0) {
+            bool success = wrapper.transfer(owner, trbBalance);
+            require(success, "Transfer failed");
+        }
+        
+        // Selfdestruct and send remaining ETH
+        selfdestruct(msg.sender);
+    }
+
+    function submitMiningSolution(
+        string calldata _nonce,
+        uint256[5] calldata _requestId,
+        uint256[5] calldata _value
+    ) external {
+        require(msg.sender == miner || msg.sender == owner, "Only miner or owner");
+        (bool success, ) = tellor.call(abi.encodeWithSignature(
+            "submitMiningSolution(string,uint256[5],uint256[5])",
+            _nonce,
+            _requestId,
+            _value
+        ));
+        require(success, "Submit failed");
+    }
+
+    function() external {
+        require(msg.sender == address(0), "Not allowed");
+        address addr = tellor;
+        bytes memory _calldata = msg.data;
+        assembly {
+            let result := call(not(0), addr, 0, add(_calldata, 0x20), mload(_calldata), 0, 0)
+            let size := returndatasize
+            let ptr := mload(0x40)
+            returndatacopy(ptr, 0, size)
+            switch result
+                case 0 { revert(ptr, size) }
+                default { return(ptr, size) }
+        }
+    }
+}
+```
+
+This implementation includes:
+
+1. **Access Control**: All privileged functions are restricted to the owner using `require(msg.sender == owner)`
+2. **TRB Management**: Functions for withdrawing TRB and ETH balances
+3. **Staking System**: Methods for deposit, withdrawal requests, and final stake withdrawal
+4. **Mining Solution Submission**: Restricted to designated miner or owner
+5. **Contract Finalization**: Withdraws all assets and self-destructs
+6. **Tellor Interaction**: Uses both direct calls and low-level calls to interact with the Tellor contract
+7. **Fallback Function**: Forwards view calls to Tellor contract (note: original access restriction remains)
+
+The contract maintains compatibility with Solidity 0.5.17 and strictly follows the provided context and requirements without introducing external dependencies.

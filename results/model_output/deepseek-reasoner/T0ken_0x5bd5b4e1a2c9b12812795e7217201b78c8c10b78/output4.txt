@@ -1,0 +1,295 @@
+Here is the complete implementation of the T0ken contract based on the provided context and requirements:
+
+```solidity
+pragma solidity 0.5.2;
+
+contract T0ken is ERC20, Ownable, LockableDestroyable {
+    using AdditiveMath for uint256;
+    using AddressMap for AddressMap.Data;
+
+    address constant internal ZERO_ADDRESS = address(0);
+    string public constant name = "TZERO PREFERRED";
+    string public constant symbol = "TZROP";
+    uint8 public constant decimals = 0;
+
+    AddressMap.Data public shareholders;
+    Compliance public compliance;
+    address public issuer;
+    bool public issuingFinished = false;
+    mapping(address => address) public cancellations;
+
+    mapping(address => uint256) internal balances;
+    uint256 internal totalSupplyTokens;
+
+    mapping (address => mapping (address => uint256)) private allowed;
+
+    modifier onlyIssuer() {
+        require(msg.sender == issuer, "Only issuer allowed");
+        _;
+    }
+
+    modifier canIssue() {
+        require(!issuingFinished, "Issuing is already finished");
+        _;
+    }
+
+    modifier isNotCancelled(address addr) {
+        require(cancellations[addr] == ZERO_ADDRESS, "Address has been cancelled");
+        _;
+    }
+
+    modifier hasFunds(address addr, uint256 tokens) {
+        require(tokens <= balances[addr], "Insufficient funds");
+        _;
+    }
+
+    event VerifiedAddressSuperseded(address indexed original, address indexed replacement, address indexed sender);
+    event IssuerSet(address indexed previousIssuer, address indexed newIssuer);
+    event Issue(address indexed to, uint256 tokens);
+    event IssueFinished();
+    event ShareholderAdded(address shareholder);
+    event ShareholderRemoved(address shareholder);
+
+    function transfer(address to, uint256 tokens)
+        external
+        isUnlocked
+        isNotCancelled(to)
+        hasFunds(msg.sender, tokens)
+        returns (bool)
+    {
+        require(canTransfer(msg.sender, to, tokens, false), "Transfer not allowed");
+        transferTokens(msg.sender, to, tokens);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 tokens)
+        external
+        isUnlocked
+        isNotCancelled(to)
+        hasFunds(from, tokens)
+        returns (bool)
+    {
+        require(tokens <= allowed[from][msg.sender], "Allowance exceeded");
+        allowed[from][msg.sender] = allowed[from][msg.sender].subtract(tokens);
+        require(canTransfer(from, to, tokens, false), "Transfer not allowed");
+        transferTokens(from, to, tokens);
+        return true;
+    }
+
+    function transferOverride(address from, address to, uint256 tokens)
+        external
+        isUnlocked
+        isNotCancelled(to)
+        hasFunds(from, tokens)
+        returns (bool)
+    {
+        require(canTransfer(from, to, tokens, true), "Override not allowed");
+        transferTokens(from, to, tokens);
+        return true;
+    }
+
+    function issueTokens(uint256 quantity)
+        external
+        isUnlocked
+        onlyIssuer
+        canIssue
+        returns (bool)
+    {
+        require(compliance.canIssue(msg.sender, ZERO_ADDRESS, issuer, quantity), "Issuance not allowed");
+        totalSupplyTokens = totalSupplyTokens.add(quantity);
+        uint256 issuerBalance = balances[issuer];
+        balances[issuer] = issuerBalance.add(quantity);
+        
+        if (issuerBalance == 0) {
+            shareholders.append(issuer);
+            emit ShareholderAdded(issuer);
+        }
+
+        emit Transfer(ZERO_ADDRESS, issuer, quantity);
+        emit Issue(issuer, quantity);
+        return true;
+    }
+
+    function finishIssuing()
+        external
+        isUnlocked
+        onlyIssuer
+        canIssue
+        returns (bool)
+    {
+        issuingFinished = true;
+        emit IssueFinished();
+        return true;
+    }
+
+    function cancelAndReissue(address original, address replacement)
+        external
+        isUnlocked
+        onlyIssuer
+        isNotCancelled(replacement)
+    {
+        require(original != ZERO_ADDRESS, "Original is zero address");
+        require(replacement != ZERO_ADDRESS, "Replacement is zero address");
+        require(cancellations[original] == ZERO_ADDRESS, "Original already cancelled");
+        require(balances[original] > 0, "Original has no balance");
+
+        uint256 originalBalance = balances[original];
+        balances[original] = 0;
+        balances[replacement] = balances[replacement].add(originalBalance);
+
+        shareholders.remove(original);
+        if (balances[replacement] == originalBalance) {
+            shareholders.append(replacement);
+        }
+
+        cancellations[original] = replacement;
+
+        emit ShareholderRemoved(original);
+        emit ShareholderAdded(replacement);
+        emit Transfer(original, replacement, originalBalance);
+        emit VerifiedAddressSuperseded(original, replacement, msg.sender);
+    }
+
+    function approve(address spender, uint256 tokens)
+        external
+        isUnlocked
+        isNotCancelled(msg.sender)
+        returns (bool)
+    {
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    function setIssuer(address newIssuer)
+        external
+        isUnlocked
+        onlyOwner
+    {
+        require(newIssuer != ZERO_ADDRESS, "New issuer is zero address");
+        emit IssuerSet(issuer, newIssuer);
+        issuer = newIssuer;
+    }
+
+    function setCompliance(address newComplianceAddress)
+        external
+        isUnlocked
+        onlyOwner
+    {
+        compliance = Compliance(newComplianceAddress);
+    }
+
+    function totalSupply()
+        external
+        view
+        returns (uint256)
+    {
+        return totalSupplyTokens;
+    }
+
+    function balanceOf(address addr)
+        external
+        view
+        returns (uint256)
+    {
+        return balances[addr];
+    }
+
+    function allowance(address addrOwner, address spender)
+        external
+        view
+        returns (uint256)
+    {
+        return allowed[addrOwner][spender];
+    }
+
+    function holderAt(int256 index)
+        external
+        view
+        returns (address)
+    {
+        return shareholders.at(index);
+    }
+
+    function isHolder(address addr)
+        external
+        view
+        returns (bool)
+    {
+        return shareholders.exists(addr);
+    }
+
+    function isSuperseded(address addr)
+        external
+        view
+        returns (bool)
+    {
+        return cancellations[addr] != ZERO_ADDRESS;
+    }
+
+    function getSuperseded(address addr)
+        external
+        view
+        returns (address)
+    {
+        address current = addr;
+        while (cancellations[current] != ZERO_ADDRESS) {
+            current = cancellations[current];
+        }
+        return current;
+    }
+
+    function canTransfer(address from, address to, uint256 tokens, bool isOverride)
+        private
+        returns (bool)
+    {
+        if (isOverride) {
+            require(compliance.canOverride(msg.sender, from, to, tokens), "Override not allowed");
+        } else {
+            require(compliance.canTransfer(msg.sender, from, to, tokens), "Transfer not allowed");
+        }
+        return true;
+    }
+
+    function transferTokens(address from, address to, uint256 tokens)
+        private
+    {
+        uint256 fromBalance = balances[from];
+        uint256 toBalance = balances[to];
+
+        balances[from] = fromBalance.subtract(tokens);
+        balances[to] = toBalance.add(tokens);
+
+        if (toBalance == 0) {
+            shareholders.append(to);
+            emit ShareholderAdded(to);
+        }
+
+        if (fromBalance == tokens) {
+            shareholders.remove(from);
+            emit ShareholderRemoved(from);
+        }
+
+        emit Transfer(from, to, tokens);
+    }
+}
+```
+
+This implementation:
+1. Adheres to ERC20 standards with additional compliance checks
+2. Integrates with the provided Compliance interface
+3. Manages shareholder tracking using the AddressMap library
+4. Implements token issuance and cancellation/reissue functionality
+5. Includes all required modifiers and safety checks
+6. Maintains proper access control through ownership and issuer roles
+7. Handles token transfers with compliance verification and shareholder management
+8. Follows Solidity 0.5.2 syntax and security practices
+
+The contract maintains all required functionality while properly handling:
+- ERC20 token operations
+- Compliance checks
+- Shareholder management
+- Token issuance and cancellation
+- Access control through ownership and issuer roles
+- Safe math operations
+- Contract locking and destruction capabilities

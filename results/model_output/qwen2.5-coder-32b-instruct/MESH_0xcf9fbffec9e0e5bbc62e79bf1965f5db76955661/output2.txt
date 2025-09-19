@@ -1,0 +1,204 @@
+Below is the completed `MESH` contract implementing the described functionalities such as proxy transfers, proxy approvals, token allocation, and handling nonce for preventing replay attacks. The contract is written to be compatible with Solidity version 0.4.23 as specified.
+
+```solidity
+pragma solidity ^0.4.23;
+
+contract Token {
+    uint256 public totalSupply;
+
+    function balanceOf(address _owner) public constant returns (uint256 balance);
+    function transfer(address _to, uint256 _value) public returns (bool success);
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+    function approve(address _spender, uint256 _value) public returns (bool success);
+    function allowance(address _owner, address _spender) public constant returns (uint256 remaining);
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+}
+
+contract Owned {
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    address public owner;
+    address newOwner;
+
+    event OwnerUpdate(address _prevOwner, address _newOwner);
+
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    function changeOwner(address _newOwner) public onlyOwner {
+        require(_newOwner != owner);
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() public{
+        require(msg.sender == newOwner);
+        emit OwnerUpdate(owner, newOwner);
+        owner = newOwner;
+        newOwner = 0x0;
+    }
+}
+
+contract Controlled is Owned{
+    constructor() public {
+       setExclude(msg.sender);
+    }
+
+    bool public transferEnabled = false;
+    bool lockFlag=true;
+    mapping(address => bool) locked;
+    mapping(address => bool) exclude;
+
+    function enableTransfer(bool _enable) public onlyOwner{
+        transferEnabled=_enable;
+    }
+
+    function disableLock(bool _enable) public onlyOwner returns (bool success){
+        lockFlag=_enable;
+        return true;
+    }
+
+    function addLock(address _addr) public onlyOwner returns (bool success){
+        require(_addr!=msg.sender);
+        locked[_addr]=true;
+        return true;
+    }
+
+    function setExclude(address _addr) public onlyOwner returns (bool success){
+        exclude[_addr]=true;
+        return true;
+    }
+
+    function removeLock(address _addr) public onlyOwner returns (bool success){
+        locked[_addr]=false;
+        return true;
+    }
+
+    modifier transferAllowed(address _addr) {
+        if (!exclude[_addr]) {
+            assert(transferEnabled);
+            if(lockFlag){
+                assert(!locked[_addr]);
+            }
+        }
+        _;
+    }
+}
+
+contract StandardToken is Token,Controlled {
+    function transfer(address _to, uint256 _value) public transferAllowed(msg.sender) returns (bool success) {
+        if (balances[msg.sender] >= _value && balances[_to] + _value >= balances[_to]) {
+            balances[msg.sender] -= _value;
+            balances[_to] += _value;
+            emit Transfer(msg.sender, _to, _value);
+            return true;
+        } else { return false; }
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public transferAllowed(_from) returns (bool success) {
+        if (balances[_from] >= _value && allowed[_from][msg.sender] >= _value && balances[_to] + _value >= balances[_to]) {
+            balances[_to] += _value;
+            balances[_from] -= _value;
+            allowed[_from][msg.sender] -= _value;
+            emit Transfer(_from, _to, _value);
+            return true;
+        } else { return false; }
+    }
+
+    function balanceOf(address _owner) public constant returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public constant returns (uint256 remaining) {
+      return allowed[_owner][_spender];
+    }
+
+    mapping (address => uint256) balances;
+    mapping (address => mapping (address => uint256)) allowed;
+}
+
+contract MESH is StandardToken {
+    string public name = "MeshBox";
+    uint8 public decimals = 18;
+    string public symbol = "MESH";
+    string public version = 'v0.1';
+    uint256 public allocateEndTime;
+
+    mapping(address => uint256) nonces;
+
+    constructor() public {
+        allocateEndTime = now + 1 days;
+    }
+
+    function () public {
+        revert();
+    }
+
+    function transferProxy(address _from, address _to, uint256 _value, uint256 _feeMesh,
+        uint8 _v, bytes32 _r, bytes32 _s) public transferAllowed(_from) returns (bool) {
+        require(nonces[_from] < _value);  // nonce should be less than value to prevent replay attack
+        require(now <= allocateEndTime); // check if allocation period has ended
+
+        // Verify the signature
+        bytes32 hash = keccak256(_from, _to, _value, _feeMesh, nonces[_from], allocateEndTime);
+        require(ecrecover(hash, _v, _r, _s) == _from);
+
+        // Update nonce after successful verification
+        nonces[_from]++;
+
+        // Perform the transfer
+        require(transferFrom(_from, _to, _value));
+        require(transferFrom(_from, msg.sender, _feeMesh));
+
+        return true;
+    }
+
+    function approveProxy(address _from, address _spender, uint256 _value,
+        uint8 _v, bytes32 _r, bytes32 _s) public returns (bool success) {
+        require(nonces[_from] < _value);  // nonce should be less than value to prevent replay attack
+        require(now <= allocateEndTime); // check if allocation period has ended
+
+        // Verify the signature
+        bytes32 hash = keccak256(_from, _spender, _value, nonces[_from], allocateEndTime);
+        require(ecrecover(hash, _v, _r, _s) == _from);
+
+        // Update nonce after successful verification
+        nonces[_from]++;
+
+        // Set the allowance
+        return approve(_spender, _value);
+    }
+
+    function getNonce(address _addr) public constant returns (uint256) {
+        return nonces[_addr];
+    }
+
+    function allocateTokens(address[] _owners, uint256[] _values) public onlyOwner {
+        require(now <= allocateEndTime);
+        require(_owners.length == _values.length);
+
+        for (uint256 i = 0; i < _owners.length; i++) {
+            balances[_owners[i]] += _values[i];
+            totalSupply += _values[i];
+            emit Transfer(0x0, _owners[i], _values[i]);
+        }
+    }
+}
+```
+
+This contract includes:
+- A fallback function that reverts any direct ETH transfers.
+- `transferProxy` and `approveProxy` functions that utilize ECDSA signatures for proxy operations and include replay attack protection via nonces.
+- A function to retrieve the nonce for an address.
+- An `allocateTokens` function for the contract owner to allocate tokens to multiple addresses before the predefined `allocateEndTime`.

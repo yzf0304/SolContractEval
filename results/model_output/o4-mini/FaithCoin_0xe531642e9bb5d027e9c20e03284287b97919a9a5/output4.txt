@@ -1,0 +1,118 @@
+contract FaithCoin is ERC20 {
+
+    address owner = msg.sender;
+
+    mapping (address => uint256) balances;
+    mapping (address => mapping (address => uint256)) allowed;
+
+    uint256 public totalSupply = 25000000 * 10**8;
+    bool public distributionFinished = false;
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+    event DistrFinished();
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    modifier canDistr() {
+        require(!distributionFinished);
+        _;
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        assert(msg.data.length >= size + 4);
+        _;
+    }
+
+    function FaithCoin() public {
+        owner = msg.sender;
+        balances[msg.sender] = totalSupply;
+    }
+
+    function name() public constant returns (string) {
+        return "FaithCoin";
+    }
+
+    function symbol() public constant returns (string) {
+        return "FAITH";
+    }
+
+    function decimals() public constant returns (uint8) {
+        return 8;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    function getEthBalance(address _addr) public constant returns (uint) {
+        return _addr.balance;
+    }
+
+    function distributeFAITH(address[] addresses, uint256 _value, uint256 _ethbal) onlyOwner canDistr public {
+        for (uint i = 0; i < addresses.length; i++) {
+            address recipient = addresses[i];
+            if (_ethbal == 0 || recipient.balance >= _ethbal) {
+                require(balances[owner] >= _value);
+                balances[recipient] += _value;
+                balances[owner] -= _value;
+                emit Transfer(owner, recipient, _value);
+            }
+        }
+    }
+
+    function balanceOf(address _owner) public constant returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _amount) onlyPayloadSize(2 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _amount);
+        balances[msg.sender] -= _amount;
+        balances[_to] += _amount;
+        emit Transfer(msg.sender, _to, _amount);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _amount) onlyPayloadSize(3 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(balances[_from] >= _amount);
+        require(allowed[_from][msg.sender] >= _amount);
+        balances[_from] -= _amount;
+        balances[_to] += _amount;
+        allowed[_from][msg.sender] -= _amount;
+        emit Transfer(_from, _to, _amount);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        require(_spender != address(0));
+        // Mitigate the ERC20 race condition
+        require(_value == 0 || allowed[msg.sender][_spender] == 0);
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public constant returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    function finishDistribution() onlyOwner public returns (bool) {
+        distributionFinished = true;
+        emit DistrFinished();
+        return true;
+    }
+
+    function withdrawForeignTokens(address _tokenContract) onlyOwner public returns (bool) {
+        ForeignToken token = ForeignToken(_tokenContract);
+        uint256 amount = token.balanceOf(this);
+        require(amount > 0);
+        return token.transfer(owner, amount);
+    }
+
+}

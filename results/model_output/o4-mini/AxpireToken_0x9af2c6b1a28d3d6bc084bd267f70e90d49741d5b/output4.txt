@@ -1,0 +1,109 @@
+pragma solidity ^0.4.20;
+
+contract AxpireToken is ERC223, ERC20 {
+    uint256 initialSupply = 350000000 * 10**8;
+    string tokenName = "aXpire Token";
+    string tokenSymbol = "AXP";
+    uint8 decimalUnits = 8;
+
+    // Constructor
+    function AxpireToken() public
+        ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+
+    /**
+     * @notice ERC223-style transfer with data
+     */
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, false, "");
+    }
+
+    /**
+     * @notice ERC223-style transfer with data and custom fallback
+     */
+    function transfer(address to, uint256 value, bytes data, string customFallback) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, true, customFallback);
+    }
+
+    /**
+     * @notice Transfer tokens using allowance, plus ERC223 callback if recipient is a contract
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        // First perform the standard ERC20 transferFrom
+        bool forwarded = super.transferFrom(_from, _to, _value);
+        if (!forwarded) {
+            return false;
+        }
+        // If recipient is a contract, invoke tokenFallback with empty data
+        if (isContract(_to)) {
+            bytes memory empty;
+            ContractReceiver receiver = ContractReceiver(_to);
+            receiver.tokenFallback(_from, _value, empty);
+        }
+        return true;
+    }
+
+    /**
+     * @dev Internal helper for ERC223 transfers (no custom fallback)
+     */
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        return transferInternal(from, to, value, data, false, "");
+    }
+
+    /**
+     * @dev Core ERC223 transfer logic
+     */
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        // Perform the balance updates / event via ERC20.transferInternal
+        if (!super.transferInternal(from, to, value)) {
+            return false;
+        }
+        // If recipient is a contract, invoke the appropriate fallback
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                // call custom fallback function: e.g. "myTokenFallback(address,uint256,bytes)"
+                require(
+                    to.call(
+                        bytes4(keccak256(customFallback)),
+                        from,
+                        value,
+                        data
+                    )
+                );
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+        // Emit the ERC223 Transfer event with data
+        Transfer(from, to, value, data);
+        return true;
+    }
+
+    /**
+     * @dev Internal helper for pure ERC20-style transfers
+     */
+    function transferInternal(address from, address to, uint256 value) internal returns (bool success) {
+        return super.transferInternal(from, to, value);
+    }
+
+    /**
+     * @dev Utility to detect whether an address is a contract
+     */
+    function isContract(address _addr) private returns (bool) {
+        uint256 length;
+        assembly { length := extcodesize(_addr) }
+        return (length > 0);
+    }
+}

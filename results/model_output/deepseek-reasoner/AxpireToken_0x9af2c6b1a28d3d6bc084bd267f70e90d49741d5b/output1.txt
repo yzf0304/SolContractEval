@@ -1,0 +1,136 @@
+Here is the complete implementation of the AxpireToken contract according to the provided specifications:
+
+```solidity
+pragma solidity ^0.4.20;
+
+contract AxpireToken is ERC223, ERC20 {
+    uint256 initialSupply = 350000000 * 10**8;
+    string tokenName = "aXpire Token";
+    string tokenSymbol = "AXP";
+    uint8 decimalUnits = 8;
+
+    function AxpireToken() public 
+        ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol) 
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        bool transferSuccess = super.transfer(to, value);
+        require(transferSuccess);
+        
+        if (isContract(to)) {
+            ContractReceiver receiver = ContractReceiver(to);
+            receiver.tokenFallback(msg.sender, value, data);
+        }
+        
+        emit Transfer(msg.sender, to, value, data);
+        return true;
+    }
+
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool success) {
+        bool transferSuccess = super.transfer(to, value);
+        require(transferSuccess);
+        
+        if (isContract(to)) {
+            require(bytes(customFallback).length > 0);
+            bool callSuccess;
+            bytes4 sig = bytes4(keccak256(customFallback));
+            
+            assembly {
+                let ptr := mload(0x40)
+                mstore(ptr, sig)
+                mstore(add(ptr, 0x04), msg.sender)
+                mstore(add(ptr, 0x24), value)
+                mstore(add(ptr, 0x44), 0x60)
+                mstore(add(ptr, 0x64), mload(data))
+                
+                let dataPtr := add(data, 0x20)
+                for { let i := 0 } lt(i, mload(data)) { i := add(i, 0x20) } {
+                    mstore(add(add(ptr, 0x84), i), mload(add(dataPtr, i)))
+                }
+                
+                callSuccess := call(gas, to, 0, ptr, add(0x84, mload(data)), 0, 0)
+            }
+            require(callSuccess);
+        }
+        
+        emit Transfer(msg.sender, to, value, data);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        return super.transferFrom(_from, _to, _value);
+    }
+
+    function isContract(address _addr) private returns (bool) {
+        uint256 codeSize;
+        assembly {
+            codeSize := extcodesize(_addr)
+        }
+        return codeSize > 0;
+    }
+
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool) {
+        bool success = transferInternal(from, to, value);
+        if (success && isContract(to)) {
+            ContractReceiver(to).tokenFallback(from, value, data);
+        }
+        return success;
+    }
+
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool) {
+        bool success = transferInternal(from, to, value);
+        if (success && isContract(to)) {
+            if (useCustomFallback) {
+                bytes4 sig = bytes4(keccak256(customFallback));
+                bool callSuccess;
+                
+                assembly {
+                    let ptr := mload(0x40)
+                    mstore(ptr, sig)
+                    mstore(add(ptr, 0x04), from)
+                    mstore(add(ptr, 0x24), value)
+                    mstore(add(ptr, 0x44), 0x60)
+                    mstore(add(ptr, 0x64), mload(data))
+                    
+                    let dataPtr := add(data, 0x20)
+                    for { let i := 0 } lt(i, mload(data)) { i := add(i, 0x20) } {
+                        mstore(add(add(ptr, 0x84), i), mload(add(dataPtr, i)))
+                    }
+                    
+                    callSuccess := call(gas, to, 0, ptr, add(0x84, mload(data)), 0, 0)
+                }
+                require(callSuccess);
+            } else {
+                ContractReceiver(to).tokenFallback(from, value, data);
+            }
+        }
+        return success;
+    }
+
+    function transferInternal(address from, address to, uint256 value) internal returns (bool) {
+        return super.transferInternal(from, to, value);
+    }
+}
+```
+
+This implementation:
+1. Maintains compatibility with both ERC20 and ERC223 standards
+2. Implements ERC223 data transfers with contract detection
+3. Handles custom fallback functions using low-level calls
+4. Maintains proper inheritance from the provided ERC20 base contract
+5. Includes all required event emissions
+6. Uses SafeMath operations from the inherited contract
+7. Follows the constructor initialization pattern from the provided context
+
+The contract includes proper overflow checks through SafeMath and handles both EOA and contract addresses appropriately during transfers. The ERC223-specific functionality is implemented through function overloading and low-level calls for custom fallback handling.

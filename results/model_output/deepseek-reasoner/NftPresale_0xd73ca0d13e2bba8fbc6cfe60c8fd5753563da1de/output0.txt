@@ -1,0 +1,66 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+contract NftPresale is INftPresale, Ownable {
+    uint public constant START_TIME = 1634929200;
+    uint public constant FINISH_TIME = 1635015600;
+    uint public constant PRE_SALE_PRICE = 0.2 ether;
+
+    INFT public nft;
+    address public verifyAddress = 0x142581fda5769fe7f8d3b50794dBda454DA4F3ac;
+    mapping(address => bool) public buyers;
+    address payable public receiver;
+
+    constructor(address _nftAddress, address payable _receiverAddress) {
+        nft = INFT(_nftAddress);
+        receiver = _receiverAddress;
+    }
+
+    function buy(uint _amount, bytes memory _signature) external override payable {
+        require(block.timestamp >= START_TIME && block.timestamp <= FINISH_TIME, "Presale not active");
+        require(_amount == 1, "Can only buy 1");
+        require(msg.value == PRE_SALE_PRICE * _amount, "Incorrect ETH amount");
+        require(!buyers[msg.sender], "Already purchased");
+        require(verify(_signature), "Invalid signature");
+
+        buyers[msg.sender] = true;
+        nft.mint(msg.sender);
+    }
+
+    function cashOut(address _to) public onlyOwner {
+        require(_to != address(0), "Invalid recipient");
+        uint balance = address(this).balance;
+        (bool success, ) = _to.call{value: balance}("");
+        require(success, "Transfer failed");
+    }
+
+    function verify(bytes memory _signature) internal view returns(bool) {
+        bytes32 messageHash = prefixed(keccak256(abi.encodePacked(msg.sender)));
+        address signer = recoverSigner(messageHash, _signature);
+        return signer == verifyAddress;
+    }
+
+    function recoverSigner(bytes32 message, bytes memory sig) internal pure returns (address) {
+        require(sig.length == 65, "Invalid signature length");
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+
+        if (v < 27) v += 27;
+        require(v == 27 || v == 28, "Invalid signature version");
+
+        return ecrecover(message, v, r, s);
+    }
+
+    function prefixed(bytes32 hash) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+    }
+}
+```

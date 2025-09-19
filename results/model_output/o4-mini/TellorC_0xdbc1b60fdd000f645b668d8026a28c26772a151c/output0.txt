@@ -1,0 +1,158 @@
+pragma solidity 0.5.17;
+
+contract TellorC {
+    address private constant tellor = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+    bytes32 private constant slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+    address private owner;
+    address private miner;
+
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    /**
+     * @notice Allows the owner to change the designated miner.
+     */
+    function changeMiner(address _addr) external {
+        require(msg.sender == owner, "Only owner");
+        miner = _addr;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw TRB tokens from the Tellor contract.
+     */
+    function withdrawTrb(uint256 _amount) external {
+        require(msg.sender == owner, "Only owner");
+        // call transfer(address,uint256) on the Tellor contract (TRB token)
+        (bool success, ) = tellor.call(
+            abi.encodeWithSignature("transfer(address,uint256)", owner, _amount)
+        );
+        require(success, "TRB transfer failed");
+    }
+
+    /**
+     * @notice Allows the owner to withdraw ETH from this contract.
+     */
+    function withdrawEth(uint256 _amount) external {
+        require(msg.sender == owner, "Only owner");
+        require(address(this).balance >= _amount, "Insufficient ETH");
+        // send ETH to owner
+        address(uint160(owner)).transfer(_amount);
+    }
+
+    /**
+     * @notice Allows the owner to deposit a stake in the Tellor contract.
+     */
+    function depositStake() external {
+        require(msg.sender == owner, "Only owner");
+        // call depositStake() on the Tellor system contract
+        (bool success, ) = tellor.call(
+            abi.encodeWithSignature("depositStake()")
+        );
+        require(success, "Stake deposit failed");
+    }
+
+    /**
+     * @notice Allows the owner to request a staking withdrawal from the Tellor contract.
+     */
+    function requestStakingWithdraw() external {
+        require(msg.sender == owner, "Only owner");
+        // call requestStakingWithdraw() on the Tellor system contract
+        (bool success, ) = tellor.call(
+            abi.encodeWithSignature("requestStakingWithdraw()")
+        );
+        require(success, "Request withdraw failed");
+    }
+
+    /**
+     * @notice Allows the owner to withdraw their stake from the Tellor contract.
+     */
+    function withdrawStake() external {
+        require(msg.sender == owner, "Only owner");
+        // call withdrawStake() on the Tellor system contract
+        (bool success, ) = tellor.call(
+            abi.encodeWithSignature("withdrawStake()")
+        );
+        require(success, "Stake withdraw failed");
+    }
+
+    /**
+     * @notice Finalizes the contract: withdraw stake, transfer all TRB, then self-destruct.
+     */
+    function finalize() external {
+        require(msg.sender == owner, "Only owner");
+
+        // 1) Withdraw any staked TRB
+        (bool ok1, ) = tellor.call(
+            abi.encodeWithSignature("withdrawStake()")
+        );
+        require(ok1, "Final withdrawStake failed");
+
+        // 2) Pull remaining TRB balance
+        (bool ok2, bytes memory data) = tellor.call(
+            abi.encodeWithSignature("balanceOf(address)", address(this))
+        );
+        require(ok2, "Balance query failed");
+        uint256 bal = abi.decode(data, (uint256));
+        if (bal > 0) {
+            (bool ok3, ) = tellor.call(
+                abi.encodeWithSignature("transfer(address,uint256)", owner, bal)
+            );
+            require(ok3, "Final TRB transfer failed");
+        }
+
+        // 3) Self-destruct and forward any ETH
+        selfdestruct(address(uint160(owner)));
+    }
+
+    /**
+     * @notice Submits a mining solution to the Tellor contract.
+     */
+    function submitMiningSolution(
+        string calldata _nonce,
+        uint256[5] calldata _requestId,
+        uint256[5] calldata _value
+    ) external {
+        require(
+            msg.sender == owner || msg.sender == miner,
+            "Only owner or miner"
+        );
+        // call submitMiningSolution(string,uint256[5],uint256[5]) on Tellor
+        (bool success, ) = tellor.call(
+            abi.encodeWithSignature(
+                "submitMiningSolution(string,uint256[5],uint256[5])",
+                _nonce,
+                _requestId,
+                _value
+            )
+        );
+        require(success, "Mining submit failed");
+    }
+
+    /**
+     * @notice Fallback function that only forwards view calls to the Tellor contract.
+     */
+    function() external {
+        require(msg.sender == address(0), "Not allowed"); // only for view/staticcalls
+
+        address addr = tellor;
+        bytes memory _calldata = msg.data;
+        assembly {
+            let result := call(
+                not(0),      // gas: allow full gas
+                addr,        // to addr
+                0,           // no ETH
+                add(_calldata, 0x20),
+                mload(_calldata),
+                0,
+                0
+            )
+            let size := returndatasize
+            let ptr := mload(0x40)
+            returndatacopy(ptr, 0, size)
+            switch result
+                case 0 { revert(ptr, size) }
+                default { return(ptr, size) }
+        }
+    }
+}

@@ -1,0 +1,96 @@
+```solidity
+/**
+ * @title StandardToken
+ * @dev This contract implements the standard token functionality, including ERC223's transfer and approve functions,
+ * as well as an additional approveAndCall function for more advanced use cases. It also includes a modifier to restrict
+ * certain actions if the sender is a foundation account.
+ */
+contract standardToken is ERC20Token, limitedFactor {
+
+    mapping (address => uint256) balances;
+
+    mapping (address => mapping (address => uint256)) allowances;
+
+    /**
+     * @notice Returns the balance of the specified address.
+     * @param _owner The address to query the balance of.
+     * @return The balance of the specified address.
+     * @dev This function is used to check the balance of a specific address.
+     */
+    function balanceOf(address _owner) constant public returns (uint256) {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice Transfers tokens from the sender's address to another address.
+     * @param _to The recipient address.
+     * @param _value The amount of tokens to transfer.
+     * @return A boolean value indicating whether the transfer was successful.
+     * @dev This function transfers tokens from the sender's address to another address, checking for sufficient balance and preventing overflow.
+     */
+    function transfer(address _to, uint256 _value) public FoundationAccountNeedFreezeOneYear(msg.sender) returns (bool success) {
+        require(balances[msg.sender] >= _value);
+        balances[msg.sender] -= _value;
+        balances[_to] += _value;
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Approves another address to spend tokens on behalf of the sender.
+     * @param _spender The address that will be allowed to spend the tokens.
+     * @param _value The amount of tokens to approve.
+     * @return A boolean value indicating whether the approval was successful.
+     * @dev This function sets the allowance for a spender and raises an Approval event.
+     */
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowances[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Approves and then calls the recipient contract with the approved amount and extra data.
+     * @param _spender The address of the recipient contract.
+     * @param _value The amount of tokens to approve.
+     * @param _extraData Additional data to pass to the recipient contract.
+     * @return A boolean value indicating whether the operation was successful.
+     * @dev This function approves a spender and then calls a method on the spender contract, passing the approved amount and extra data.
+     */
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        tokenRecipient spender = tokenRecipient(_spender);
+        approve(_spender, _value);
+        spender.receiveApproval(msg.sender, _value, this, _extraData);
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another, using the allowance mechanism.
+     * @param _from The address to transfer tokens from.
+     * @param _to The address to transfer tokens to.
+     * @param _value The amount of tokens to transfer.
+     * @return A boolean value indicating whether the transfer was successful.
+     * @dev This function transfers tokens from one address to another, checking for sufficient balance, allowance, and preventing overflow.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(balances[_from] >= _value);
+        require(allowances[_from][msg.sender] >= _value);
+        balances[_from] -= _value;
+        balances[_to] += _value;
+        allowances[_from][msg.sender] -= _value;
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the amount of tokens that an owner has allowed a spender to spend.
+     * @param _owner The address of the token owner.
+     * @param _spender The address of the spender.
+     * @return The remaining allowance for the spender.
+     * @dev This function checks the allowance set by the owner for the spender.
+     */
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining) {
+        return allowances[_owner][_spender];
+    }
+}
+```

@@ -1,0 +1,92 @@
+Here's the complete implementation of the HEXToken contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    struct Stake {
+        uint40 stakeId;
+        uint256 stakedHearts;
+        uint256 stakedDays;
+        uint256 startDay;
+    }
+
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowed;
+    mapping(address => Stake[]) private stakes;
+    uint40 private nextStakeId = 1;
+
+    function currentDay() external view returns (uint256) {
+        return block.timestamp / 1 days;
+    }
+
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "HEX: zero amount");
+        require(newStakedDays >= 1, "HEX: minimum 1 day");
+        require(balances[msg.sender] >= newStakedHearts, "HEX: insufficient balance");
+
+        balances[msg.sender] -= newStakedHearts;
+        uint256 startDay = block.timestamp / 1 days;
+
+        stakes[msg.sender].push(Stake({
+            stakeId: nextStakeId,
+            stakedHearts: newStakedHearts,
+            stakedDays: newStakedDays,
+            startDay: startDay
+        }));
+
+        nextStakeId++;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowed[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(recipient != address(0), "HEX: invalid recipient");
+        require(balances[msg.sender] >= amount, "HEX: insufficient balance");
+
+        balances[msg.sender] -= amount;
+        balances[recipient] += amount;
+        return true;
+    }
+
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < stakes[msg.sender].length, "HEX: invalid index");
+        Stake storage stake = stakes[msg.sender][stakeIndex];
+        require(stake.stakeId == stakeIdParam, "HEX: stake ID mismatch");
+        require(block.timestamp / 1 days >= stake.startDay + stake.stakedDays, "HEX: stake not mature");
+
+        balances[msg.sender] += stake.stakedHearts;
+
+        // Remove stake from array
+        if (stakeIndex < stakes[msg.sender].length - 1) {
+            stakes[msg.sender][stakeIndex] = stakes[msg.sender][stakes[msg.sender].length - 1];
+        }
+        stakes[msg.sender].pop();
+    }
+
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return stakes[stakerAddr].length;
+    }
+}
+```
+
+Key implementation details:
+1. **currentDay()** calculates days since Unix epoch using block timestamp
+2. **stakeStart**:
+   - Validates input parameters
+   - Deducts staked amount from sender's balance
+   - Creates new stake with unique ID and stores in sender's stake list
+3. **stakeEnd**:
+   - Validates stake ownership and maturity
+   - Returns staked amount to sender's balance
+   - Efficiently removes stake from array using swap-and-pop
+4. **transfer** implements basic ERC20-like token transfer functionality
+5. **approve** implements basic allowance functionality (note: transferFrom not implemented per requirements)
+6. State management uses mappings to track balances, allowances, and stakes
+7. Stake maturity check ensures users must wait the full staking period before ending stake
+
+The implementation maintains all required functionality while adhering to the original interface and Solidity 0.8.13 requirements.

@@ -1,0 +1,140 @@
+pragma solidity ^0.5.17;
+
+contract LockProxy is Ownable {
+    using SafeMath for uint;
+    using SafeERC20 for IERC20;
+
+    struct TxArgs {
+        bytes toAssetHash;
+        bytes toAddress;
+        uint256 amount;
+    }
+
+    address public managerProxyContract;
+    mapping(uint64 => bytes) public proxyHashMap;
+    mapping(address => mapping(uint64 => bytes)) public assetHashMap;
+
+    event SetManagerProxyEvent(address manager);
+    event BindProxyEvent(uint64 toChainId, bytes targetProxyHash);
+    event BindAssetEvent(address fromAssetHash, uint64 toChainId, bytes targetAssetHash, uint initialAmount);
+    event UnlockEvent(address toAssetHash, address toAddress, uint256 amount);
+    event LockEvent(address fromAssetHash, address fromAddress, uint64 toChainId, bytes toAssetHash, bytes toAddress, uint256 amount);
+
+    modifier onlyManagerContract() {
+        IEthCrossChainManagerProxy ieccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        require(_msgSender() == ieccmp.getEthCrossChainManager(), "msgSender is not EthCrossChainManagerContract");
+        _;
+    }
+
+    function setManagerProxy(address ethCCMProxyAddr) onlyOwner public {
+        require(ethCCMProxyAddr != address(0), "invalid proxy address");
+        managerProxyContract = ethCCMProxyAddr;
+        emit SetManagerProxyEvent(ethCCMProxyAddr);
+    }
+
+    function bindProxyHash(uint64 toChainId, bytes memory targetProxyHash) onlyOwner public returns (bool) {
+        require(targetProxyHash.length > 0, "targetProxyHash empty");
+        proxyHashMap[toChainId] = targetProxyHash;
+        emit BindProxyEvent(toChainId, targetProxyHash);
+        return true;
+    }
+
+    function bindAssetHash(address fromAssetHash, uint64 toChainId, bytes memory toAssetHash) onlyOwner public returns (bool) {
+        require(fromAssetHash != address(0), "invalid asset address");
+        require(toAssetHash.length > 0, "toAssetHash empty");
+        assetHashMap[fromAssetHash][toChainId] = toAssetHash;
+        uint256 initAmt = getBalanceFor(fromAssetHash);
+        emit BindAssetEvent(fromAssetHash, toChainId, toAssetHash, initAmt);
+        return true;
+    }
+
+    function lock(address fromAssetHash, uint64 toChainId, bytes memory toAddress, uint256 amount) public payable returns (bool) {
+        bytes memory toAssetHash = assetHashMap[fromAssetHash][toChainId];
+        require(toAssetHash.length > 0, "asset not bound for target chain");
+        require(_transferToContract(fromAssetHash, amount), "transfer to contract failed");
+
+        TxArgs memory args = TxArgs({
+            toAssetHash: toAssetHash,
+            toAddress: toAddress,
+            amount: amount
+        });
+        bytes memory serialized = _serializeTxArgs(args);
+
+        IEthCrossChainManagerProxy proxy = IEthCrossChainManagerProxy(managerProxyContract);
+        address manager = proxy.getEthCrossChainManager();
+        bytes memory method = abi.encodePacked(this.unlock.selector);
+        bool ok = IEthCrossChainManager(manager).crossChain(toChainId, proxyHashMap[toChainId], method, serialized);
+        require(ok, "crossChain call failed");
+
+        emit LockEvent(fromAssetHash, _msgSender(), toChainId, toAssetHash, toAddress, amount);
+        return true;
+    }
+
+    function unlock(bytes memory argsBs, bytes memory /*fromContractAddr*/, uint64 /*fromChainId*/) onlyManagerContract public returns (bool) {
+        TxArgs memory args = _deserializeTxArgs(argsBs);
+        address toAsset = Utils.bytesToAddress(args.toAssetHash);
+        address toAddr = Utils.bytesToAddress(args.toAddress);
+        require(_transferFromContract(toAsset, toAddr, args.amount), "transfer from contract failed");
+        emit UnlockEvent(toAsset, toAddr, args.amount);
+        return true;
+    }
+
+    function getBalanceFor(address fromAssetHash) public view returns (uint256) {
+        if (fromAssetHash == address(0)) {
+            return address(this).balance;
+        } else {
+            return IERC20(fromAssetHash).balanceOf(address(this));
+        }
+    }
+
+    function _transferToContract(address fromAssetHash, uint256 amount) internal returns (bool) {
+        if (fromAssetHash == address(0)) {
+            require(msg.value == amount, "ether sent mismatch");
+            return true;
+        } else {
+            return _transferERC20ToContract(fromAssetHash, _msgSender(), address(this), amount);
+        }
+    }
+
+    function _transferFromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        if (toAssetHash == address(0)) {
+            require(address(this).balance >= amount, "insufficient ether");
+            address(uint160(toAddress)).transfer(amount);
+            return true;
+        } else {
+            return _transferERC20FromContract(toAssetHash, toAddress, amount);
+        }
+    }
+
+    function _transferERC20ToContract(address fromAssetHash, address fromAddress, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20(fromAssetHash).safeTransferFrom(fromAddress, toAddress, amount);
+        return true;
+    }
+
+    function _transferERC20FromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20(toAssetHash).safeTransfer(toAddress, amount);
+        return true;
+    }
+
+    function _serializeTxArgs(TxArgs memory args) internal pure returns (bytes memory) {
+        return abi.encodePacked(
+            ZeroCopySink.WriteVarBytes(args.toAssetHash),
+            ZeroCopySink.WriteVarBytes(args.toAddress),
+            ZeroCopySink.WriteUint255(args.amount)
+        );
+    }
+
+    function _deserializeTxArgs(bytes memory valueBs) internal pure returns (TxArgs memory) {
+        uint256 offset = 0;
+        (bytes memory toAssetHash, uint256 newOffset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        offset = newOffset;
+        (bytes memory toAddress, uint256 newOffset2) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        offset = newOffset2;
+        (uint256 amount, ) = ZeroCopySource.NextUint255(valueBs, offset);
+        return TxArgs({
+            toAssetHash: toAssetHash,
+            toAddress: toAddress,
+            amount: amount
+        });
+    }
+}

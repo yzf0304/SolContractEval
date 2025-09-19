@@ -1,0 +1,220 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.14;
+
+/**
+ * @title Cyber
+ * @author [Your Name]
+ * @notice The Cyber contract is an ERC721 token contract that allows for minting, burning, and traversing tokens across different chains using LayerZero.
+ * @dev This contract extends the ERC721Omni contract to include additional functionality such as public minting, huntlist minting, and chain traversal.
+ */
+contract Cyber is ERC721Omni {
+
+    string private _baseURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") { 
+        endpoint = ILayerZeroEndpoint(_lzEndpoint); 
+    }
+
+    /**
+     * @dev Modifier to ensure that the caller is a user (not a contract).
+     */
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Contract Caller");
+        _;
+    }
+
+    /**
+     * @notice Allows users to donate to the contract.
+     * @dev This function accepts ETH donations.
+     */
+    function donate() external payable {}
+
+    /**
+     * @dev Allows token owner to traverse to another chain via LayerZero.
+     * @param _chainId Destination chain ID
+     * @param tokenId ID of the token to traverse
+     */
+    function traverseChains(uint16 _chainId, uint tokenId) public payable {
+        require(msg.sender == ownerOf(tokenId), "Not token owner");
+        require(trustedRemoteLookup[_chainId].length != 0, "Unsupported chain");
+        
+        _burn(tokenId);
+
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        (uint messageFee, ) = endpoint.estimateFees(_chainId, address(this), payload, false, abi.encodePacked(uint16(1), gasForLzReceive));
+        
+        require(msg.value >= messageFee, "Insufficient fee");
+
+        endpoint.send{value: msg.value}(_chainId, trustedRemoteLookup[_chainId], payload, payable(msg.sender), address(0x0), abi.encodePacked(uint16(1), gasForLzReceive));
+    }
+
+    /**
+     * @notice Internal function to handle the reception of tokens from another chain.
+     * @param _srcChainId The ID of the source chain.
+     * @param _srcAddress The address of the sender on the source chain.
+     * @param _nonce The nonce of the message.
+     * @param _payload The payload containing the recipient address and token ID.
+     */
+    function _LzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) override internal {
+        (address toAddr, uint tokenId) = abi.decode(_payload, (address, uint));
+        _safeMint(toAddr, tokenId);
+    }
+
+    /**
+     * @notice Allows users to mint a token during the public mint phase.
+     */
+    function publicMint() external callerIsUser {
+        require(publicStatus, "Public mint inactive");
+        require(publicMinted < publicMintedCap, "Public mint cap reached");
+        require(totalSupply < maximumSupply, "Max supply reached");
+
+        _mint(msg.sender, totalSupply);
+        publicMinted++;
+        totalSupply++;
+    }
+
+    /**
+     * @notice Allows users to mint tokens if they are on the huntlist.
+     * @param _proof The Merkle proof to verify the caller's inclusion in the huntlist.
+     */
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        require(huntlistStatus, "Huntlist mint inactive");
+        require(totalSupply < maximumSupply - 2, "Max supply reached");
+        
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(verifyProof(_proof, merkleRoot, leaf), "Invalid proof");
+
+        _mint(msg.sender, totalSupply);
+        _mint(msg.sender, totalSupply + 1);
+        _addressData[msg.sender].huntlistMinted += 2;
+        totalSupply += 2;
+    }
+
+    /**
+     * @notice Verifies a Merkle proof against the root.
+     * @param proof The Merkle proof.
+     * @param root The Merkle root.
+     * @param leaf The leaf to be verified.
+     * @return A boolean indicating whether the proof is valid.
+     */
+    function verifyProof(bytes32[] memory proof, bytes32 root, bytes32 leaf) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash < proofElement) {
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+        return computedHash == root;
+    }
+
+    /**
+     * @notice Allows the owner of a token to burn it.
+     * @param tokenId The ID of the token to be burned.
+     */
+    function burnHunter(uint256 tokenId) external {
+        require(msg.sender == ownerOf(tokenId), "Not token owner");
+        _burn(tokenId);
+    }
+
+    /**
+     * @notice Sets the state of the public mint.
+     * @param _state The new state of the public mint.
+     */
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    /**
+     * @notice Sets the state of the huntlist mint.
+     * @param _state The new state of the huntlist mint.
+     */
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    /**
+     * @notice Sets the cap for the public mint supply.
+     * @param _supply The new cap for the public mint supply.
+     */
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        require(_supply <= maximumSupply, "Supply exceeds maximum");
+        publicMintedCap = _supply;
+    }
+
+    /**
+     * @notice Sets the Merkle root for the huntlist.
+     * @param _newROOT The new Merkle root.
+     */
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    /**
+     * @notice Depreciates the mint and mints remaining tokens to the deployer.
+     */
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Mint already depreciated");
+        depreciatedMint = true;
+        for (uint256 i = 0; i < 66; i++) {
+            _mint(msg.sender, totalSupply);
+            totalSupply++;
+        }
+    }
+
+    /**
+     * @notice Sets the base URI for the token metadata.
+     * @param _newURI The new base URI.
+     */
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseURI = _newURI;
+    }
+
+    /**
+     * @notice Sets the gas amount for the LayerZero receive function.
+     * @param _newGasValue The new gas value.
+     */
+    function setGasForDestinationLzReceive(uint _newGasValue) external onlyOwner {
+        gasForLzReceive = _newGasValue;
+    }
+
+    /**
+     * @notice Sets the LayerZero endpoint address.
+     * @param _lzEndpoint The new LayerZero endpoint address.
+     */
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    /**
+     * @notice Returns the base URI for the token metadata.
+     * @return The base URI.
+     */
+    function baseURI() override public view returns (string memory) {
+        return _baseURI;
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all ETH from the contract.
+     */
+    function withdrawDonations() external onlyOwner {
+        payable(owner).transfer(address(this).balance);
+    }
+}
+```
+
+This smart contract implements the specified functionality while adhering to the context and constraints given. It includes functionality for minting and burning tokens, chain traversal using LayerZero, and configuration of various contract states and parameters by the contract owner.

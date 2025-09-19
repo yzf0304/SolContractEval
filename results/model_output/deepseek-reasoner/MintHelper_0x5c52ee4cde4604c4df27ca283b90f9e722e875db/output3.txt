@@ -1,0 +1,69 @@
+Here is the completed MintHelper contract:
+
+```solidity
+pragma solidity 0.5.10;
+
+contract MintHelper is Ownable {
+    using SafeMath for uint;
+
+    string public name;
+    address public mintableToken;
+    mapping(bytes32 => bool) public successfulPayments;
+
+    constructor(address mToken, string memory mName) public {
+        mintableToken = mToken;
+        name = mName;
+    }
+
+    function setMintableToken(address mToken) public onlyOwner returns (bool) {
+        mintableToken = mToken;
+        return true;
+    }
+
+    function paymentSuccessful(bytes32 paymentId) public view returns (bool) {
+        return successfulPayments[paymentId];
+    }
+
+    function proxyMint(uint256 nonce, bytes32 challenge_digest) public returns (bool) {
+        bool success = ERC918Interface(mintableToken).mint(nonce, challenge_digest);
+        require(success, "Mint failed");
+        return success;
+    }
+
+    function withdraw() public onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    function send(address _tokenAddr, address dest, uint value) public onlyOwner returns (bool) {
+        return ERC20Interface(_tokenAddr).transfer(dest, value);
+    }
+
+    function multisend(address _tokenAddr, bytes32 paymentId, address[] memory dests, uint256[] memory values) public onlyOwner returns (uint256) {
+        require(!successfulPayments[paymentId], "Payment ID already used");
+        require(dests.length == values.length, "Length mismatch");
+        
+        successfulPayments[paymentId] = true;
+        ERC20Interface token = ERC20Interface(_tokenAddr);
+        uint256 successCount = 0;
+        
+        for (uint i = 0; i < dests.length; i++) {
+            bool success = token.transfer(dests[i], values[i]);
+            if (success) {
+                successCount = successCount.add(1);
+            }
+        }
+        
+        return successCount;
+    }
+}
+
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+}
+```
+
+Note: The SafeMath library is included with at least the `add` function to support the required operations. In a production environment, you should include the complete SafeMath implementation from OpenZeppelin contracts.

@@ -1,0 +1,119 @@
+Here is the completed TombRaid contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+    uint256 internal cutoff;
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+    uint256 public raidPrice = 0.005 ether;
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    function flipLockStatuses(uint256[] calldata tokenIds) public onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            isLocked[tokenIds[i]] = !isLocked[tokenIds[i]];
+            emit Locked(tokenIds[i]);
+        }
+    }
+
+    function withdraw(address recipient) external onlyOwner {
+        (bool success, ) = recipient.call{value: address(this).balance}("");
+        require(success, "Transfer failed");
+    }
+
+    function raid(uint256 tokenId) public payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raid is not active");
+        require(msg.value == raidPrice, "Incorrect ETH sent");
+        require(!isLocked[tokenId], "Token is locked");
+
+        uint256 pseudoRandom = _genPseudoRandomNumber(tokenId);
+        if (pseudoRandom < cutoff) {
+            if (tokenTiers[tokenId] < MAX_TIER) {
+                tokenTiers[tokenId]++;
+                emit TierUpdated(tokenId, tokenTiers[tokenId]);
+            }
+        } else {
+            isLocked[tokenId] = true;
+            emit Locked(tokenId);
+        }
+    }
+
+    function numPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        uint256 total = Boneheadz.totalSupply();
+        for (uint256 i = 1; i <= total; i++) {
+            uint256 tier = tokenTiers[i];
+            if (tier <= MAX_TIER) {
+                counts[tier]++;
+            }
+        }
+        return counts;
+    }
+
+    function numLockedPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        uint256 total = Boneheadz.totalSupply();
+        for (uint256 i = 1; i <= total; i++) {
+            if (isLocked[i]) {
+                uint256 tier = tokenTiers[i];
+                if (tier <= MAX_TIER) {
+                    counts[tier]++;
+                }
+            }
+        }
+        return counts;
+    }
+
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.difficulty, block.timestamp, tokenId)));
+    }
+}
+```
+
+This implementation:
+1. Toggles raid status with flipRaidStatus
+2. Updates pricing and cutoff parameters
+3. Manages token locking through flipLockStatuses
+4. Implements raid mechanics with pseudo-random outcomes
+5. Includes view functions for tracking tier distributions
+6. Uses OpenZeppelin's Ownable for access control
+7. Follows the exact compiler version (0.8.13) and dependencies specified
+
+The contract maintains strict adherence to the provided context and requirements while implementing all specified functionality.

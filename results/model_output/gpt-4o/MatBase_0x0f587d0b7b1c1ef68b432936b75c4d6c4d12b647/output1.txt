@@ -1,0 +1,171 @@
+Here is the completed implementation of the `MatBase` contract according to the provided context and requirements:
+
+```solidity
+/**
+ * @title MatBase
+ * @dev This contract is a base for a token crowdsale, including functionalities like minting tokens,
+ *      managing the whitelist, and handling token purchases. It inherits from Ownable, MatToken, and MatBonus.
+ * @notice Manages the crowdsale process, including setting start and end times, managing funds, and minting tokens.
+ */
+contract MatBase is Ownable, MatToken, MatBonus {
+
+    using SafeMath for uint256;
+
+    uint256 public constant _START_DATE = 1508284800; // 18-Oct-17 00:00:00 UTC
+    uint256 public constant _END_DATE = 1513641600; // 19-Dec-17 00:00:00 UTC
+    uint256 public constant CROWDSALE_PRICE = 100; // MAT per ETH
+    address public constant ICO_ADDRESS = 0x6075a5A0620861cfeF593a51A01aF0fF179168C7;
+    address public constant PARTNERS_WALLET = 0x39467d5B39F1d24BC8479212CEd151ad469B0D7E;
+    address public constant TEAM_WALLET = 0xe1d32147b08b2a7808026D4A94707E321ccc7150;
+    address public constant PRESALE_CONTRACT = 0x503FE694CE047eCB51952b79eCAB2A907Afe8ACd;
+
+    uint256 public startTime;
+    uint256 public endTime;
+    address public wallet;
+    address public p_wallet;
+    address public t_wallet;
+    uint256 public totalCollected;
+    uint256 public rate;
+    bool public isWhitelistOn;
+    uint256 public whiteListLimit;
+
+    enum WLS {notlisted, listed, fulfilled}
+    struct FundReservation {
+        WLS status;
+        uint256 reserved;
+    }
+
+    mapping(address => FundReservation) public whitelist;
+
+    event Mint(address indexed purchaser, uint256 amount);
+    event Bonus(address indexed purchaser, uint256 amount);
+    event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amountTokens, string referral);
+    event White(address indexed to, uint256 reservation);
+
+    function MatBase() public {
+        startTime = _START_DATE;
+        endTime = _END_DATE;
+        wallet = ICO_ADDRESS;
+        rate = CROWDSALE_PRICE;
+        p_wallet = PARTNERS_WALLET;
+        t_wallet = TEAM_WALLET;
+        balances[p_wallet] = MAT_PARTNERS_SUPPLY_LIMIT;
+        balances[t_wallet] = MAT_TEAM_SUPPLY_LIMIT;
+        totalSupply = MAT_PARTNERS_SUPPLY_LIMIT + MAT_TEAM_SUPPLY_LIMIT;
+        whiteListLimit = MAT_TOTAL_SUPPLY_LIMIT;
+    }
+
+    function setStartTime(uint256 _startTime) onlyOwner public {
+        require(_startTime >= now);
+        startTime = _startTime;
+    }
+
+    function setEndTime(uint256 _endTime) onlyOwner public {
+        require(_endTime > startTime);
+        endTime = _endTime;
+    }
+
+    function hasEnded() public constant returns (bool) {
+        return now > endTime;
+    }
+
+    function mint(address _to, uint256 _tokens) internal returns (bool) {
+        require(totalSupply.add(_tokens) <= MAT_TOTAL_SUPPLY_LIMIT);
+        balances[_to] = balances[_to].add(_tokens);
+        totalSupply = totalSupply.add(_tokens);
+        Mint(_to, _tokens);
+        return true;
+    }
+
+    function forwardFunds() internal {
+        wallet.transfer(msg.value);
+    }
+
+    function validPurchase() internal constant returns (bool) {
+        return now >= startTime && now <= endTime && msg.value != 0;
+    }
+
+    function () payable public {
+        buyTokens(msg.sender);
+    }
+
+    function buyTokens(address beneficiary) public payable {
+        require(validPurchase());
+        require(beneficiary != address(0));
+
+        uint256 weiAmount = msg.value;
+        uint256 tokens = weiAmount.mul(rate);
+        uint256 bonus = calcBonus(tokens);
+
+        totalCollected = totalCollected.add(weiAmount);
+
+        require(mint(beneficiary, tokens));
+        if (bonus > 0) {
+            require(mint(beneficiary, bonus));
+            Bonus(beneficiary, bonus);
+        }
+
+        TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, "");
+        forwardFunds();
+    }
+
+    function buyTokensReferral(address beneficiary, string referral) public payable {
+        require(validPurchase());
+        require(beneficiary != address(0));
+
+        uint256 weiAmount = msg.value;
+        uint256 tokens = weiAmount.mul(rate);
+        uint256 bonus = calcBonus(tokens);
+
+        totalCollected = totalCollected.add(weiAmount);
+
+        require(mint(beneficiary, tokens));
+        if (bonus > 0) {
+            require(mint(beneficiary, bonus));
+            Bonus(beneficiary, bonus);
+        }
+
+        TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, referral);
+        forwardFunds();
+    }
+
+    function stopWhitelistReservetion() onlyOwner public {
+        isWhitelistOn = false;
+    }
+
+    function setWhiteListStatus(bool _isWhitelistOn) onlyOwner public {
+        isWhitelistOn = _isWhitelistOn;
+    }
+
+    function buyTokenWL(uint256 tokens) internal returns (bool) {
+        require(isWhitelistOn);
+        require(whitelist[msg.sender].status == WLS.listed);
+        require(tokens <= whitelist[msg.sender].reserved);
+
+        whitelist[msg.sender].status = WLS.fulfilled;
+        whitelist[msg.sender].reserved = 0;
+        return mint(msg.sender, tokens);
+    }
+
+    function regWL(address wlmember, uint256 reservation) onlyOwner public returns (bool) {
+        require(wlmember != address(0));
+        require(reservation > 0);
+        require(whiteListLimit >= reservation);
+
+        whitelist[wlmember] = FundReservation(WLS.listed, reservation);
+        whiteListLimit = whiteListLimit.sub(reservation);
+        White(wlmember, reservation);
+        return true;
+    }
+
+    function convert(address _to, uint256 _pretokens, uint256 _tokens) onlyOwner public returns (bool) {
+        require(_to != address(0));
+        require(balances[PRESALE_CONTRACT] >= _pretokens);
+
+        balances[PRESALE_CONTRACT] = balances[PRESALE_CONTRACT].sub(_pretokens);
+        return mint(_to, _tokens);
+    }
+}
+```
+
+This implementation strictly adheres to the given description and requirements. It avoids introducing unrelated code or dependencies while fully implementing the specified functionalities.

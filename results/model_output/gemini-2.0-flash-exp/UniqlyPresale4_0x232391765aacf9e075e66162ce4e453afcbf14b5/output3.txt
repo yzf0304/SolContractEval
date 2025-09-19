@@ -1,0 +1,244 @@
+```solidity
+//SPDX-License-Identifier: Unlicense
+//ERC20 functions for fallback tokens recovery
+
+abstract contract IERC20 {
+    function balanceOf(address _owner)
+        external
+        virtual
+        returns (uint256 balance);
+
+    function transfer(address _to, uint256 _value) external virtual;
+    // can not 'returns (bool success);' because of USDT
+    // and other tokens that not follow ERC20 spec fully.
+}
+
+/**
+ * @title UniqlyPresale4
+ * @notice A smart contract for managing a presale of a token, allowing users to contribute ETH within certain limits and time frames.
+ * @dev The contract ensures that the presale is conducted within specified parameters and allows for the withdrawal of funds by users or the owner.
+ */
+contract UniqlyPresale4 {
+    // presale target - close presale when reached
+    uint256 public immutable presaleLimit;
+
+    // minimum pay-in per user
+    uint256 public immutable minPerUser;
+
+    // maximum pay-in per user
+    uint256 public immutable maxPerUser;
+
+    // timestamp ending presale
+    uint256 public immutable presaleEnd;
+
+    // failsafe time - fail if not properly closed after presaleEnd
+    uint256 constant failSafeTime = 2 weeks;
+
+    // owner address - will receive ETH if success
+    address public owner;
+
+    /**
+     * @notice Initializes the presale contract with the given parameters.
+     * @param _presaleLimit The maximum amount of ETH to be collected in the presale.
+     * @param _minPerUser The minimum amount of ETH a user can contribute.
+     * @param _maxPerUser The maximum amount of ETH a user can contribute.
+     * @param _presaleEnd The Unix timestamp at which the presale ends.
+     * @param _owner The address of the contract owner.
+     */
+    constructor(
+        uint256 _presaleLimit, 
+        uint256 _minPerUser, 
+        uint256 _maxPerUser, 
+        uint256 _presaleEnd, 
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    // flags need for logic (false is default)
+    bool presaleEnded;
+    bool presaleFailed;
+    bool presaleStarted;
+
+    // list of user balances (zero is default)
+    mapping(address => uint256) private balances;
+
+    /**
+     * @notice Allows users to contribute ETH to the presale.
+     * @dev Users can send ETH to the contract, and their contributions are recorded. The presale can end if the limit is reached.
+     */
+    receive() external payable {
+        // only if not ended
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        // only if within time limit
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        // record new user balance if possible
+        uint256 amount = msg.value + balances[msg.sender];
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+        balances[msg.sender] = amount;
+
+        // end presale if reached limit
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    /**
+     * @notice Starts the presale, allowing users to contribute.
+     * @dev Only the contract owner can start the presale.
+     */
+    function start() external {
+        require(msg.sender == owner, "Only owner can start");
+        require(!presaleStarted, "Presale already started");
+        presaleStarted = true;
+    }
+
+    /**
+     * @notice Returns the balance of a specific user.
+     * @param user The address of the user.
+     * @return The balance of the user in the presale.
+     */
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    /**
+     * @notice Returns the balance of the caller.
+     * @return The balance of the caller in the presale.
+     */
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    /**
+     * @notice Returns the total amount of ETH collected in the presale.
+     * @return The total amount of ETH collected.
+     */
+    function collected() public view returns (uint256) {
+        uint256 total;
+        for (address user : getContributors()) {
+            total += balances[user];
+        }
+        return total;
+    }
+
+    /**
+     * @notice Allows withdrawal of funds based on presale status.
+     * @dev
+     * - If presale hasn't ended and fail-safe time has passed, marks presale as failed.
+     * - If called by owner after successful presale, withdraws all contract balance.
+     * - If presale failed, allows users to withdraw their contributed funds.
+     * - Returns true if withdrawal was successful, false otherwise.
+     * @notice Behavior depends on presale state:
+     *   - Presale ongoing: No action (returns false)
+     *   - Presale ended but not failed: Only owner can withdraw (returns true if owner)
+     *   - Presale failed: Any user can withdraw their contribution (returns true)
+     *   - Presale succeeded: Only owner can withdraw (returns true if owner)
+     * @dev Uses `send` for withdrawals which may fail silently if recipient rejects ETH
+     * @return bool True if funds were withdrawn, false otherwise
+     */
+    function withdraw() external returns (bool) {
+        // If presale hasn't ended and fail-safe time has passed, marks presale as failed.
+        if (!presaleEnded && block.timestamp > presaleEnd + failSafeTime) {
+            presaleFailed = true;
+        }
+
+        // If called by owner after successful presale, withdraws all contract balance.
+        if (presaleEnded && msg.sender == owner && !presaleFailed) {
+            send(owner, address(this).balance);
+            return true;
+        }
+
+        // If presale failed, allows users to withdraw their contributed funds.
+        if (presaleFailed) {
+            uint256 amount = balances[msg.sender];
+            if (amount > 0) {
+                balances[msg.sender] = 0;
+                send(msg.sender, amount);
+                return true;
+            }
+        }
+
+        // If presale succeeded, only owner can withdraw
+        if (presaleEnded && msg.sender == owner && !presaleFailed) {
+            send(owner, address(this).balance);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @notice Sends ETH from the contract to a specified address.
+     * @param user The address to send ETH to.
+     * @param amount The amount of ETH to send.
+     * @dev This function is used internally by the `withdraw` function.
+     */
+    function send(address user, uint256 amount) private {
+        (bool success, ) = user.call{value: amount}("");
+        require(success, "Send failed");
+    }
+
+    /**
+     * @notice Allows the owner to withdraw any ERC20 tokens accidentally sent to the contract.
+     * @param token The ERC20 token to withdraw.
+     * @dev This function ensures that the owner can recover any ERC20 tokens sent to the contract.
+     */
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Only owner");
+        uint256 balance = token.balanceOf(address(this));
+        token.transfer(owner, balance);
+    }
+
+    // change ownership in two steps to be sure about owner address
+    address public newOwner;
+
+    /**
+     * @notice Allows the current owner to delegate ownership to a new address.
+     * @param _newOwner The address of the new owner.
+     * @dev Only the current owner can delegate ownership.
+     */
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Only owner");
+        newOwner = _newOwner;
+    }
+
+    /**
+     * @notice Allows the new owner to accept the ownership of the contract.
+     * @dev The new owner must call this function to finalize the ownership transfer.
+     */
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Only new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+
+    function getContributors() private view returns (address[] memory) {
+        address[] memory contributors = new address[](balances.length); //Preallocate array memory
+        uint256 counter = 0;
+
+        //Iterate through mapping to find addresses with >0 balances
+        for (uint256 i = 0; i < contributors.length; i++){
+            if (balances[contributors[i]] > 0) {
+                contributors[counter] = contributors[i];
+                counter++;
+            }
+        }
+
+        //Copy elements into the dynamically sized array
+        address[] memory finalContributors = new address[](counter);
+        for(uint256 i = 0; i < counter; i++){
+            finalContributors[i] = contributors[i];
+        }
+
+        return finalContributors;
+    }
+}
+```

@@ -1,0 +1,150 @@
+Here is a simple, self‐contained implementation of `HEXToken` (Solidity 0.8.13) that provides  
+– a basic ERC-20 (transfer/approve) interface,  
+– a very simple “day” counter,  
+– per‐address stake arrays,  
+– `stakeStart`/`stakeEnd` logic, and  
+– `stakeCount`.  
+
+No other contracts are introduced.  
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    // --- ERC20 state ---
+    string public constant name     = "HEX Token";
+    string public constant symbol   = "HEX";
+    uint8  public constant decimals = 8;
+    uint256 public totalSupply;
+
+    mapping(address => uint256)                      private _balances;
+    mapping(address => mapping(address => uint256))  private _allowances;
+
+    // --- Staking state ---
+    struct Stake {
+        uint40  id;
+        uint40  stakedDay;    // the day index when staked
+        uint40  stakedDays;   // duration in days
+        uint256 hearts;       // amount staked
+        bool    ended;
+    }
+
+    // per‐address list of stakes
+    mapping(address => Stake[]) private _stakes;
+    // unique ID generator for stakes
+    uint40 private _nextStakeId = 1;
+
+    // --- Events ---
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    event StakeStarted(address indexed staker, uint40 indexed stakeId, uint256 hearts, uint40 days);
+    event StakeEnded(address indexed   staker, uint40 indexed stakeId, uint256 hearts);
+
+    // --- Constructor: mint initial supply to deployer ---
+    constructor(uint256 initialSupply_) {
+        totalSupply             = initialSupply_;
+        _balances[msg.sender]   = initialSupply_;
+        emit Transfer(address(0), msg.sender, initialSupply_);
+    }
+
+    // --- ERC20: balanceOf ---
+    function balanceOf(address account) external view returns (uint256) {
+        return _balances[account];
+    }
+
+    // --- ERC20: approve ---
+    function approve(address spender, uint256 amount) external returns (bool) {
+        _allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    // --- ERC20: allowance ---
+    function allowance(address owner, address spender) external view returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    // --- ERC20: transfer ---
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(_balances[msg.sender] >= amount, "HEX: insufficient balance");
+        _balances[msg.sender]   -= amount;
+        _balances[recipient]    += amount;
+        emit Transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    // You could also add transferFrom(...) here if needed.
+
+    // --- Helpers for staking ---
+    /// @notice Returns the current day number (UTC days since Unix epoch)
+    function currentDay() external view returns (uint256) {
+        return block.timestamp / 1 days;
+    }
+
+    /// @notice Start a new stake of `newStakedHearts` for `newStakedDays` days
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "HEX: must stake > 0");
+        require(newStakedDays > 0, "HEX: duration > 0");
+        require(_balances[msg.sender] >= newStakedHearts, "HEX: insufficient balance");
+
+        // pull tokens into stake
+        _balances[msg.sender] -= newStakedHearts;
+
+        // record the stake
+        uint40 sid = _nextStakeId++;
+        Stake memory st = Stake({
+            id:          sid,
+            stakedDay:   uint40(block.timestamp / 1 days),
+            stakedDays:  uint40(newStakedDays),
+            hearts:      newStakedHearts,
+            ended:       false
+        });
+        _stakes[msg.sender].push(st);
+
+        emit StakeStarted(msg.sender, sid, newStakedHearts, uint40(newStakedDays));
+    }
+
+    /// @notice End an existing stake (if its term has passed)
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < _stakes[msg.sender].length, "HEX: bad index");
+
+        Stake storage st = _stakes[msg.sender][stakeIndex];
+        require(st.id == stakeIdParam,       "HEX: stakeId mismatch");
+        require(!st.ended,                   "HEX: already ended");
+
+        uint256 dayNow = block.timestamp / 1 days;
+        require(dayNow >= uint256(st.stakedDay) + uint256(st.stakedDays),
+                "HEX: stake not yet mature");
+
+        st.ended = true;
+        // return hearts to balance (no interest logic here)
+        _balances[msg.sender] += st.hearts;
+
+        emit StakeEnded(msg.sender, st.id, st.hearts);
+    }
+
+    /// @notice How many stakes (active + ended) an address ever made
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return _stakes[stakerAddr].length;
+    }
+}
+```
+
+Explanation of the key parts:
+
+1. ERC-20 basics  
+   – `balances` and `allowances` mappings  
+   – `transfer` & `approve` with standard checks and events  
+
+2. Day counter  
+   – `currentDay()` simply returns `block.timestamp / 1 days`  
+
+3. Staking  
+   – Each address has an array of `Stake` structs  
+   – You deposit (lock) tokens in `stakeStart(...)`  
+   – Once the term is up (`currentDay >= stakeDay + stakedDays`), you call `stakeEnd(...)` to unlock your tokens  
+   – `stakeCount(...)` returns how many stakes an address has ever made  
+
+Feel free to extend this with interest calculations, penalty logic, `transferFrom`, or more elaborate bookkeeping, but the above meets exactly the requested interface.

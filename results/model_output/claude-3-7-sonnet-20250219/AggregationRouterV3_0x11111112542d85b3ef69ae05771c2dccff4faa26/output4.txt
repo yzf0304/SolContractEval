@@ -1,0 +1,178 @@
+Here's the completed AggregationRouterV3 contract based on the provided context:
+
+```solidity
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     * @dev This function calls the `swap` function internally and handles CHI token burning based on the provided flags.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     * @return chiSpent The amount of CHI tokens burned.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 gasStart = gasleft();
+        IChi chi = IChi(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c);
+
+        if (desc.flags & _BURN_FROM_MSG_SENDER != 0) {
+            chiSpent = chi.freeFromUpTo(msg.sender, 16);
+        } else if (desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+            chiSpent = chi.freeFromUpTo(tx.origin, 16);
+        }
+
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+        gasLeft = gasStart - gasleft();
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     * @dev This function checks the validity of the input parameters and performs the swap using the specified aggregation executor.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        uint256 initialGas = gasleft();
+        
+        // Check if ETH value is needed for the swap
+        require(
+            desc.srcToken.isETH() == (msg.value == desc.amount) || 
+            desc.flags & _REQUIRES_EXTRA_ETH != 0,
+            "Invalid msg.value"
+        );
+
+        // Handle permit if provided
+        _permit(desc.srcToken, desc.amount, desc.permit);
+
+        // Transfer tokens from user to srcReceiver (either this contract or custom receiver)
+        if (!desc.srcToken.isETH()) {
+            desc.srcToken.safeTransferFrom(
+                msg.sender,
+                desc.srcReceiver == address(0) ? address(this) : desc.srcReceiver,
+                desc.amount
+            );
+        }
+
+        // If tokens go through this contract
+        if (desc.srcReceiver == address(0)) {
+            // Approve tokens to the caller contract
+            if (!desc.srcToken.isETH()) {
+                desc.srcToken.uniApprove(address(caller), desc.amount);
+            }
+            
+            // Make the swap call
+            uint256 initialBalance = desc.dstToken.uniBalanceOf(address(this));
+            if (desc.srcToken.isETH()) {
+                caller.callBytes{value: msg.value}(data);
+            } else {
+                caller.callBytes(data);
+            }
+            
+            // Calculate received amount
+            returnAmount = desc.dstToken.uniBalanceOf(address(this)).sub(initialBalance);
+            
+            // Verify minimum return amount unless partial fill is allowed
+            if (desc.flags & _PARTIAL_FILL == 0) {
+                require(returnAmount >= desc.minReturnAmount, "Return amount is not enough");
+            } else {
+                require(returnAmount * desc.amount >= desc.minReturnAmount * desc.amount, "Return amount is not enough");
+            }
+            
+            // Transfer tokens to recipient
+            if (desc.dstReceiver != address(this)) {
+                desc.dstToken.uniTransfer(payable(desc.dstReceiver), returnAmount);
+            }
+        } else {
+            // If tokens don't go through this contract, recipient should claim them
+            if (desc.flags & _SHOULD_CLAIM != 0) {
+                returnAmount = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+                caller.callBytes(data);
+                returnAmount = desc.dstToken.uniBalanceOf(desc.dstReceiver).sub(returnAmount);
+            } else {
+                caller.callBytes(data);
+            }
+        }
+        
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+        
+        gasLeft = initialGas - gasleft();
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     * @dev This function transfers the specified amount of a given token to the owner.
+     * @param token The token to be rescued.
+     * @param amount The amount of the token to be transferred.
+     */
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        token.uniTransfer(payable(owner()), amount);
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send any remaining ETH to the owner.
+     * @dev This function self-destructs the contract and sends the remaining ETH to the owner.
+     */
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```
+
+This implementation includes all the required functions for the AggregationRouterV3 contract. The contract inherits from Ownable and UnoswapRouter, and uses SafeMath, SafeERC20, and UniERC20 libraries as specified. It handles token swaps, CHI token burning for gas optimization, and includes functions for rescuing funds and self-destructing the contract.

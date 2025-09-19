@@ -1,0 +1,98 @@
+pragma solidity 0.4.23;
+
+contract TokenReclaim {
+    mapping(address => string) internal _ethToSphtx;
+    mapping(string => string) internal _accountToPubKey;
+
+    event AccountRegister(address ethAccount, string sphtxAccount, string pubKey);
+
+    function register(string memory name, string memory pubKey) public {
+        bytes memory nameBytes = bytes(name);
+        uint256 nameLen = nameBytes.length;
+        require(nameLen >= 3 && nameLen <= 16, "Name length must be between 3 and 16");
+
+        // Validate first character: a-z or 0-9
+        uint8 c0 = uint8(nameBytes[0]);
+        require(
+            (c0 >= 97 && c0 <= 122) || (c0 >= 48 && c0 <= 57),
+            "Name must start with lowercase letter or digit"
+        );
+
+        // Validate remaining characters: a-z, 0-9, '-' or '.'
+        for (uint256 i = 1; i < nameLen; i++) {
+            uint8 ci = uint8(nameBytes[i]);
+            bool validLetter = (ci >= 97 && ci <= 122);
+            bool validDigit = (ci >= 48 && ci <= 57);
+            bool validHyphen = (ci == 45);
+            bool validDot = (ci == 46);
+            require(validLetter || validDigit || validHyphen || validDot,
+                "Name contains invalid character"
+            );
+        }
+
+        bytes memory pubKeyBytes = bytes(pubKey);
+        require(pubKeyBytes.length >= 50 && pubKeyBytes.length <= 64,
+            "Public key length must be between 50 and 64"
+        );
+
+        // Ensure caller has not already registered
+        require(
+            keccak256(bytes(_ethToSphtx[msg.sender])) == keccak256(bytes("")),
+            "Address already registered"
+        );
+
+        // Ensure name is not already taken
+        require(
+            keccak256(bytes(_accountToPubKey[name])) == keccak256(bytes("")),
+            "SPHTX name already in use"
+        );
+
+        _ethToSphtx[msg.sender] = name;
+        _accountToPubKey[name] = pubKey;
+
+        emit AccountRegister(msg.sender, name, pubKey);
+    }
+
+    function account(address addr) public view returns (string memory) {
+        return _ethToSphtx[addr];
+    }
+
+    function keys(address addr) public view returns (string memory) {
+        string memory sphtxName = _ethToSphtx[addr];
+        if (bytes(sphtxName).length == 0) {
+            return "";
+        }
+        return _accountToPubKey[sphtxName];
+    }
+
+    function nameAvailable(string memory name) public view returns (bool) {
+        bytes memory nameBytes = bytes(name);
+        uint256 nameLen = nameBytes.length;
+        if (nameLen < 3 || nameLen > 16) {
+            return false;
+        }
+
+        uint8 c0 = uint8(nameBytes[0]);
+        if (!((c0 >= 97 && c0 <= 122) || (c0 >= 48 && c0 <= 57))) {
+            return false;
+        }
+
+        for (uint256 i = 1; i < nameLen; i++) {
+            uint8 ci = uint8(nameBytes[i]);
+            bool validLetter = (ci >= 97 && ci <= 122);
+            bool validDigit = (ci >= 48 && ci <= 57);
+            bool validHyphen = (ci == 45);
+            bool validDot = (ci == 46);
+            if (!(validLetter || validDigit || validHyphen || validDot)) {
+                return false;
+            }
+        }
+
+        // Name must not already be mapped
+        if (keccak256(bytes(_accountToPubKey[name])) != keccak256(bytes(""))) {
+            return false;
+        }
+
+        return true;
+    }
+}

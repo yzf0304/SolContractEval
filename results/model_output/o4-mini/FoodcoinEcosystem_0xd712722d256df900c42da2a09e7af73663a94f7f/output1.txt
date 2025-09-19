@@ -1,0 +1,91 @@
+contract Manager is SpecialManager {
+
+    // адрес менеджеров
+    mapping(address => bool) public managerAddressMap;
+    // Соответствие адреса менеджеров и его номера
+    mapping(address => uint256) public managerAddressNumberMap;
+    // список менеджеров
+    mapping(uint256 => address) public managerListMap;
+    // сколько всего менеджеров
+    uint256 public managerCountInt = 0;
+
+    /**
+     * @notice Modifier to restrict access to only the owner or a manager.
+     * @dev This modifier checks if the message sender is either the owner or a registered manager.
+     */
+    modifier isManagerOrOwner {
+        require(managerAddressMap[msg.sender] == true || ownerAddressMap[msg.sender] == true);
+        _;
+    }
+
+    /**
+     * @notice Enables or re-enables a manager address.
+     * @dev Only callable by contract owner.
+     *      If the manager was never added, assigns a new index. If previously disabled, re-enables.
+     *      Emits ContractManagementUpdate in all cases.
+     * @param _onManagerAddress The address of the manager to enable.
+     * @return retrnVal True if the call actually changed state (added or re-enabled), false if already enabled.
+     */
+    function managerOn(address _onManagerAddress)
+        external
+        isOwner
+        returns (bool retrnVal)
+    {
+        require(_onManagerAddress != address(0));
+
+        // Если уже добавлен ранее
+        if (managerAddressNumberMap[_onManagerAddress] > 0) {
+            // Если сейчас отключен — включаем
+            if (!managerAddressMap[_onManagerAddress]) {
+                managerAddressMap[_onManagerAddress] = true;
+                ContractManagementUpdate("Manager", msg.sender, _onManagerAddress, true);
+                retrnVal = true;
+            } else {
+                // Уже включен
+                retrnVal = false;
+            }
+        } else {
+            // Добавляем нового менеджера
+            managerAddressMap[_onManagerAddress] = true;
+            managerAddressNumberMap[_onManagerAddress] = managerCountInt;
+            managerListMap[managerCountInt] = _onManagerAddress;
+            managerCountInt++;
+            ContractManagementUpdate("Manager", msg.sender, _onManagerAddress, true);
+            retrnVal = true;
+        }
+    }
+
+    /**
+     * @notice Disables a manager.
+     * @dev Only callable by contract owner.
+     *      Cannot disable the 0-th (initial) manager.
+     *      Emits ContractManagementUpdate if successful.
+     * @param _offManagerAddress The address of the manager to disable.
+     * @return retrnVal True if the manager was active and is now disabled, false otherwise.
+     */
+    function managerOff(address _offManagerAddress)
+        external
+        isOwner
+        returns (bool retrnVal)
+    {
+        // Проверяем, что менеджер был добавлен (индекс >0) и в данный момент активен
+        if (managerAddressNumberMap[_offManagerAddress] > 0 && managerAddressMap[_offManagerAddress]) {
+            managerAddressMap[_offManagerAddress] = false;
+            ContractManagementUpdate("Manager", msg.sender, _offManagerAddress, false);
+            retrnVal = true;
+        } else {
+            retrnVal = false;
+        }
+    }
+
+    /**
+     * @notice Initializes the contract and adds the creator as the first manager.
+     * @dev The creator is the 0-th manager and cannot be removed by managerOff.
+     */
+    function Manager() public {
+        managerAddressMap[msg.sender] = true;
+        managerAddressNumberMap[msg.sender] = managerCountInt;
+        managerListMap[managerCountInt] = msg.sender;
+        managerCountInt++;
+    }
+}

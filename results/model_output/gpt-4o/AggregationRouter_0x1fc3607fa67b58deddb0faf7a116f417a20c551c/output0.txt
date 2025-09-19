@@ -1,0 +1,158 @@
+Here is the complete implementation of the `AggregationRouter` contract based strictly on your provided context and contract description. Note that no new contracts are introduced, and the implementation adheres to Solidity 0.7.6.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.7.6;
+
+contract AggregationRouter is Permitable, Ownable {
+    using SafeMath for uint256;
+
+    address public immutable WETH;
+    address private constant ETH_ADDRESS = address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    event Exchange(address pair, uint256 amountOut, address output);
+
+    modifier ensure(uint256 deadline) {
+        require(deadline >= block.timestamp, "Router: EXPIRED");
+        _;
+    }
+
+    constructor(address _WETH) public {
+        WETH = _WETH;
+    }
+
+    receive() external payable {
+        require(msg.sender == WETH, "Router: ETH_NOT_ACCEPTED");
+    }
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    ) external payable ensure(block.timestamp.add(60)) returns (uint256 returnAmount) {
+        require(desc.minReturnAmount > 0, "Router: INVALID_MIN_RETURN");
+        require(data.length > 0, "Router: INVALID_DATA");
+
+        uint256 initialBalanceDstToken = getBalance(desc.dstToken, desc.dstReceiver);
+        uint256 initialBalanceSrcToken = getBalance(desc.srcToken, desc.srcReceiver);
+
+        if (!isETH(desc.srcToken)) {
+            if (desc.permit.length > 0) {
+                _permit(desc.srcToken, desc.amount, desc.permit);
+            }
+            TransferHelper.safeTransferFrom(
+                address(desc.srcToken),
+                desc.srcReceiver,
+                address(caller),
+                desc.amount
+            );
+        }
+
+        caller.callBytes{value: isETH(desc.srcToken) ? desc.amount : 0}(data);
+
+        uint256 finalBalanceDstToken = getBalance(desc.dstToken, desc.dstReceiver);
+        returnAmount = finalBalanceDstToken.sub(initialBalanceDstToken);
+
+        require(
+            returnAmount >= desc.minReturnAmount,
+            "Router: RETURN_AMOUNT_TOO_LOW"
+        );
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+
+        uint256 spentAmount = initialBalanceSrcToken.sub(
+            getBalance(desc.srcToken, desc.srcReceiver)
+        );
+
+        if ((desc.flags & _PARTIAL_FILL) == 0) {
+            require(spentAmount == desc.amount, "Router: INCOMPLETE_FILL");
+        }
+    }
+
+    function getBalance(IERC20 token, address account)
+        internal
+        view
+        returns (uint256)
+    {
+        if (isETH(token)) {
+            return account.balance;
+        } else {
+            return token.balanceOf(account);
+        }
+    }
+
+    function isETH(IERC20 token) internal pure returns (bool) {
+        return address(token) == ETH_ADDRESS;
+    }
+
+    function rescueFunds(address token, uint256 amount) external onlyOwner {
+        if (isETH(IERC20(token))) {
+            TransferHelper.safeTransferETH(msg.sender, amount);
+        } else {
+            TransferHelper.safeTransfer(token, msg.sender, amount);
+        }
+    }
+}
+```
+
+### Explanation of Key Features:
+
+1. **Constructor**:
+   - Initializes the `WETH` address provided during deployment.
+
+2. **Receive Function**:
+   - Allows the contract to receive ETH, but only from the WETH contract.
+
+3. **Swap Function**:
+   - Handles swaps using an external `IAggregationExecutor` caller.
+   - Manages partial fills and enforces the required return amount.
+   - Supports both ERC20 tokens and ETH.
+
+4. **Permit Handling**:
+   - Processes permit-based transfers for tokens that support the functionality.
+
+5. **Token Balance Handling**:
+   - `getBalance` checks balances for both ERC20 tokens and ETH.
+
+6. **Rescue Funds**:
+   - Provides the `onlyOwner` function to recover funds locked in the contract.
+   - Supports both ERC20 tokens and ETH rescue.
+
+7. **Modifier**:
+   - Ensures swaps are processed before a specific deadline.
+
+### Compliance:
+- Compiler version: `^0.7.6` as specified.
+- No additional contracts or features outside of the provided context were introduced.

@@ -1,0 +1,107 @@
+Here’s the complete implementation of the `MerkleDistributor` contract adhering to the description, the given context, and proper Solidity development practices:
+
+```solidity
+pragma solidity ^0.6.11;
+
+contract MerkleDistributor is IMerkleDistributor {
+    address public immutable override token;
+    bytes32 public immutable override merkleRoot;
+
+    // This is a packed array of booleans.
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    /**
+     * @notice Initializes the contract with the token address and the Merkle root.
+     * @param token_ The address of the token to be distributed.
+     * @param merkleRoot_ The root of the Merkle tree used for verifying claims.
+     */
+    constructor(address token_, bytes32 merkleRoot_) public {
+        token = token_;
+        merkleRoot = merkleRoot_;
+    }
+
+    /**
+     * @notice Checks if a particular index has already been claimed.
+     * @param index The index in the Merkle tree to check.
+     * @return bool True if the index has been claimed, false otherwise.
+     * @dev Uses a bit map to efficiently store and check the claimed status of each index.
+     */
+    function isClaimed(uint256 index) public view override returns (bool) {
+        uint256 wordIndex = index / 256; 
+        uint256 bitIndex = index % 256; 
+        uint256 claimedWord = claimedBitMap[wordIndex]; 
+        uint256 mask = (1 << bitIndex); 
+        return claimedWord & mask == mask;
+    }
+
+    /**
+     * @notice Marks a particular index as claimed.
+     * @param index The index in the Merkle tree to mark as claimed.
+     * @dev Updates the bit map to reflect that the index has been claimed.
+     */
+    function _setClaimed(uint256 index) private {
+        uint256 wordIndex = index / 256; 
+        uint256 bitIndex = index % 256; 
+        claimedBitMap[wordIndex] = claimedBitMap[wordIndex] | (1 << bitIndex);
+    }
+
+    /**
+     * @notice Allows a user to claim their tokens by providing a valid Merkle proof.
+     * @param index The index in the Merkle tree corresponding to the claim.
+     * @param account The address of the account claiming the tokens.
+     * @param amount The amount of tokens to be claimed.
+     * @param merkleProof The Merkle proof to verify the claim.
+     * @dev Verifies the Merkle proof, checks if the claim has already been made, and transfers the tokens to the account.
+     * Emits a Claimed event if successful.
+     */
+    function claim(uint256 index, address account, uint256 amount, bytes32[] calldata merkleProof) external override {
+        require(!isClaimed(index), "MerkleDistributor: Drop already claimed."); // Ensure it hasn't been claimed yet.
+
+        // Verify the Merkle proof.
+        bytes32 node = keccak256(abi.encodePacked(index, account, amount));
+        require(MerkleProof.verify(merkleProof, merkleRoot, node), "MerkleDistributor: Invalid proof.");
+
+        // Mark as claimed and transfer tokens.
+        _setClaimed(index);
+        require(IERC20(token).transfer(account, amount), "MerkleDistributor: Transfer failed.");
+
+        emit Claimed(index, account, amount);
+    }
+}
+```
+
+### Explanation of the Contract:
+
+1. **State Variables**:
+   - `token`: Address of the ERC20 token being distributed.
+   - `merkleRoot`: Root of the Merkle tree used to verify valid claims.
+   - `claimedBitMap`: A bitmap to track claimed indices, using a packed array of uint256 for efficient storage.
+
+2. **`isClaimed` Function**:
+   - Divides the `index` into a "word index" and a "bit index" (since 1 uint256 = 256 bits).
+   - Uses bit masking to test if a specific bit in the bitmap array has been set.
+
+3. **`_setClaimed` Function**:
+   - Similar to `isClaimed`, splits the `index` into a "word" and a "bit".
+   - Sets the target bit in the bitmap using the `|` operator to mark it as claimed.
+
+4. **`claim` Function**:
+   - Checks if the claim for the `index` has already been made. If yes, it reverts.
+   - Verifies the provided Merkle proof using the `MerkleProof` library.
+   - Marks the claim as claimed using `_setClaimed`.
+   - Transfers the specified `amount` of tokens to the `account`.
+   - Emits a `Claimed` event upon success.
+
+5. **MerkleProof Library**:
+   - The `verify` function checks if the provided proof is valid for the given `leaf` and `root`.
+   - Ensures that the computed hash of the proof matches the `merkleRoot`.
+
+6. **Events**:
+   - The `Claimed` event logs successful claims with the index, account, and amount.
+
+### Design Notes:
+- **Gas Efficiency**: The contract uses a bitmap for tracking claims, which is far more efficient than using boolean mappings.
+- **Security**: The `_setClaimed` function is private to avoid unintended modification of the bitmap. Claims are validated via a secure Merkle proof check.
+- **Compatibility**: The contract adheres to Solidity version `0.6.11` and implements the `IMerkleDistributor` interface, as per the requirements.
+
+Deployment and usage require the user to calculate Merkle proofs and pass them as calldata when interacting with the contract.

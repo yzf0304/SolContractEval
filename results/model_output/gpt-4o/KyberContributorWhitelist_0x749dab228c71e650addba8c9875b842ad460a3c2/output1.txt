@@ -1,0 +1,134 @@
+Below is the complete and functional implementation of the `KyberContributorWhitelist` smart contract according to the provided context and description. It adheres strictly to the constraints specified and is compatible with Solidity version `0.4.13`.
+
+```solidity
+pragma solidity ^0.4.13;
+
+/**
+ * @title Ownable
+ * @dev The Ownable contract has an owner address, and provides basic authorization control
+ * functions, this simplifies the implementation of "user permissions".
+ */
+contract Ownable {
+    address public owner;
+
+    /**
+     * @dev The Ownable constructor sets the original `owner` of the contract to the sender
+     * account.
+     */
+    function Ownable() public {
+        owner = msg.sender;
+    }
+
+    /**
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    /**
+     * @dev Allows the current owner to transfer control of the contract to a newOwner.
+     * @param newOwner The address to transfer ownership to.
+     */
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+}
+
+/**
+ * @title KyberContributorWhitelist
+ * @notice A smart contract for managing a whitelist of contributors, allowing the owner to set and manage contribution caps.
+ * @dev This contract extends the Ownable contract, providing ownership control over the whitelisting and cap setting functionalities.
+ */
+contract KyberContributorWhitelist is Ownable {
+    // 7 wei is a dummy cap. Will be set by owner to a real cap after registration ends.
+    uint public slackUsersCap = 7;
+    mapping(address => uint) public addressCap;
+
+    /**
+     * @notice Constructor for the KyberContributorWhitelist contract.
+     * @dev Initializes the contract. No specific initialization is required in this constructor.
+     */
+    function KyberContributorWhitelist() public {}
+
+    /**
+     * @notice Event emitted when an address is listed with a specific cap.
+     * @param _user The address being listed.
+     * @param _cap The contribution cap set for the address.
+     * @param _time The timestamp when the address was listed.
+     */
+    event ListAddress(address indexed _user, uint _cap, uint _time);
+
+    /**
+     * @notice Allows the owner to list an address with a specific contribution cap.
+     * @dev The owner can delist an address by setting the cap to 0. The cap can also be changed at any time.
+     * @param _user The address to be listed.
+     * @param _cap The contribution cap for the address.
+     */
+    function listAddress(address _user, uint _cap) public onlyOwner {
+        require(_user != address(0));
+        addressCap[_user] = _cap;
+        ListAddress(_user, _cap, now);
+    }
+
+    /**
+     * @notice Allows the owner to list multiple addresses with their respective contribution caps.
+     * @dev This function is optimized for network congestion by batching the listing process.
+     * @param _users An array of addresses to be listed.
+     * @param _cap An array of contribution caps corresponding to the addresses.
+     */
+    function listAddresses(address[] _users, uint[] _cap) public onlyOwner {
+        require(_users.length == _cap.length);
+        for (uint i = 0; i < _users.length; i++) {
+            address _user = _users[i];
+            uint _userCap = _cap[i];
+            require(_user != address(0));
+            addressCap[_user] = _userCap;
+            ListAddress(_user, _userCap, now);
+        }
+    }
+
+    /**
+     * @notice Allows the owner to set the global cap for all addresses with a cap value of 1.
+     * @dev This function sets the `slackUsersCap` which is used as the cap for addresses with a cap value of 1.
+     * @param _cap The new global cap value.
+     */
+    function setSlackUsersCap(uint _cap) public onlyOwner {
+        slackUsersCap = _cap;
+    }
+
+    /**
+     * @notice Returns the contribution cap for a given address.
+     * @dev If the address has a cap of 1, it returns the `slackUsersCap`. Otherwise, it returns the specific cap.
+     * @param _user The address to check the cap for.
+     * @return The contribution cap for the address.
+     */
+    function getCap(address _user) public constant returns (uint) {
+        if (addressCap[_user] == 1) {
+            return slackUsersCap;
+        }
+        return addressCap[_user];
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send the remaining funds to the owner's address.
+     * @dev This function self-destructs the contract and transfers any remaining balance to the owner.
+     */
+    function destroy() public onlyOwner {
+        selfdestruct(owner);
+    }
+}
+```
+
+### Key Features
+1. **Ownership Control**: The contract inherits the `Ownable` contract, enabling only the `owner` to perform critical actions like listing addresses, setting caps, and destroying the contract.
+2. **Cap Management**: Owners can list individual or multiple addresses with caps, delist addresses (set their cap to `0`), or set a global cap (`slackUsersCap`) for addresses with a cap of `1`.
+3. **Cap Retrieval**: The `getCap` function retrieves the cap for any address, substituting the `slackUsersCap` when appropriate.
+4. **Self-Destruct**: The contract includes a `destroy` function for cleanup, transferring any remaining funds back to the owner.
+
+### Compliance
+- The implementation strictly adheres to the description and provided context.
+- Written for Solidity version `0.4.13`, avoiding modern features like `constructor` syntax or newer modifiers.
+- No additional contracts, dependencies, or unrelated code were introduced.

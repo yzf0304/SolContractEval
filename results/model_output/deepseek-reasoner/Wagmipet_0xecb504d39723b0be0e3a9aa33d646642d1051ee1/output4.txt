@@ -1,0 +1,184 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+/**
+ * @title Wagmipet
+ * @notice A simple pet simulation contract where the pet's needs (hunger, uncleanliness, boredom, sleepiness) must be managed.
+ * @dev The pet's conditions deteriorate over time and must be maintained by calling specific functions. If any condition exceeds 100, the pet is no longer alive.
+ */
+contract Wagmipet {
+    address _owner;
+    bool _birthed;
+    
+    event CaretakerLoved(address indexed caretaker, uint256 indexed amount);
+    
+    uint256 lastFeedBlock;
+    uint256 lastCleanBlock;
+    uint256 lastPlayBlock;
+    uint256 lastSleepBlock;
+    
+    uint8 internal hunger;
+    uint8 internal uncleanliness;
+    uint8 internal boredom;
+    uint8 internal sleepiness;
+    
+    mapping (address => uint256) public love;
+    
+    modifier onlyOwner() {
+        require(msg.sender == _owner);
+        _;
+    }
+    
+    constructor() {
+        _owner = msg.sender;
+        lastFeedBlock = block.number;
+        lastCleanBlock = block.number;
+        lastPlayBlock = block.number;
+        lastSleepBlock = block.number;
+        
+        hunger = 0;
+        uncleanliness = 0;
+        boredom = 0;
+        sleepiness = 0;
+    }
+    
+    function addLove(address caretaker, uint256 amount) internal {
+        love[caretaker] += amount;
+        emit CaretakerLoved(caretaker, amount);
+    }
+    
+    function feed() public {
+        uint256 currentBlock = block.number;
+        
+        hunger += uint8(currentBlock - lastFeedBlock);
+        uncleanliness += uint8(currentBlock - lastCleanBlock);
+        boredom += uint8(currentBlock - lastPlayBlock);
+        sleepiness += uint8(currentBlock - lastSleepBlock);
+        
+        require(getAlive(), "Pet is dead");
+        require(boredom + 10 < 100, "Too bored to eat");
+        require(uncleanliness + 3 < 100, "Too dirty to eat");
+        
+        hunger = 0;
+        boredom += 10;
+        uncleanliness += 3;
+        lastFeedBlock = currentBlock;
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function clean() public {
+        uint256 currentBlock = block.number;
+        
+        hunger += uint8(currentBlock - lastFeedBlock);
+        uncleanliness += uint8(currentBlock - lastCleanBlock);
+        boredom += uint8(currentBlock - lastPlayBlock);
+        sleepiness += uint8(currentBlock - lastSleepBlock);
+        
+        require(getAlive(), "Pet is dead");
+        require(uncleanliness > 0, "Already clean");
+        
+        uncleanliness = 0;
+        lastCleanBlock = currentBlock;
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function play() public {
+        uint256 currentBlock = block.number;
+        
+        hunger += uint8(currentBlock - lastFeedBlock);
+        uncleanliness += uint8(currentBlock - lastCleanBlock);
+        boredom += uint8(currentBlock - lastPlayBlock);
+        sleepiness += uint8(currentBlock - lastSleepBlock);
+        
+        require(getAlive(), "Pet is dead");
+        require(hunger + 10 < 100, "Too hungry to play");
+        require(sleepiness + 10 < 100, "Too sleepy to play");
+        require(uncleanliness + 5 < 100, "Too dirty to play");
+        
+        boredom = 0;
+        hunger += 10;
+        sleepiness += 10;
+        uncleanliness += 5;
+        lastPlayBlock = currentBlock;
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function sleep() public {
+        uint256 currentBlock = block.number;
+        
+        hunger += uint8(currentBlock - lastFeedBlock);
+        uncleanliness += uint8(currentBlock - lastCleanBlock);
+        boredom += uint8(currentBlock - lastPlayBlock);
+        sleepiness += uint8(currentBlock - lastSleepBlock);
+        
+        require(getAlive(), "Pet is dead");
+        require(uncleanliness < 80, "Too dirty to sleep");
+        require(sleepiness > 0, "Not sleepy");
+        
+        sleepiness = 0;
+        uncleanliness += 5;
+        lastSleepBlock = currentBlock;
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function getStatus() public view returns (string memory) {
+        if (!getAlive()) return "no longer with us";
+        
+        uint256 currentHunger = getHunger();
+        uint256 currentUncleanliness = getUncleanliness();
+        uint256 currentBoredom = getBoredom();
+        uint256 currentSleepiness = getSleepiness();
+        
+        if (currentHunger < 50 && currentUncleanliness < 50 && currentBoredom < 50 && currentSleepiness < 50) {
+            string[4] memory goodStatuses = ["gm", "im feeling great", "all good", "i love u"];
+            return goodStatuses[block.number % 4];
+        }
+        
+        string memory status;
+        uint8 highest = 0;
+        
+        if (currentSleepiness >= 50) {
+            highest = uint8(currentSleepiness);
+            status = "needs sleep";
+        }
+        if (currentBoredom >= 50 && currentBoredom > highest) {
+            highest = uint8(currentBoredom);
+            status = "needs play";
+        }
+        if (currentUncleanliness >= 50 && currentUncleanliness > highest) {
+            highest = uint8(currentUncleanliness);
+            status = "needs cleaning";
+        }
+        if (currentHunger >= 50 && currentHunger > highest) {
+            status = "needs food";
+        }
+        
+        return status;
+    }
+    
+    function getAlive() public view returns (bool) {
+        return getHunger() < 100 && getUncleanliness() < 100 && getBoredom() < 100 && getSleepiness() < 100;
+    }
+    
+    function getHunger() public view returns (uint256) {
+        return uint256(hunger) + (block.number - lastFeedBlock);
+    }
+    
+    function getUncleanliness() public view returns (uint256) {
+        return uint256(uncleanliness) + (block.number - lastCleanBlock);
+    }
+    
+    function getBoredom() public view returns (uint256) {
+        return uint256(boredom) + (block.number - lastPlayBlock);
+    }
+    
+    function getSleepiness() public view returns (uint256) {
+        return uint256(sleepiness) + (block.number - lastSleepBlock);
+    }
+}
+```

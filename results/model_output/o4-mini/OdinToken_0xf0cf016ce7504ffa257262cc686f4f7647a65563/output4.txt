@@ -1,0 +1,205 @@
+Here is the completed OdinToken contract (Solidity 0.4.21). It implements all ERC-20 interface methods, the airdrop/whitelisting logic, and owner-only burn/whitelisting. No extra contracts or dependencies are introduced—only the required functions and logic.
+
+```solidity
+pragma solidity 0.4.21;
+
+/**
+ * @title OdinToken
+ * @dev ERC20 token with special airdrop restrictions and owner-controlled whitelisting.
+ */
+contract OdinToken is ERC20Interface, Owned {
+    using SafeMath for uint256;
+
+    string public symbol;
+    string public name;
+    uint8  public decimals;
+    uint   private _totalSupply;
+    bool   private _whitelistAll;
+
+    struct balanceData {
+        bool locked;        // unused
+        uint balance;       // current balance
+        uint airDropQty;    // total airdropped to this address
+    }
+
+    mapping(address => balanceData)                   internal balances;
+    mapping(address => mapping(address => uint256))   internal allowed;
+
+    // Timestamps for restriction phases
+    uint256 private constant TS_2018SEP1  = 1535760000; // Sep 1 2018
+    uint256 private constant TS_2018OCT1  = 1538352000; // Oct 1 2018
+    uint256 private constant TS_2019JAN1  = 1546300800; // Jan 1 2019
+    uint256 private constant TS_2019APR1  = 1554076800; // Apr 1 2019
+    uint256 private constant TS_2019JUL1  = 1561939200; // Jul 1 2019
+
+    /**
+     * @dev Constructor. Assigns the entire supply to the contract owner.
+     */
+    function OdinToken() public {
+        owner        = msg.sender;
+        symbol       = "ODIN";
+        name         = "ODIN Token";
+        decimals     = 18;
+        _whitelistAll= false;
+        _totalSupply = 100000000000000000000000; // 100k * 10^18
+        balances[owner].balance = _totalSupply;
+        emit Transfer(address(0), owner, _totalSupply);
+    }
+
+    /**
+     * @return the total token supply.
+     */
+    function totalSupply() public view returns (uint256) {
+        return _totalSupply;
+    }
+
+    /**
+     * @dev Whitelist a single address (clears its airdrop lock).
+     */
+    function whitelistAddress(address to) public onlyOwner returns (bool) {
+        balances[to].airDropQty = 0;
+        return true;
+    }
+
+    /**
+     * @dev Whitelist all addresses (disable all airdrop restrictions).
+     */
+    function whitelistAllAddresses() public onlyOwner returns (bool) {
+        _whitelistAll = true;
+        return true;
+    }
+
+    /**
+     * @return the balance of a given address.
+     */
+    function balanceOf(address tokenOwner) public view returns (uint256) {
+        return balances[tokenOwner].balance;
+    }
+
+    /**
+     * @dev Transfer tokens, enforcing time-based airdrop restrictions unless whitelisted or owner.
+     */
+    function transfer(address to, uint256 tokens) public returns (bool) {
+        require(to != address(0));
+        require(to != msg.sender);
+        require(balances[msg.sender].balance >= tokens);
+
+        // If not owner and global whitelist is off, enforce airdrop lock
+        if (msg.sender != owner && !_whitelistAll) {
+            uint256 pct;
+            if      (now < TS_2018SEP1) pct =   0;
+            else if (now < TS_2018OCT1) pct =  10;
+            else if (now < TS_2019JAN1) pct =  25;
+            else if (now < TS_2019APR1) pct =  50;
+            else if (now < TS_2019JUL1) pct =  75;
+            else                         pct = 100;
+
+            // locked portion = airDropQty * (100 - pct) / 100
+            uint256 locked = balances[msg.sender].airDropQty
+                                .mul(uint256(100).sub(pct))
+                                .div(100);
+            // ensure post-transfer balance still covers the locked portion
+            require(balances[msg.sender].balance.sub(tokens) >= locked);
+        }
+
+        // do the transfer
+        balances[msg.sender].balance = balances[msg.sender].balance.sub(tokens);
+        balances[to].balance         = balances[to].balance.add(tokens);
+
+        // if owner is sending, this counts as an airdrop—track it
+        if (msg.sender == owner) {
+            balances[to].airDropQty = balances[to].airDropQty.add(tokens);
+        }
+
+        emit Transfer(msg.sender, to, tokens);
+        return true;
+    }
+
+    /**
+     * @dev Approve spender to spend up to `tokens` on your behalf.
+     */
+    function approve(address spender, uint256 tokens) public returns (bool) {
+        require(spender != address(0));
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    /**
+     * @dev Transfer from one address to another, using allowance. Applies same airdrop rules.
+     */
+    function transferFrom(address from, address to, uint256 tokens) public returns (bool) {
+        require(to   != address(0));
+        require(from != address(0));
+        require(balances[from].balance >= tokens);
+        require(allowed[from][msg.sender] >= tokens);
+
+        // apply airdrop restriction for non-owner unless whitelisted
+        if (from != owner && !_whitelistAll) {
+            uint256 pct;
+            if      (now < TS_2018SEP1) pct =   0;
+            else if (now < TS_2018OCT1) pct =  10;
+            else if (now < TS_2019JAN1) pct =  25;
+            else if (now < TS_2019APR1) pct =  50;
+            else if (now < TS_2019JUL1) pct =  75;
+            else                         pct = 100;
+
+            uint256 locked = balances[from].airDropQty
+                                .mul(uint256(100).sub(pct))
+                                .div(100);
+            require(balances[from].balance.sub(tokens) >= locked);
+        }
+
+        // perform transfer
+        balances[from].balance = balances[from].balance.sub(tokens);
+        balances[to].balance   = balances[to].balance.add(tokens);
+
+        // if owner is the source, record it as an airdrop
+        if (from == owner) {
+            balances[to].airDropQty = balances[to].airDropQty.add(tokens);
+        }
+
+        // deduct allowance
+        allowed[from][msg.sender] = allowed[from][msg.sender].sub(tokens);
+
+        emit Transfer(from, to, tokens);
+        return true;
+    }
+
+    /**
+     * @return how many tokens spender is still allowed to withdraw from tokenOwner.
+     */
+    function allowance(address tokenOwner, address spender) public view returns (uint256) {
+        return allowed[tokenOwner][spender];
+    }
+
+    /**
+     * @dev Not implemented in this contract.
+     */
+    function approveAndCall(address /*spender*/, uint256 /*tokens*/, bytes /*data*/) public returns (bool) {
+        revert();
+    }
+
+    /**
+     * @dev Burn tokens from the owner's balance, reducing total supply.
+     */
+    function burn(uint256 tokens) public onlyOwner returns (bool) {
+        require(balances[owner].balance >= tokens);
+
+        balances[owner].balance = balances[owner].balance.sub(tokens);
+        _totalSupply           = _totalSupply.sub(tokens);
+
+        emit Burn(tokens);
+        emit Transfer(owner, address(0), tokens);
+        return true;
+    }
+
+    /**
+     * @dev Reject any incoming ETH.
+     */
+    function () public {
+        // if someone sends ETH to this contract, revert
+        revert();
+    }
+}
+```

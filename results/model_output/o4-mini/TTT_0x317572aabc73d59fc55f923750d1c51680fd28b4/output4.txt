@@ -1,0 +1,140 @@
+pragma solidity ^0.4.24;
+
+contract TTT is ERC20, ERC223 {
+    using SafeMath for uint;
+
+    string internal _name;
+    string internal _symbol;
+    uint8  internal _decimals;
+    uint256 internal _totalSupply;
+
+    mapping(address => uint256)                     internal balances;
+    mapping(address => mapping(address => uint256)) internal allowed;
+
+    /**
+     * @notice Initializes the token with a name, symbol, decimals, and total supply.
+     * @param name_ The name of the token.
+     * @param symbol_ The symbol of the token.
+     * @param decimals_ The number of decimals the token supports.
+     * @param totalSupply_ The total supply of the token.
+     */
+    function TTT(
+        string name_,
+        string symbol_,
+        uint8  decimals_,
+        uint256 totalSupply_
+    )
+        public
+    {
+        _name       = name_;
+        _symbol     = symbol_;
+        _decimals   = decimals_;
+        _totalSupply = totalSupply_;
+        balances[msg.sender] = totalSupply_;
+    }
+
+    function name() public view returns (string) {
+        return _name;
+    }
+
+    function symbol() public view returns (string) {
+        return _symbol;
+    }
+
+    function decimals() public view returns (uint8) {
+        return _decimals;
+    }
+
+    function totalSupply() public view returns (uint256) {
+        return _totalSupply;
+    }
+
+    function balanceOf(address _owner) public view returns (uint256) {
+        return balances[_owner];
+    }
+
+    function allowance(address _owner, address _spender) public view returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    function transfer(address _to, uint256 _value) public returns (bool) {
+        require(_to != address(0));
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to]        = balances[_to].add(_value);
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function transferFrom(
+        address _from,
+        address _to,
+        uint256 _value
+    )
+        public
+        returns (bool)
+    {
+        require(_to != address(0));
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to]   = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function increaseApproval(address _spender, uint _addedValue) public returns (bool) {
+        allowed[msg.sender][_spender] = allowed[msg.sender][_spender].add(_addedValue);
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+
+    function decreaseApproval(address _spender, uint _subtractedValue) public returns (bool) {
+        uint oldValue = allowed[msg.sender][_spender];
+        if (_subtractedValue >= oldValue) {
+            allowed[msg.sender][_spender] = 0;
+        } else {
+            allowed[msg.sender][_spender] = oldValue.sub(_subtractedValue);
+        }
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens with data, calling tokenFallback on contracts.
+     * @param _to The recipient address.
+     * @param _value The amount to send.
+     * @param _data Extra data.
+     */
+    function transfer(address _to, uint _value, bytes _data) public {
+        require(_to != address(0));
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to]        = balances[_to].add(_value);
+
+        // ERC223 callback
+        if (isContract(_to)) {
+            ERC223ReceivingContract receiver = ERC223ReceivingContract(_to);
+            receiver.tokenFallback(msg.sender, _value, _data);
+        }
+
+        // ERC20 Transfer event
+        emit Transfer(msg.sender, _to, _value);
+        // ERC223 Transfer event
+        emit Transfer(msg.sender, _to, _value, _data);
+    }
+
+    /**
+     * @dev Checks whether an address is a contract.
+     * @param _addr The address to check.
+     * @return True if it's a contract.
+     */
+    function isContract(address _addr) private view returns (bool) {
+        uint256 size;
+        assembly { size := extcodesize(_addr) }
+        return size > 0;
+    }
+}

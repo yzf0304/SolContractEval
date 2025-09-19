@@ -1,0 +1,213 @@
+```solidity
+pragma solidity ^0.4.11;
+
+contract SafeMath {
+
+    //internals
+
+
+
+    function safeMul(uint a, uint b) internal returns(uint) {
+
+        uint c = a * b;
+
+        Assert(a == 0 || c / a == b);
+
+        return c;
+
+    }
+
+
+
+    function safeSub(uint a, uint b) internal returns(uint) {
+
+        Assert(b <= a);
+
+        return a - b;
+
+    }
+
+
+
+    function safeAdd(uint a, uint b) internal returns(uint) {
+
+        uint c = a + b;
+
+        Assert(c >= a && c >= b);
+
+        return c;
+
+    }
+
+
+
+    function Assert(bool assertion) internal {
+
+        if (!assertion) {
+
+            revert();
+
+        }
+
+    }
+
+}
+
+contract Kubera is SafeMath {
+
+    /* Public variables of the token */
+
+    string public standard = 'ERC20';
+
+    string public name = 'Kubera token';
+
+    string public symbol = 'KBR';
+
+    uint8 public decimals = 0;
+
+    uint256 public totalSupply;
+
+    address public owner;
+
+    uint public tokensSoldToInvestors = 0;
+
+    uint public maxGoalInICO = 2100000000;
+
+    /* From this time on tokens may be transferred (after ICO 23h59 10/11/2017)*/
+
+    uint256 public startTime = 1510325999;
+
+    /* Tells if tokens have been burned already */
+
+    bool burned;
+
+    bool hasICOStarted;
+
+    /* This wallet will hold tokens after ICO*/
+
+    address tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+
+    /* This creates an array with all balances */
+
+    mapping (address => uint256) public balanceOf;
+
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    /* This generates a public event on the blockchain that will notify clients */
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    event TransferToReferral(address indexed referralAddress, uint256 value);
+
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+
+    event Burned(uint amount);
+
+    /**
+     * @notice Initializes the contract with initial supply tokens to the creator of the contract.
+     * @dev Sets the owner and distributes the initial supply of tokens to the owner.
+     */
+    function Kubera() {
+        owner = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        // Give the owner all initial tokens
+        balanceOf[owner] = 2205000000;
+        // Update total supply
+        totalSupply      = 2205000000;
+    }
+
+    /**
+     * @notice Send some of your tokens to a given address.
+     * @param _to The address to which the tokens will be sent.
+     * @param _value The amount of tokens to send.
+     * @return A boolean indicating the success of the transfer.
+     * @dev Transfers tokens from the sender's address to the recipient's address.
+     */
+    function transfer(address _to, uint256 _value) returns(bool success) {
+        //Default function transfer the balance from msg.sender to an address
+        //Do not allow transfer until ICO is over
+        if(now < startTime) revert();
+        //Prevent transfer to 0x0 address. Use burn() instead
+        if (_to == 0x0) revert();
+        //Check if sender has enough funds
+        if (balanceOf[msg.sender] < _value) revert();
+        //Subtract from the sender
+        balanceOf[msg.sender] = safeSub(balanceOf[msg.sender], _value);
+        //Add the same to the recipient
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Allow another contract or person to spend some tokens in your behalf.
+     * @param _spender The address that will be allowed to spend the tokens.
+     * @param _value The amount of tokens that can be spent.
+     * @return A boolean indicating the success of the approval.
+     * @dev Approves a specified address to spend a certain amount of tokens on behalf of the message sender.
+     */
+    function approve(address _spender, uint256 _value) returns(bool success) {
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @dev Transfers tokens with ICO restrictions and validations.
+     * @param _from Source address
+     * @param _to Destination address
+     * @param _value Amount to transfer
+     * @return success Transfer success status
+     * @dev Requirements:
+     *   - Pre-ICO: Only owner can transfer, must burn unsold tokens
+     *   - ICO: Tracks tokens sold vs goal
+     *   - Post-ICO: Normal transfers allowed
+     * @dev Behavior:
+     *   - Validates timing and ownership
+     *   - Adjusts value if exceeding ICO goal
+     *   - Updates balances and allowance
+     *   - Emits Transfer event
+     */
+    function transferFrom(address _from, address _to, uint256 _value) returns(bool success) {
+        // Do not allow transfer until ICO is over
+        if(now < startTime) revert();
+        // Prevent transfer to 0x0 address. Use burn() instead
+        if (_to == 0x0) revert();
+        // Check if sender has enough funds
+        if (balanceOf[_from] < _value) revert();
+        // Check if allowed to spend
+        if (allowance[_from][msg.sender] < _value) revert();
+
+        balanceOf[_from] = safeSub(balanceOf[_from], _value);
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        allowance[_from][msg.sender] = safeSub(allowance[_from][msg.sender], _value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Burns the remaining tokens of the owner after the ICO ends.
+     * @dev Burns the remaining tokens of the owner and transfers a fixed amount to the tokensHolder address.
+     */
+    function burn() {
+        //Only owner can burn tokens
+        if (msg.sender != owner) revert();
+        //Can be burned only once
+        if (burned) revert();
+        //ICO needs to be over
+        if (now < startTime) revert();
+
+        uint amountToBurn = balanceOf[owner];
+        balanceOf[owner] = 0;
+        totalSupply = safeSub(totalSupply, amountToBurn);
+        Burned(amountToBurn);
+        burned = true;
+
+        // Transfer tokens to tokensHolder
+        uint amountToTransfer = 105000000;
+        balanceOf[tokensHolder] = safeAdd(balanceOf[tokensHolder], amountToTransfer);
+        balanceOf[owner] = safeAdd(balanceOf[owner], amountToTransfer); // give back to owner, the burned tokens
+        Transfer(owner, tokensHolder, amountToTransfer);
+
+    }
+}
+```

@@ -1,0 +1,166 @@
+Here's the completed `MatBase` contract based on the provided context and requirements:
+
+```solidity
+pragma solidity ^0.4.17;
+
+contract MatBase is Ownable, MatToken, MatBonus {
+    using SafeMath for uint256;
+
+    uint256 public startTime;
+    uint256 public endTime;
+    address public wallet;
+    address public p_wallet;
+    address public t_wallet;
+    uint256 public totalCollected;
+    uint256 public rate;
+    bool public isWhitelistOn;
+    uint256 public whiteListLimit;
+    
+    mapping (address => FundReservation) public whitelist;
+
+    function setStartTime(uint256 _startTime) public onlyOwner {
+        startTime = _startTime;
+    }
+
+    function setEndTime(uint256 _endTime) public onlyOwner {
+        endTime = _endTime;
+    }
+
+    function hasEnded() public constant returns (bool) {
+        return block.timestamp > endTime;
+    }
+
+    function mint(address _to, uint256 _tokens) internal returns (bool) {
+        require(_to != address(0));
+        uint256 newTotalSupply = totalSupply.add(_tokens);
+        require(newTotalSupply <= MAT_TOTAL_SUPPLY_LIMIT);
+        totalSupply = newTotalSupply;
+        balances[_to] = balances[_to].add(_tokens);
+        Mint(_to, _tokens);
+        return true;
+    }
+
+    function forwardFunds() internal {
+        wallet.transfer(msg.value);
+    }
+
+    function validPurchase() internal constant returns (bool) {
+        return block.timestamp >= startTime && 
+               block.timestamp <= endTime && 
+               msg.value != 0;
+    }
+
+    function () public payable {
+        buyTokens(msg.sender);
+    }
+
+    function buyTokens(address beneficiary) public payable {
+        require(beneficiary != address(0));
+        require(validPurchase());
+        
+        uint256 weiAmount = msg.value;
+        uint256 tokens = weiAmount.mul(rate).mul(MAT_UNIT).div(1 ether);
+        
+        if (isWhitelistOn) {
+            require(buyTokenWL(tokens));
+        }
+        
+        require(mint(beneficiary, tokens));
+        uint256 bonus = calcBonus(tokens);
+        if (bonus > 0) {
+            require(mint(beneficiary, bonus));
+            Bonus(beneficiary, bonus);
+        }
+        
+        totalCollected = totalCollected.add(weiAmount);
+        forwardFunds();
+        TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, "");
+    }
+
+    function buyTokensReferral(address beneficiary, string referral) public payable {
+        require(beneficiary != address(0));
+        require(validPurchase());
+        
+        uint256 weiAmount = msg.value;
+        uint256 tokens = weiAmount.mul(rate).mul(MAT_UNIT).div(1 ether);
+        
+        if (isWhitelistOn) {
+            require(buyTokenWL(tokens));
+        }
+        
+        require(mint(beneficiary, tokens));
+        uint256 bonus = calcBonus(tokens);
+        if (bonus > 0) {
+            require(mint(beneficiary, bonus));
+            Bonus(beneficiary, bonus);
+        }
+        
+        totalCollected = totalCollected.add(weiAmount);
+        forwardFunds();
+        TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, referral);
+    }
+
+    function stopWhitelistReservetion() public onlyOwner {
+        whiteListLimit = 0;
+    }
+
+    function setWhiteListStatus(bool _isWhitelistOn) public onlyOwner {
+        isWhitelistOn = _isWhitelistOn;
+    }
+
+    function buyTokenWL(uint256 tokens) internal returns (bool) {
+        FundReservation storage fr = whitelist[msg.sender];
+        require(fr.status == WLS.listed);
+        require(fr.reserved >= tokens);
+        fr.reserved = fr.reserved.sub(tokens);
+        if (fr.reserved == 0) {
+            fr.status = WLS.fulfilled;
+        }
+        return true;
+    }
+
+    function regWL(address wlmember, uint256 reservation) public onlyOwner returns (bool) {
+        require(reservation > 0);
+        require(whitelist[wlmember].status != WLS.fulfilled);
+        require(whiteListLimit >= reservation);
+        
+        whiteListLimit = whiteListLimit.sub(reservation);
+        whitelist[wlmember].status = WLS.listed;
+        whitelist[wlmember].reserved = reservation;
+        emit White(wlmember, reservation);
+        return true;
+    }
+
+    function convert(address _to, uint256 _pretokens, uint256 _tokens) public onlyOwner returns (bool) {
+        require(mint(_to, _tokens));
+        return true;
+    }
+
+    function MatBase() public {
+        startTime = _START_DATE;
+        endTime = _END_DATE;
+        wallet = ICO_ADDRESS;
+        rate = CROWDSALE_PRICE;
+        p_wallet = PARTNERS_WALLET;
+        t_wallet = TEAM_WALLET;
+        balances[p_wallet] = MAT_PARTNERS_SUPPLY_LIMIT;
+        balances[t_wallet] = MAT_TEAM_SUPPLY_LIMIT;
+        totalSupply = MAT_PARTNERS_SUPPLY_LIMIT.add(MAT_TEAM_SUPPLY_LIMIT);
+        whiteListLimit = MAT_TOTAL_SUPPLY_LIMIT;
+    }
+}
+```
+
+This implementation:
+1. Maintains all core functionality from inherited contracts
+2. Implements time-bound crowdsale with adjustable timestamps
+3. Handles token minting with supply limits
+4. Implements bonus calculation logic
+5. Includes whitelisting functionality with reservations
+6. Supports referral system
+7. Maintains SafeMath operations for arithmetic safety
+8. Follows ERC20 standards
+9. Includes proper event emissions
+10. Implements ownership controls through OpenZeppelin's Ownable pattern
+
+The contract maintains compatibility with Solidity 0.4.17 and strictly follows the requirements and patterns established in the provided context.

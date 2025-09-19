@@ -1,0 +1,123 @@
+Here's the completed and functional implementation of the `standardToken` contract strictly adhering to the provided context and description. This includes `ERC20` standard functionality, `approveAndCall` for advanced use cases, and restrictions for the foundation account through the modifier `FoundationAccountNeedFreezeOneYear`.
+
+```solidity
+pragma solidity ^0.4.18;
+
+/**
+ * @title StandardToken
+ * @dev Implements ERC20 functionality and additional features as per the given context.
+ */
+contract standardToken is ERC20Token, limitedFactor {
+    // Mapping to store balances of each address
+    mapping (address => uint256) balances;
+    // Mapping to store allowances of each address
+    mapping (address => mapping (address => uint256)) allowances;
+
+    /**
+     * @notice Returns the balance of the specified address.
+     * @param _owner The address to query the balance of.
+     * @return The balance of the specified address.
+     */
+    function balanceOf(address _owner) constant public returns (uint256) {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice Transfers tokens from the sender's address to another address.
+     * @param _to The recipient address.
+     * @param _value The amount of tokens to transfer.
+     * @return A boolean value indicating whether the transfer was successful.
+     */
+    function transfer(address _to, uint256 _value) 
+        public 
+        FoundationAccountNeedFreezeOneYear(msg.sender) 
+        returns (bool success) 
+    {
+        require(_to != address(0)); // Prevent sending to the zero address
+        require(balances[msg.sender] >= _value); // Ensure the sender has enough tokens
+        require(balances[_to] + _value >= balances[_to]); // Prevent overflow
+
+        balances[msg.sender] -= _value; // Deduct from sender
+        balances[_to] += _value; // Add to recipient
+
+        emit Transfer(msg.sender, _to, _value); // Emit the Transfer event
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another, using the allowance mechanism.
+     * @param _from The address to transfer tokens from.
+     * @param _to The address to transfer tokens to.
+     * @param _value The amount of tokens to transfer.
+     * @return A boolean value indicating whether the transfer was successful.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0)); // Prevent sending to the zero address
+        require(balances[_from] >= _value); // Ensure the sender has enough tokens
+        require(allowances[_from][msg.sender] >= _value); // Ensure the allowance is sufficient
+        require(balances[_to] + _value >= balances[_to]); // Prevent overflow
+
+        balances[_from] -= _value; // Deduct from the sender
+        balances[_to] += _value; // Add to the recipient
+        allowances[_from][msg.sender] -= _value; // Deduct the allowance
+
+        emit Transfer(_from, _to, _value); // Emit the Transfer event
+        return true;
+    }
+
+    /**
+     * @notice Approves another address to spend tokens on behalf of the sender.
+     * @param _spender The address that will be allowed to spend the tokens.
+     * @param _value The amount of tokens to approve.
+     * @return A boolean value indicating whether the approval was successful.
+     */
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowances[msg.sender][_spender] = _value; // Set the allowance
+        emit Approval(msg.sender, _spender, _value); // Emit the Approval event
+        return true;
+    }
+
+    /**
+     * @notice Approves and then calls the recipient contract with the approved amount and extra data.
+     * @param _spender The address of the recipient contract.
+     * @param _value The amount of tokens to approve.
+     * @param _extraData Additional data to pass to the recipient contract.
+     * @return A boolean value indicating whether the operation was successful.
+     */
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) 
+        public 
+        returns (bool success) 
+    {
+        tokenRecipient spender = tokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData); // Call the recipient contract
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * @notice Returns the amount of tokens that an owner has allowed a spender to spend.
+     * @param _owner The address of the token owner.
+     * @param _spender The address of the spender.
+     * @return The remaining allowance for the spender.
+     */
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining) {
+        return allowances[_owner][_spender];
+    }
+}
+```
+
+### Key Points:
+
+1. **ERC20 Compliance**: Implements the required functions (`balanceOf`, `transfer`, `transferFrom`, `approve`, `allowance`) and events (`Transfer`, `Approval`).
+
+2. **`approveAndCall` Functionality**: Adds a function to approve a spender and call a method on it (useful for interacting with contracts).
+
+3. **Foundation Account Restriction**: Includes the `FoundationAccountNeedFreezeOneYear` modifier to restrict actions for foundation accounts until a freeze period expires.
+
+4. **Security Checks**: Ensures proper validations such as preventing overflow, ensuring non-zero recipient addresses, and checking allowances.
+
+5. **Event Emission**: Emits appropriate events (`Transfer` and `Approval`) for tracking changes and meeting ERC20 standards.
+
+This contract strictly adheres to the provided requirements and context and is designed to be deployed using Solidity compiler version 0.4.18.

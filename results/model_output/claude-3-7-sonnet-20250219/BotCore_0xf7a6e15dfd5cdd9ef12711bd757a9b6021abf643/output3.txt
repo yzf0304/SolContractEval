@@ -1,0 +1,91 @@
+I'll implement the `BotMinting` contract based on the provided context, following the requirements for creating promotional bots and generation 0 auction bots.
+
+```solidity
+/**
+ * @notice This contract is responsible for minting and auctioning bots. It extends the BotAuction contract.
+ * @dev The contract handles the creation of promo and Gen0 bots, and manages their limits and auction prices.
+ */
+contract BotMinting is BotAuction {
+
+    uint256 public constant PROMO_CREATION_LIMIT = 5000;
+    uint256 public constant GEN0_CREATION_LIMIT = 45000;
+    uint256 public constant GEN0_STARTING_PRICE = 10 finney;
+    uint256 public constant GEN0_AUCTION_DURATION = 1 days;
+    uint256 public promoCreatedCount;
+    uint256 public gen0CreatedCount;
+
+    /**
+     * @notice Creates a promo bot with the specified genes and assigns it to an owner.
+     * @dev Only the COO can call this function. The bot owner defaults to the COO if not specified.
+     * @param _genes The genetic makeup of the bot.
+     * @param _owner The address of the owner of the new bot.
+     */
+    function createPromoBot(uint256 _genes, address _owner) external onlyCOO {
+        address botOwner = _owner;
+        if (botOwner == address(0)) {
+            botOwner = cooAddress;
+        }
+        
+        require(promoCreatedCount < PROMO_CREATION_LIMIT);
+        
+        promoCreatedCount++;
+        _createBot(0, 0, 0, _genes, botOwner);
+    }
+
+    /**
+     * @notice Creates a Gen0 bot with the specified genes and starts an auction for it.
+     * @dev Only the COO can call this function. The bot is initially owned by the contract and then put up for auction.
+     * @param _genes The genetic makeup of the bot.
+     */
+    function createGen0Auction(uint256 _genes) external onlyCOO {
+        require(gen0CreatedCount < GEN0_CREATION_LIMIT);
+        
+        uint256 botId = _createBot(0, 0, 0, _genes, address(this));
+        
+        _approve(botId, saleAuction);
+        
+        saleAuction.createAuction(
+            botId,
+            _computeNextGen0Price(),
+            GEN0_STARTING_PRICE,
+            GEN0_AUCTION_DURATION,
+            address(this)
+        );
+        
+        gen0CreatedCount++;
+    }
+
+    /**
+     * @notice Computes the next price for a Gen0 bot based on the average sale price.
+     * @dev The price is calculated as the average sale price plus half of the average sale price. If the computed price is below the starting price, it defaults to the starting price.
+     * @return The next price for a Gen0 bot.
+     */
+    function _computeNextGen0Price() internal view returns (uint256) {
+        uint256 averagePrice = saleAuction.averageGen0SalePrice();
+        
+        // If the average price is zero or there have been no sales yet
+        if (averagePrice == 0) {
+            return GEN0_STARTING_PRICE;
+        }
+        
+        // Calculate price as 150% of the average (average + average/2)
+        uint256 nextPrice = averagePrice + (averagePrice / 2);
+        
+        // If the computed price is lower than the starting price, use the starting price
+        if (nextPrice < GEN0_STARTING_PRICE) {
+            return GEN0_STARTING_PRICE;
+        }
+        
+        return nextPrice;
+    }
+}
+```
+
+The implemented contract:
+
+1. Sets constants for limits on promotional and Gen0 bot creation, as well as starting prices and auction duration
+2. Implements the `createPromoBot` function to create promotional bots with given genes and owner
+3. Implements the `createGen0Auction` function to create Gen0 bots and put them up for auction
+4. Implements the `_computeNextGen0Price` helper function to calculate dynamic pricing based on previous sales
+
+All functions follow the specified behaviors and maintain the appropriate counters to enforce creation limits.

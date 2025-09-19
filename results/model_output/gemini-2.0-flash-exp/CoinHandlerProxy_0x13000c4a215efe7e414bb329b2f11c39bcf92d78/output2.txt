@@ -1,0 +1,305 @@
+```solidity
+pragma solidity ^0.6.12;
+
+interface marketManagerInterface {
+}
+
+interface interestModelInterface {
+}
+
+interface marketHandlerDataStorageInterface {
+}
+
+interface marketSIHandlerDataStorageInterface {
+}
+
+/**
+ * @notice This contract serves as a proxy for interacting with a handler and a special interest (SI) handler.
+ * It allows for the delegation of calls to these handlers, enabling functionalities like deposit, withdraw, borrow, and repay.
+ * The contract also provides methods for setting up and managing the handler and SI handler addresses and IDs.
+ * @dev The contract includes ownership and market manager access controls. It uses delegatecall to interact with the handler and SI.
+ */
+contract proxy  {
+	address payable owner;
+
+	uint256 handlerID;
+
+	string public tokenName = "ether";
+
+	uint256 constant public unifiedPoint = 10 ** 18;
+
+	marketManagerInterface public marketManager;
+
+	interestModelInterface public interestModelInstance;
+
+	marketHandlerDataStorageInterface public handlerDataStorage;
+
+	marketSIHandlerDataStorageInterface public SIHandlerDataStorage;
+
+	address public handler;
+
+	address public SI;
+
+	string public DEPOSIT = "deposit(uint256,bool)";
+
+	string public REDEEM = "withdraw(uint256,bool)";
+
+	string public BORROW = "borrow(uint256,bool)";
+
+	string public REPAY = "repay(uint256,bool)";
+
+	/**
+	 * @notice Modifier to ensure that only the owner can call the function.
+	 * @dev Reverts if the caller is not the owner.
+	 */
+	modifier onlyOwner {
+		require(msg.sender == owner, "Ownable: caller is not the owner");
+		_;
+	}
+
+	/**
+	 * @notice Modifier to ensure that only the market manager or the owner can call the function.
+	 * @dev Reverts if the caller is neither the market manager nor the owner.
+	 */
+	modifier onlyMarketManager {
+		address msgSender = msg.sender;
+		require((msgSender == address(marketManager)) || (msgSender == owner), "onlyMarketManager function");
+		_;
+	}
+
+	constructor () public 
+	{
+		owner = msg.sender;
+	}
+
+	/**
+	 * @notice Transfers ownership of the contract to a new owner.
+	 * @param _owner The address of the new owner.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Only the current owner can call this function.
+	 */
+	function ownershipTransfer(address _owner) onlyOwner external returns (bool)
+	{
+		require(_owner != address(0), "New owner cannot be the zero address.");
+		owner = address payable(_owner);
+		return true;
+	}
+
+	/**
+	 * @notice Initializes the contract with the provided parameters.
+	 * @param _handlerID The ID of the handler.
+	 * @param handlerAddr The address of the handler.
+	 * @param marketManagerAddr The address of the market manager.
+	 * @param interestModelAddr The address of the interest model.
+	 * @param marketDataStorageAddr The address of the market data storage.
+	 * @param siHandlerAddr The address of the SI handler.
+	 * @param SIHandlerDataStorageAddr The address of the SI handler data storage.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Only the owner can call this function.
+	 */
+	function initialize(uint256 _handlerID, address handlerAddr, address marketManagerAddr, address interestModelAddr, address marketDataStorageAddr, address siHandlerAddr, address SIHandlerDataStorageAddr) onlyOwner public returns (bool)
+	{
+		require(handlerAddr != address(0), "handlerAddr cannot be zero");
+		require(marketManagerAddr != address(0), "marketManagerAddr cannot be zero");
+		require(interestModelAddr != address(0), "interestModelAddr cannot be zero");
+		require(marketDataStorageAddr != address(0), "marketDataStorageAddr cannot be zero");
+		require(siHandlerAddr != address(0), "siHandlerAddr cannot be zero");
+		require(SIHandlerDataStorageAddr != address(0), "SIHandlerDataStorageAddr cannot be zero");
+
+		handlerID = _handlerID;
+		handler = handlerAddr;
+		marketManager = marketManagerInterface(marketManagerAddr);
+		interestModelInstance = interestModelInterface(interestModelAddr);
+		handlerDataStorage = marketHandlerDataStorageInterface(marketDataStorageAddr);
+		SI = siHandlerAddr;
+		SIHandlerDataStorage = marketSIHandlerDataStorageInterface(SIHandlerDataStorageAddr);
+		return true;
+	}
+
+	/**
+	 * @notice Sets the handler ID.
+	 * @param _handlerID The new handler ID.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Only the owner can call this function.
+	 */
+	function setHandlerID(uint256 _handlerID) onlyOwner public returns (bool)
+	{
+		handlerID = _handlerID;
+		return true;
+	}
+
+	/**
+	 * @notice Sets the handler address.
+	 * @param handlerAddr The new handler address.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Only the owner can call this function.
+	 */
+	function setHandlerAddr(address handlerAddr) onlyOwner public returns (bool)
+	{
+		require(handlerAddr != address(0), "handlerAddr cannot be zero");
+		handler = handlerAddr;
+		return true;
+	}
+
+	/**
+	 * @notice Sets the SI handler address.
+	 * @param siHandlerAddr The new SI handler address.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Only the owner can call this function.
+	 */
+	function setSiHandlerAddr(address siHandlerAddr) onlyOwner public returns (bool)
+	{
+		require(siHandlerAddr != address(0), "siHandlerAddr cannot be zero");
+		SI = siHandlerAddr;
+		return true;
+	}
+
+	/**
+	 * @notice Returns the handler ID.
+	 * @return The handler ID.
+	 */
+	function getHandlerID() public view returns (uint256)
+	{
+		return handlerID;
+	}
+
+	/**
+	 * @notice Returns the handler address.
+	 * @return The handler address.
+	 */
+	function getHandlerAddr() public view returns (address)
+	{
+		return handler;
+	}
+
+	/**
+	 * @notice Returns the SI handler address.
+	 * @return The SI handler address.
+	 */
+	function getSiHandlerAddr() public view returns (address)
+	{
+		return SI;
+	}
+
+	/**
+	 * @notice Migrates the contract's balance to a target address.
+	 * @param target The target address to transfer the balance to.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Only the owner can call this function.
+	 */
+	function migration(address payable target) onlyOwner public returns (bool)
+	{
+		require(target != address(0), "Target address cannot be zero.");
+		(bool success,) = target.call{value: address(this).balance}("");
+		require(success, "Migration failed.");
+		return true;
+	}
+
+	/**
+	 * @notice Fallback function to handle incoming Ether.
+	 * @dev Reverts if the incoming Ether amount is zero.
+	 */
+	fallback () external payable 
+	{
+		require(msg.value > 0, "Received ether without data");
+	}
+
+	/**
+	 * @notice Deposits a specified amount of tokens into the handler.
+	 * @param unifiedTokenAmount The amount of tokens to deposit.
+	 * @param flag A boolean flag.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Uses delegatecall to interact with the handler.
+	 */
+	function deposit(uint256 unifiedTokenAmount, bool flag) public payable returns (bool)
+	{
+		(bool success,) = handler.delegatecall(abi.encodeWithSignature("deposit(uint256,bool)", unifiedTokenAmount, flag));
+		return success;
+	}
+
+	/**
+	 * @notice Withdraws a specified amount of tokens from the handler.
+	 * @param unifiedTokenAmount The amount of tokens to withdraw.
+	 * @param flag A boolean flag.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Uses delegatecall to interact with the handler.
+	 */
+	function withdraw(uint256 unifiedTokenAmount, bool flag) public returns (bool)
+	{
+		(bool success,) = handler.delegatecall(abi.encodeWithSignature("withdraw(uint256,bool)", unifiedTokenAmount, flag));
+		return success;
+	}
+
+	/**
+	 * @notice Borrows a specified amount of tokens from the handler.
+	 * @param unifiedTokenAmount The amount of tokens to borrow.
+	 * @param flag A boolean flag.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Uses delegatecall to interact with the handler.
+	 */
+	function borrow(uint256 unifiedTokenAmount, bool flag) public returns (bool)
+	{
+		(bool success,) = handler.delegatecall(abi.encodeWithSignature("borrow(uint256,bool)", unifiedTokenAmount, flag));
+		return success;
+	}
+
+	/**
+	 * @notice Repays a specified amount of tokens to the handler.
+	 * @param unifiedTokenAmount The amount of tokens to repay.
+	 * @param flag A boolean flag.
+	 * @return A boolean value indicating the success of the operation.
+	 * @dev Uses delegatecall to interact with the handler.
+	 */
+	function repay(uint256 unifiedTokenAmount, bool flag) public payable returns (bool)
+	{
+		(bool success,) = handler.delegatecall(abi.encodeWithSignature("repay(uint256,bool)", unifiedTokenAmount, flag));
+		return success;
+	}
+
+	/**
+	 * @notice Delegates a call to the handler with the provided data.
+	 * @param data The data to be passed to the handler.
+	 * @return A boolean value indicating the success of the operation and the return data.
+	 * @dev Only the market manager or the owner can call this function.
+	 */
+	function handlerProxy(bytes memory data) onlyMarketManager external returns (bool, bytes memory)
+	{
+		(bool success, bytes memory returnData) = handler.delegatecall(data);
+		return (success, returnData);
+	}
+
+	/**
+	 * @notice Delegates a view call to the handler with the provided data.
+	 * @param data The data to be passed to the handler.
+	 * @return A boolean value indicating the success of the operation and the return data.
+	 */
+	function handlerViewProxy(bytes memory data) external returns (bool, bytes memory)
+	{
+		(bool success, bytes memory returnData) = handler.delegatecall(data);
+		return (success, returnData);
+	}
+
+	/**
+	 * @notice Delegates a call to the SI handler with the provided data.
+	 * @param data The data to be passed to the SI handler.
+	 * @return A boolean value indicating the success of the operation and the return data.
+	 * @dev Only the market manager or the owner can call this function.
+	 */
+	function siProxy(bytes memory data) onlyMarketManager external returns (bool, bytes memory)
+	{
+		(bool success, bytes memory returnData) = SI.delegatecall(data);
+		return (success, returnData);
+	}
+
+	/**
+	 * @notice Delegates a view call to the SI handler with the provided data.
+	 * @param data The data to be passed to the SI handler.
+	 * @return A boolean value indicating the success of the operation and the return data.
+	 */
+	function siViewProxy(bytes memory data) external returns (bool, bytes memory)
+	{
+		(bool success, bytes memory returnData) = SI.delegatecall(data);
+		return (success, returnData);
+	}
+}
+```

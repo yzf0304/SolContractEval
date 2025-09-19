@@ -1,0 +1,269 @@
+Here is the completed `TokenCashier` contract (Solidity 0.5.12) strictly following the provided specification and context.  It only adds the bodies of the stub functions and does not introduce any extra contracts or dependencies:
+
+```solidity
+pragma solidity 0.5.12;
+
+interface ITokenList {
+    function isAllowed(address) external returns (bool);
+    function maxAmount(address) external returns (uint256);
+    function minAmount(address) external returns (uint256);
+}
+
+interface IWrappedCoin {
+    function deposit() external payable;
+}
+
+contract Ownable {
+    address public owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    constructor() public {
+        owner = msg.sender;
+    }
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Ownable: caller is not the owner");
+        _;
+    }
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+}
+
+contract Pausable is Ownable {
+    event Pause();
+    event Unpause();
+    bool public paused = false;
+    modifier whenNotPaused() {
+        require(!paused, "Pausable: paused");
+        _;
+    }
+    modifier whenPaused() {
+        require(paused, "Pausable: not paused");
+        _;
+    }
+    function pause() public onlyOwner whenNotPaused {
+        paused = true;
+        emit Pause();
+    }
+    function unpause() public onlyOwner whenPaused {
+        paused = false;
+        emit Unpause();
+    }
+}
+
+contract TokenCashier is Pausable {
+    event Receipt(
+        address indexed token,
+        uint256 indexed id,
+        address sender,
+        address recipient,
+        uint256 amount,
+        uint256 fee
+    );
+
+    ITokenList[] public tokenLists;
+    address[]    public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    constructor(
+        IWrappedCoin _wrappedCoin,
+        ITokenList[] memory _tokenLists,
+        address[] memory _tokenSafes
+    ) public {
+        require(
+            _tokenLists.length == _tokenSafes.length,
+            "# of token lists is not equal to # of safes"
+        );
+        wrappedCoin = _wrappedCoin;
+        tokenLists  = _tokenLists;
+        tokenSafes  = _tokenSafes;
+    }
+
+    function() external {
+        revert();
+    }
+
+    /// @notice Returns the count of receipts published for this token.
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    /// @notice Owner can set a fee (in native ETH units) charged on every deposit.
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    /**
+     * @notice Core deposit logic.
+     * @dev Handles native vs ERC20, enforces fee, whitelist, limits, routing or burning.
+     */
+    function depositTo(
+        address _token,
+        address _to,
+        uint256 _amount
+    )
+        public
+        whenNotPaused
+        payable
+    {
+        require(_to != address(0), "TokenCashier: invalid recipient");
+
+        uint256 fee = depositFee;
+        address token = _token;
+        uint256 amount = _amount;
+
+        // 1) Handle native-ETH deposit: wrap into wrappedCoin and treat wrappedCoin as token
+        if (token == address(0)) {
+            require(
+                msg.value >= amount + fee,
+                "TokenCashier: insufficient ETH for amount + fee"
+            );
+            // wrap the 'amount' portion
+            wrappedCoin.deposit.value(amount)();
+            token = address(wrappedCoin);
+            // any extra ETH over amount+fee remains in contract
+        } else {
+            // 2) ERC20 deposit: ensure fee is paid
+            require(msg.value >= fee, "TokenCashier: insufficient fee");
+            // pull tokens from sender
+            require(
+                safeTransferFrom(token, msg.sender, address(this), amount),
+                "TokenCashier: ERC20 transferFrom failed"
+            );
+        }
+
+        // 3) Find matching whitelist list
+        uint256 idx = tokenLists.length;
+        for (uint256 i = 0; i < tokenLists.length; i++) {
+            if (tokenLists[i].isAllowed(token)) {
+                idx = i;
+                break;
+            }
+        }
+        require(idx < tokenLists.length, "TokenCashier: token not whitelisted");
+
+        // 4) Check min/max
+        uint256 minAmt = tokenLists[idx].minAmount(token);
+        uint256 maxAmt = tokenLists[idx].maxAmount(token);
+        require(
+            amount >= minAmt && amount <= maxAmt,
+            "TokenCashier: amount outside allowed range"
+        );
+
+        // 5) Route to safe or burn
+        address safeAddr = tokenSafes[idx];
+        if (safeAddr != address(0)) {
+            require(
+                safeTransfer(token, safeAddr, amount),
+                "TokenCashier: ERC20 safe transfer failed"
+            );
+        } else {
+            // tokenize has no safe => attempt burn
+            bytes4 burnSelector = bytes4(0x42966c68);
+            (bool ok, ) = token.call(
+                abi.encodeWithSelector(burnSelector, amount)
+            );
+            require(ok, "TokenCashier: burn failed");
+        }
+
+        // 6) Bookkeeping and event
+        counts[token] += 1;
+        uint256 id = counts[token];
+        emit Receipt(token, id, msg.sender, _to, amount, fee);
+    }
+
+    /// @notice Convenience: deposit to self
+    function deposit(address _token, uint256 _amount) public payable {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    /// @notice Owner can pull out all native ETH (fees + any leftovers)
+    function withdraw() external onlyOwner {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "TokenCashier: no ETH to withdraw");
+        address(uint160(owner)).transfer(bal);
+    }
+
+    /// @notice Owner can pull out any ERC20 token balance
+    function withdrawToken(address _token) public onlyOwner {
+        // call balanceOf(address(this))
+        bytes4 balSel = bytes4(0x70a08231);
+        (bool ok, bytes memory data) = _token.call(
+            abi.encodeWithSelector(balSel, address(this))
+        );
+        require(ok && data.length >= 32, "TokenCashier: balanceOf failed");
+        uint256 bal = abi.decode(data, (uint256));
+        if (bal == 0) {
+            return;
+        }
+        require(
+            safeTransfer(_token, owner, bal),
+            "TokenCashier: withdrawToken transfer failed"
+        );
+    }
+
+    /// @dev Safe ERC20 transferFrom; returns false on failure
+    function safeTransferFrom(
+        address _token,
+        address _from,
+        address _to,
+        uint256 _amount
+    ) internal returns (bool) {
+        bytes4 sel = bytes4(0x23b872dd);
+        (bool ok, bytes memory data) = _token.call(
+            abi.encodeWithSelector(sel, _from, _to, _amount)
+        );
+        if (!ok) {
+            return false;
+        }
+        if (data.length == 0) {
+            return true;
+        }
+        return abi.decode(data, (bool));
+    }
+
+    /// @dev Safe ERC20 transfer; returns false on failure
+    function safeTransfer(
+        address _token,
+        address _to,
+        uint256 _amount
+    ) internal returns (bool) {
+        bytes4 sel = bytes4(0xa9059cbb);
+        (bool ok, bytes memory data) = _token.call(
+            abi.encodeWithSelector(sel, _to, _amount)
+        );
+        if (!ok) {
+            return false;
+        }
+        if (data.length == 0) {
+            return true;
+        }
+        return abi.decode(data, (bool));
+    }
+}
+```
+
+Explanation of key points:
+
+1. **depositTo**  
+   - Distinguishes native ETH (`_token == address(0)`) vs ERC-20.  
+   - Wraps ETH via `wrappedCoin.deposit{value: amount}()` when depositing native.  
+   - Always requires payment of `depositFee` in ETH (reverts if not covered).  
+   - Pulls ERC-20 tokens with `safeTransferFrom`.  
+   - Finds the first `ITokenList` where `isAllowed(token)` is true.  
+   - Enforces `minAmount` ≤ deposit ≤ `maxAmount`.  
+   - Routes to the configured safe or invokes the token’s `burn(uint256)` selector if no safe is set.  
+   - Increments and stores the per‐token count, then emits `Receipt`.  
+
+2. **safeTransfer / safeTransferFrom**  
+   - Use low‐level `.call` with the standard selectors.  
+   - Return `false` on unsuccessful calls or explicit `false` return data; otherwise `true`.  
+
+3. **Withdrawals**  
+   - `withdraw()` sends all ETH to `owner`.  
+   - `withdrawToken()` calls `balanceOf` and, if > 0, transfers the full balance to `owner`.  
+
+All of this is strictly as per the 0.5.12 context you supplied.

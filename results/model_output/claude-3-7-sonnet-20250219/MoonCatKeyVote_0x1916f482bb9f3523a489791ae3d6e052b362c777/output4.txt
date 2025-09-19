@@ -1,0 +1,146 @@
+```solidity
+/**
+ * @title MoonCatKeyVote
+ * @notice This contract allows for a community vote to decide whether the MoonCatRescue developers should destroy their private key, preventing the release of future Genesis MoonCats.
+ * @dev The contract uses a Merkle tree to verify voter eligibility. The vote is open for 48 hours once started and can be cancelled by the owner before it starts.
+ */
+contract MoonCatKeyVote {
+
+    // Should the MoonCatRescue developers destroy their private key so that no future Genesis MoonCats can ever be released?
+    // true  = Yes
+    // false = No
+
+    event VoteSubmitted(address voter, bool vote);
+
+    uint public voteStartTime = 0;
+    bool public voteCancelled = false;
+    mapping (address => bool) public hasVoted;
+    uint32 public yesVotes = 0;
+    uint32 public noVotes = 0;
+
+    //bytes32 public immutable voterRollSha256;
+    bytes32 public immutable merkleRoot;
+    address public immutable owner;
+
+    /**
+     * @dev Modifier to restrict function access to the contract owner.
+     */
+    modifier onlyOwner {
+        require(msg.sender == owner, "Owner Only");
+        _;
+    }
+
+    /**
+     * @dev Modifier to ensure the vote is pending and not yet started or cancelled.
+     */
+    modifier voteContractIsPending {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime == 0, "Vote Already Started");
+        _;
+    }
+
+    /**
+     * @dev Modifier to ensure the vote is active and within the 48-hour voting period.
+     */
+    modifier voteContractIsActive {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime > 0, "Vote Not Started");
+        require(block.timestamp < (voteStartTime + 48 hours), "Vote Ended");
+        _;
+    }
+
+    /**
+     * @dev Modifier to ensure the vote is complete and the 48-hour voting period has ended.
+     */
+    modifier voteContractIsComplete {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime > 0, "Vote Not Started");
+        require(block.timestamp > (voteStartTime + 48 hours), "Vote Not Ended");
+        _;
+    }
+
+    /**
+     * @notice Initializes the contract with the provided Merkle root and sets the owner.
+     * @param merkleRoot_ The Merkle root used to verify voter eligibility.
+     */
+    constructor(bytes32 merkleRoot_) {
+        merkleRoot = merkleRoot_;
+        owner = msg.sender;
+    }
+
+    /**
+     * @notice Starts the vote, setting the start time to the current block timestamp.
+     * @dev Can only be called by the contract owner and when the vote is pending.
+     */
+    function startVote() public onlyOwner voteContractIsPending {
+        voteStartTime = block.timestamp;
+    }
+
+    /**
+     * @notice Cancels the vote, setting the `voteCancelled` flag to true.
+     * @dev Can only be called by the contract owner and when the vote is pending.
+     */
+    function cancelVote() public onlyOwner voteContractIsPending {
+        voteCancelled = true;
+    }
+
+    /**
+     * @notice Returns the result of the vote, indicating whether the "Yes" votes outnumber the "No" votes.
+     * @dev Can only be called after the vote has ended.
+     * @return bool True if "Yes" votes are greater than "No" votes, otherwise false.
+     */
+    function getResult() public view voteContractIsComplete returns (bool) {
+        return yesVotes > noVotes;
+    }
+
+    uint24 empty = 0;
+
+    /**
+    * @dev Submits a vote to the contract after verifying voter eligibility through Merkleproof.
+    * This function:
+    * 1. Checks if the voter has already voted (prevents duplicate votes)
+    * 2. Verifies voter eligibility using a Merkle proof
+    * 3. Records the vote (yes/no) and updates vote counts
+    * 4. Emits an event to log the submission
+    * 
+    * @param eligibilityProof The Merkle proof array used to verify voter eligibility
+    * @param vote The vote being submitted (true for yes, false for no)
+    * @notice The Merkle proof verification follows standard techniques:
+    *         - Computes a hash chain from the voter's address and proof elements
+    *         - Compares the final hash with the stored merkleRoot
+    */
+    function submitVote(bytes32[] calldata eligibilityProof, bool vote) public voteContractIsActive {
+        require(!hasVoted[msg.sender], "Already Voted");
+        
+        // Verify the Merkle proof
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        bytes32 computedHash = leaf;
+        
+        for (uint256 i = 0; i < eligibilityProof.length; i++) {
+            bytes32 proofElement = eligibilityProof[i];
+            
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+        
+        // Check if the computed hash matches the Merkle root
+        require(computedHash == merkleRoot, "Invalid Merkle Proof");
+        
+        // Record the vote
+        hasVoted[msg.sender] = true;
+        
+        if (vote) {
+            yesVotes += 1;
+        } else {
+            noVotes += 1;
+        }
+        
+        emit VoteSubmitted(msg.sender, vote);
+    }
+}
+```

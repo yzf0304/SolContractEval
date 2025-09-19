@@ -1,0 +1,369 @@
+pragma solidity 0.8.7;
+
+interface ILayerZeroEndpoint {
+    function send(
+        uint16 _dstChainId,
+        bytes calldata _destination,
+        bytes calldata _payload,
+        address payable _refundAddress,
+        address _zroPaymentAddress,
+        bytes calldata _adapterParams
+    ) external payable;
+
+    function estimateFees(
+        uint16 _dstChainId,
+        address _userApplication,
+        bytes calldata _payload,
+        bool _payInZRO,
+        bytes calldata _adapterParam
+    ) external view returns (uint256 nativeFee, uint256 zroFee);
+}
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+}
+
+abstract contract Ownable is Context {
+    address private _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    constructor() {
+        _transferOwnership(_msgSender());
+    }
+    function owner() public view returns (address) {
+        return _owner;
+    }
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+    function _transferOwnership(address newOwner) internal {
+        address old = _owner;
+        _owner = newOwner;
+        emit OwnershipTransferred(old, newOwner);
+    }
+}
+
+interface IERC721Receiver {
+    function onERC721Received(address operator, address from, uint256 tokenId, bytes calldata data) external returns (bytes4);
+}
+
+interface IERC165 {
+    function supportsInterface(bytes4 interfaceId) external view returns (bool);
+}
+
+abstract contract ERC165 is IERC165 {
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return interfaceId == type(IERC165).interfaceId;
+    }
+}
+
+library Address {
+    function isContract(address account) internal view returns (bool) {
+        uint256 size;
+        assembly { size := extcodesize(account) }
+        return size > 0;
+    }
+}
+
+library Strings {
+    function toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) { return "0"; }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) { digits++; temp /= 10; }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + (value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+}
+
+abstract contract ERC721 is Context, ERC165 {
+    using Address for address;
+    using Strings for uint256;
+    string private _name;
+    string private _symbol;
+    mapping(uint256 => address) private _owners;
+    mapping(address => uint256) private _balances;
+    mapping(uint256 => address) private _tokenApprovals;
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+
+    constructor(string memory n, string memory s) {
+        _name = n;
+        _symbol = s;
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
+        return
+            interfaceId == type(IERC165).interfaceId ||
+            interfaceId == type(IERC721Receiver).interfaceId;
+    }
+
+    function balanceOf(address owner_) public view returns (uint256) {
+        require(owner_ != address(0), "ERC721: balance query zero");
+        return _balances[owner_];
+    }
+
+    function ownerOf(uint256 tokenId) public view returns (address) {
+        address o = _owners[tokenId];
+        require(o != address(0), "ERC721: owner query nonexistent");
+        return o;
+    }
+
+    function _baseURI() internal view virtual returns (string memory) {
+        return "";
+    }
+    function name() public view returns (string memory) { return _name; }
+    function symbol() public view returns (string memory) { return _symbol; }
+
+    function tokenURI(uint256 tokenId) public view returns (string memory) {
+        require(_owners[tokenId] != address(0), "ERC721: URI query nonexistent");
+        string memory b = _baseURI();
+        return bytes(b).length > 0 ? string(abi.encodePacked(b, tokenId.toString())) : "";
+    }
+
+    function approve(address to, uint256 tokenId) public virtual {
+        address owner_ = ownerOf(tokenId);
+        require(to != owner_, "ERC721: approval to current owner");
+        require(_msgSender() == owner_ || isApprovedForAll(owner_, _msgSender()), "Not owner nor operator");
+        _tokenApprovals[tokenId] = to;
+    }
+
+    function getApproved(uint256 tokenId) public view returns (address) {
+        require(_owners[tokenId] != address(0), "ERC721: approved query nonexistent");
+        return _tokenApprovals[tokenId];
+    }
+
+    function setApprovalForAll(address op, bool approved) public {
+        _operatorApprovals[_msgSender()][op] = approved;
+    }
+
+    function isApprovedForAll(address owner_, address op) public view returns (bool) {
+        return _operatorApprovals[owner_][op];
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public virtual {
+        require(_isApprovedOrOwner(_msgSender(), tokenId), "Not owner nor approved");
+        _transfer(from, to, tokenId);
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory data) public virtual {
+        require(_isApprovedOrOwner(_msgSender(), tokenId), "Not owner nor approved");
+        _transfer(from, to, tokenId);
+        require(_checkOnERC721Received(from, to, tokenId, data), "Non ERC721Receiver");
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId) public virtual {
+        safeTransferFrom(from, to, tokenId, "");
+    }
+
+    function _exists(uint256 tokenId) internal view returns (bool) {
+        return _owners[tokenId] != address(0);
+    }
+    function _isApprovedOrOwner(address spender, uint256 tokenId) internal view returns (bool) {
+        address o = ownerOf(tokenId);
+        return (spender == o || getApproved(tokenId) == spender || isApprovedForAll(o, spender));
+    }
+
+    function _safeMint(address to, uint256 tokenId) internal {
+        _mint(to, tokenId);
+        require(_checkOnERC721Received(address(0), to, tokenId, ""), "Non ERC721Receiver");
+    }
+
+    function _mint(address to, uint256 tokenId) internal {
+        require(to != address(0), "ERC721: mint zero address");
+        require(!_exists(tokenId), "ERC721: mint exists");
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+        emit Transfer(address(0), to, tokenId);
+    }
+
+    function _burn(uint256 tokenId) internal {
+        address o = ownerOf(tokenId);
+        _approve(address(0), tokenId);
+        _balances[o] -= 1;
+        delete _owners[tokenId];
+        emit Transfer(o, address(0), tokenId);
+    }
+
+    function _transfer(address from, address to, uint256 tokenId) internal {
+        require(ownerOf(tokenId) == from, "ERC721: transfer wrong owner");
+        require(to != address(0), "ERC721: transfer to zero");
+        _approve(address(0), tokenId);
+        _balances[from] -= 1;
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+        emit Transfer(from, to, tokenId);
+    }
+
+    function _approve(address to, uint256 tokenId) internal {
+        _tokenApprovals[tokenId] = to;
+        emit Approval(ownerOf(tokenId), to, tokenId);
+    }
+
+    function _checkOnERC721Received(address from,address to,uint256 tokenId,bytes memory _data) private returns (bool){
+        if (to.isContract()) {
+            try IERC721Receiver(to).onERC721Received(_msgSender(), from, tokenId, _data) returns (bytes4 retval) {
+                return retval == IERC721Receiver.onERC721Received.selector;
+            } catch {
+                return false;
+            }
+        } else {
+            return true;
+        }
+    }
+
+    event Transfer(address indexed from, address indexed to, uint indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+}
+
+interface ILayerZeroReceiver {
+    function lzReceive(uint16, bytes calldata, uint64, bytes calldata) external;
+}
+
+abstract contract NonblockingReceiver is Ownable, ILayerZeroReceiver {
+    ILayerZeroEndpoint internal endpoint;
+    struct FailedMessages { uint256 payloadLength; bytes32 payloadHash; }
+    mapping(uint16 => mapping(bytes => mapping(uint64 => FailedMessages))) public failedMessages;
+    mapping(uint16 => bytes) public trustedRemoteLookup;
+    event MessageFailed(uint16, bytes, uint64, bytes);
+
+    function lzReceive(uint16 srcChainId, bytes memory srcAddress, uint64 nonce, bytes memory payload) external override {
+        require(msg.sender == address(endpoint), "NonblockingReceiver: invalid endpoint");
+        require(
+            trustedRemoteLookup[srcChainId].length != 0 &&
+            keccak256(srcAddress) == keccak256(trustedRemoteLookup[srcChainId]),
+            "NonblockingReceiver: invalid source"
+        );
+        try this.onLzReceive(srcChainId, srcAddress, nonce, payload) {
+        } catch {
+            failedMessages[srcChainId][srcAddress][nonce] = FailedMessages(payload.length, keccak256(payload));
+            emit MessageFailed(srcChainId, srcAddress, nonce, payload);
+        }
+    }
+
+    function onLzReceive(uint16 srcChainId, bytes memory srcAddress, uint64 nonce, bytes memory payload) public {
+        require(msg.sender == address(this), "NonblockingReceiver: caller must be bridge");
+        _LzReceive(srcChainId, srcAddress, nonce, payload);
+    }
+
+    function _lzSend(
+        uint16 dstChainId,
+        bytes memory payload,
+        address payable refundAddress,
+        address zroPaymentAddress,
+        bytes memory adapterParams
+    ) internal {
+        endpoint.send{value: msg.value}(
+            dstChainId,
+            trustedRemoteLookup[dstChainId],
+            payload,
+            refundAddress,
+            zroPaymentAddress,
+            adapterParams
+        );
+    }
+
+    function retryMessage(uint16 srcChainId, bytes memory srcAddress, uint64 nonce, bytes calldata payload) external payable {
+        FailedMessages storage fm = failedMessages[srcChainId][srcAddress][nonce];
+        require(fm.payloadHash != bytes32(0), "NonblockingReceiver: no stored message");
+        require(fm.payloadLength == payload.length && fm.payloadHash == keccak256(payload), "NonblockingReceiver: invalid payload");
+        fm.payloadLength = 0;
+        fm.payloadHash = bytes32(0);
+        this.onLzReceive(srcChainId, srcAddress, nonce, payload);
+    }
+
+    function setTrustedRemote(uint16 chainId, bytes calldata remote) external onlyOwner {
+        trustedRemoteLookup[chainId] = remote;
+    }
+
+    function _LzReceive(uint16, bytes memory, uint64, bytes memory) internal virtual;
+}
+
+contract OMNIDOORS is Ownable, ERC721, NonblockingReceiver {
+    address public _owner;
+    string private baseURI;
+    uint256 private nextTokenId = 5900;
+    uint256 private constant MAX_NETWORK_MINT = 9300;
+    uint256 public gasForDestinationLzReceive = 350000;
+
+    constructor(string memory baseURI_, address _layerZeroEndpoint)
+        ERC721("Omni Doors", "odoors")
+    {
+        _owner = msg.sender;
+        endpoint = ILayerZeroEndpoint(_layerZeroEndpoint);
+        baseURI = baseURI_;
+        // mint initial 330
+        for (uint256 i = 0; i < 330; i++) {
+            _safeMint(_owner, ++nextTokenId);
+        }
+    }
+
+    function mint(uint8 numTokens) external payable {
+        require(numTokens == 1, "OMNIDOORS: can only mint one");
+        require(nextTokenId + 1 <= MAX_NETWORK_MINT, "OMNIDOORS: max supply reached");
+        _safeMint(_msgSender(), ++nextTokenId);
+    }
+
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        require(ownerOf(tokenId) == _msgSender(), "OMNIDOORS: not token owner");
+        bytes memory dest = trustedRemoteLookup[_chainId];
+        require(dest.length != 0, "OMNIDOORS: chain not trusted");
+        // burn on source
+        _burn(tokenId);
+        // payload = (to, tokenId)
+        bytes memory payload = abi.encode(_msgSender(), tokenId);
+        // set adapter params: version 1, gas limit
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForDestinationLzReceive);
+        // estimate fees
+        (uint256 messageFee, ) = endpoint.estimateFees(_chainId, address(this), payload, false, adapterParams);
+        require(msg.value >= messageFee, "OMNIDOORS: insufficient fee");
+        // send message
+        endpoint.send{value: msg.value}(
+            _chainId,
+            dest,
+            payload,
+            payable(_msgSender()),  // refund unused
+            address(0),
+            adapterParams
+        );
+    }
+
+    function setBaseURI(string memory URI) external onlyOwner {
+        baseURI = URI;
+    }
+
+    function donate() external payable {
+        // accept ETH
+    }
+
+    function withdraw(uint256 amt) external onlyOwner {
+        require(address(this).balance >= amt, "OMNIDOORS: insufficient balance");
+        payable(_msgSender()).transfer(amt);
+    }
+
+    function setGasForDestinationLzReceive(uint256 newVal) external onlyOwner {
+        gasForDestinationLzReceive = newVal;
+    }
+
+    function _LzReceive(
+        uint16,
+        bytes memory,
+        uint64,
+        bytes memory _payload
+    ) internal override {
+        // decode and mint
+        (address to, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        _safeMint(to, tokenId);
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+}

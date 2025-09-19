@@ -1,0 +1,228 @@
+Here is the complete and functional ERC721 contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract ERC721 is ERC165, IERC721, IERC721Metadata {
+    using Address for address;
+    using Strings for uint256;
+    
+    uint256 private _totalMintsAllowed = 4;
+    string private uriLink = "https://spicypumpkins.com/api/json";
+    bool private _minting = true;
+    address payable private _owner;
+    uint256 private _count;
+    string private _name;
+    string private _symbol;
+
+    mapping(uint256 => address) private _owners;
+    mapping(uint256 => string) private _uri;
+    mapping(address => uint256) private _balances;
+    mapping(uint256 => address) private _tokenApprovals;
+    mapping(address => uint256) private _minted;
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+
+    constructor(string memory name_, string memory symbol_) {
+        _name = name_;
+        _symbol = symbol_;
+        _owners[0] = msg.sender;
+        _balances[msg.sender] = 1;
+        _owner = payable(msg.sender);
+    }
+
+    function setMinting(bool boolean) external {
+        require(msg.sender == _owner, "Only owner");
+        _minting = boolean;
+    }
+
+    function transferOwnership(address to) external {
+        require(msg.sender == _owner, "Only owner");
+        _owner = payable(to);
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view override(ERC165, IERC165) returns (bool) {
+        return interfaceId == type(IERC721).interfaceId || 
+               interfaceId == type(IERC721Metadata).interfaceId || 
+               super.supportsInterface(interfaceId);
+    }
+
+    function balanceOf(address owner) public view override returns (uint256) {
+        require(owner != address(0), "Balance query for zero address");
+        return _balances[owner];
+    }
+
+    function ownerOf(uint256 tokenId) public view override returns (address) {
+        address owner = _owners[tokenId];
+        require(owner != address(0), "Nonexistent token");
+        return owner;
+    }
+
+    function name() public view override returns (string memory) {
+        return _name;
+    }
+
+    function symbol() public view override returns (string memory) {
+        return _symbol;
+    }
+
+    function totalSupply() external view override returns(uint256) {
+        return 4444;
+    }
+
+    function tokenURI(uint256 tokenId) external view override returns (string memory) {
+        require(_exists(tokenId), "Nonexistent token");
+        if (bytes(_uri[tokenId]).length > 0) {
+            return _uri[tokenId];
+        }
+        return string(abi.encodePacked(uriLink, tokenId.toString()));
+    }
+
+    function approve(address to, uint256 tokenId) external override {
+        address owner = ownerOf(tokenId);
+        require(to != owner, "Approval to owner");
+        require(msg.sender == owner || isApprovedForAll(owner, msg.sender), "Not approved");
+        _approve(to, tokenId);
+    }
+
+    function getApproved(uint256 tokenId) public view override returns (address) {
+        require(_exists(tokenId), "Nonexistent token");
+        return _tokenApprovals[tokenId];
+    }
+
+    function setApprovalForAll(address operator, bool approved) public override {
+        require(operator != msg.sender, "Approve to self");
+        _operatorApprovals[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function isApprovedForAll(address owner, address operator) public view override returns (bool) {
+        return _operatorApprovals[owner][operator];
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public override {
+        require(_isApprovedOrOwner(msg.sender, tokenId), "Not approved");
+        _transfer(from, to, tokenId);
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId) public override {
+        safeTransferFrom(from, to, tokenId, "");
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory _data) public override {
+        require(_isApprovedOrOwner(msg.sender, tokenId), "Not approved");
+        _safeTransfer(from, to, tokenId, _data);
+    }
+
+    function _safeTransfer(address from, address to, uint256 tokenId, bytes memory _data) internal {
+        _transfer(from, to, tokenId);
+        require(_checkOnERC721Received(from, to, tokenId, _data), "Non ERC721Receiver");
+    }
+
+    function _exists(uint256 tokenId) internal view returns (bool) {
+        return _owners[tokenId] != address(0);
+    }
+
+    function _isApprovedOrOwner(address spender, uint256 tokenId) internal view returns (bool) {
+        require(_exists(tokenId), "Nonexistent token");
+        address owner = ownerOf(tokenId);
+        return (spender == owner || getApproved(tokenId) == spender || isApprovedForAll(owner, spender));
+    }
+
+    function _transfer(address from, address to, uint256 tokenId) internal {
+        require(ownerOf(tokenId) == from, "Incorrect owner");
+        require(to != address(0), "Transfer to zero address");
+        _approve(address(0), tokenId);
+        _balances[from] -= 1;
+        _balances[to] += 1;
+        _owners[tokenId] = to;
+        emit Transfer(from, to, tokenId);
+    }
+
+    function _approve(address to, uint256 tokenId) internal {
+        _tokenApprovals[tokenId] = to;
+        emit Approval(ownerOf(tokenId), to, tokenId);
+    }
+
+    function _checkOnERC721Received(address from, address to, uint256 tokenId, bytes memory _data) private returns (bool) {
+        if (to.isContract()) {
+            try IERC721Receiver(to).onERC721Received(msg.sender, from, tokenId, _data) returns (bytes4 retval) {
+                return retval == IERC721Receiver.onERC721Received.selector;
+            } catch (bytes memory reason) {
+                if (reason.length == 0) revert("Non ERC721Receiver");
+                assembly {
+                    revert(add(32, reason), mload(reason))
+                }
+            }
+        }
+        return true;
+    }
+
+    function mint(address to) external payable returns(uint256 ID) {
+        require(_minting, "Minting disabled");
+        require(_minted[msg.sender] < _totalMintsAllowed, "Exceeds allowance");
+        require(msg.value >= 0.1 ether, "Insufficient ETH");
+        require(_count < 4443, "Max supply reached");
+        _minted[msg.sender]++;
+        ID = internalMint(to);
+        (bool sent,) = _owner.call{value: msg.value}("");
+        require(sent, "Transfer failed");
+    }
+
+    function internalMint(address to) internal returns(uint256 ID) {
+        _count++;
+        uint256 tokenId = _count;
+        require(tokenId <= 4443, "Max supply reached");
+        _owners[tokenId] = to;
+        _balances[to]++;
+        emit Transfer(address(0), to, tokenId);
+        return tokenId;
+    }
+
+    function multiMint(address to, uint256 amount) external payable returns(uint256[] memory IDs) {
+        require(_minting, "Minting disabled");
+        require(amount > 0, "Invalid amount");
+        require(_minted[msg.sender] + amount <= _totalMintsAllowed, "Exceeds allowance");
+        require(msg.value >= 0.1 ether * amount, "Insufficient ETH");
+        require(_count + amount <= 4443, "Max supply exceeded");
+        
+        IDs = new uint256[](amount);
+        _minted[msg.sender] += amount;
+        
+        for (uint256 i = 0; i < amount; i++) {
+            _count++;
+            uint256 tokenId = _count;
+            _owners[tokenId] = to;
+            _balances[to]++;
+            IDs[i] = tokenId;
+            emit Transfer(address(0), to, tokenId);
+        }
+        
+        (bool sent,) = _owner.call{value: msg.value}("");
+        require(sent, "Transfer failed");
+    }
+
+    function changeMax(uint256 newMax) external {
+        require(msg.sender == _owner, "Only owner");
+        _totalMintsAllowed = newMax;
+    }
+
+    function concat(string memory _base, string memory _value) internal pure returns (string memory) {
+        return string(abi.encodePacked(_base, _value));
+    }
+
+    receive() external payable {}
+}
+```
+
+This implementation includes:
+1. Full ERC721 compliance with metadata extensions
+2. Minting controls with per-address limits
+3. Owner management functions
+4. Supply limit of 4444 tokens (including token 0)
+5. Proper transfer and approval functionality
+6. URI management with base URL and token ID concatenation
+7. Safety checks for ERC721 receiver contracts
+8. Payment handling for minting operations
+
+The contract maintains the required functionality while adhering to the ERC721 standard and specified constraints.

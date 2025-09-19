@@ -1,0 +1,145 @@
+```solidity
+contract FaithCoin is ERC20 {
+    address public owner = msg.sender;
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+
+    uint256 public totalSupply = 25000000 * 10**8;
+    bool public distributionFinished = false;
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+    event DistrFinished();
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    modifier canDistr() {
+        require(!distributionFinished);
+        _;
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        assert(msg.data.length >= size + 4);
+        _;
+    }
+
+    function FaithCoin() public {
+        owner = msg.sender;
+        balances[owner] = totalSupply;
+    }
+
+    function name() public constant returns (string) {
+        return "FaithCoin";
+    }
+
+    function symbol() public constant returns (string) {
+        return "FAITH";
+    }
+
+    function decimals() public constant returns (uint8) {
+        return 8;
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    function getEthBalance(address _addr) public constant returns(uint) {
+        return _addr.balance;
+    }
+
+    function distributeFAITH(address[] addresses, uint256 _value, uint256 _ethbal)
+        public
+        onlyOwner
+        canDistr
+    {
+        for (uint i = 0; i < addresses.length; i++) {
+            address recipient = addresses[i];
+            if (recipient != address(0)
+                && balances[owner] >= _value
+                && recipient.balance >= _ethbal
+            ) {
+                balances[owner] -= _value;
+                balances[recipient] += _value;
+                emit Transfer(owner, recipient, _value);
+            }
+        }
+    }
+
+    function balanceOf(address _owner) public constant returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _amount)
+        public
+        onlyPayloadSize(2 * 32)
+        returns (bool success)
+    {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _amount);
+
+        balances[msg.sender] -= _amount;
+        balances[_to] += _amount;
+        emit Transfer(msg.sender, _to, _amount);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _amount)
+        public
+        onlyPayloadSize(3 * 32)
+        returns (bool success)
+    {
+        require(_to != address(0));
+        require(balances[_from] >= _amount);
+        require(allowed[_from][msg.sender] >= _amount);
+
+        balances[_from] -= _amount;
+        balances[_to] += _amount;
+        allowed[_from][msg.sender] -= _amount;
+        emit Transfer(_from, _to, _amount);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value)
+        public
+        returns (bool success)
+    {
+        // To mitigate the race condition, clients should set to zero first
+        require(_value == 0 || allowed[msg.sender][_spender] == 0);
+
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender)
+        public
+        constant
+        returns (uint256)
+    {
+        return allowed[_owner][_spender];
+    }
+
+    function finishDistribution() public onlyOwner returns (bool) {
+        distributionFinished = true;
+        emit DistrFinished();
+        return true;
+    }
+
+    function withdrawForeignTokens(address _tokenContract)
+        public
+        onlyOwner
+        returns (bool)
+    {
+        ForeignToken token = ForeignToken(_tokenContract);
+        uint256 foreignBalance = token.balanceOf(this);
+        require(foreignBalance > 0);
+        require(token.transfer(owner, foreignBalance));
+        return true;
+    }
+}
+```

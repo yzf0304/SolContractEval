@@ -1,0 +1,161 @@
+```solidity
+pragma solidity 0.7.6;
+
+contract AggregationRouter is Permitable, Ownable {
+    using SafeMath for uint256;
+
+    address public immutable WETH;
+    address private constant ETH_ADDRESS =
+        address(0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE);
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+    event Exchange(address pair, uint256 amountOut, address output);
+
+    modifier ensure(uint256 deadline) {
+        require(deadline >= block.timestamp, "Router: EXPIRED");
+        _;
+    }
+
+    constructor(address _WETH) public {
+        WETH = _WETH;
+    }
+
+    receive() external payable {}
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    ) external payable returns (uint256 returnAmount) {
+        require(desc.minReturnAmount > 0, "Router: MIN_RETURN_AMOUNT_ZERO");
+        require(data.length > 0, "Router: DATA_EMPTY");
+
+        bool srcIsEth = isETH(desc.srcToken);
+        bool needsExtraEth = (desc.flags & _REQUIRES_EXTRA_ETH) != 0;
+        uint256 value;
+
+        // Handle ETH / token source and calculate how much ETH to forward
+        if (srcIsEth) {
+            if (needsExtraEth) {
+                require(msg.value > desc.amount, "Router: INSUFFICIENT_ETH");
+                value = msg.value;
+            } else {
+                require(msg.value == desc.amount, "Router: ETH_AMOUNT_MISMATCH");
+                value = desc.amount;
+            }
+        } else {
+            if (needsExtraEth) {
+                require(msg.value > 0, "Router: NO_EXTRA_ETH");
+                value = msg.value;
+            } else {
+                require(msg.value == 0, "Router: ETH_NOT_ALLOWED");
+                value = 0;
+            }
+
+            // Permit the router to pull tokens if needed
+            if (desc.permit.length > 0) {
+                _permit(desc.srcToken, desc.amount, desc.permit);
+            }
+
+            // Determine the "from" address for the token pull
+            address from = desc.srcReceiver;
+            if ((desc.flags & _BURN_FROM_MSG_SENDER) != 0) {
+                from = msg.sender;
+            } else if ((desc.flags & _BURN_FROM_TX_ORIGIN) != 0) {
+                from = tx.origin;
+            }
+
+            // Transfer the source tokens to the executor
+            TransferHelper.safeTransferFrom(
+                address(desc.srcToken),
+                from,
+                address(caller),
+                desc.amount
+            );
+        }
+
+        // Record destination balance before the call
+        uint256 balanceBefore =
+            getBalance(desc.dstToken, desc.dstReceiver);
+
+        // Execute the low-level call on the executor, forwarding ETH if needed
+        caller.callBytes{value: value}(data);
+
+        // Compute how many destination tokens actually arrived
+        uint256 balanceAfter =
+            getBalance(desc.dstToken, desc.dstReceiver);
+        returnAmount = balanceAfter.sub(balanceBefore);
+
+        // Handle partial fills
+        bool partialFill = (desc.flags & _PARTIAL_FILL) != 0;
+        if (!partialFill) {
+            require(
+                returnAmount >= desc.minReturnAmount,
+                "Router: RETURN_AMOUNT_TOO_LOW"
+            );
+        }
+
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+
+        return returnAmount;
+    }
+
+    function getBalance(IERC20 token, address account)
+        internal
+        view
+        returns (uint256)
+    {
+        if (isETH(token)) {
+            return account.balance;
+        } else {
+            return token.balanceOf(account);
+        }
+    }
+
+    function isETH(IERC20 token) internal pure returns (bool) {
+        return address(token) == ETH_ADDRESS;
+    }
+
+    function rescueFunds(address token, uint256 amount)
+        external
+        onlyOwner
+    {
+        if (token == ETH_ADDRESS) {
+            TransferHelper.safeTransferETH(owner(), amount);
+        } else {
+            TransferHelper.safeTransfer(token, owner(), amount);
+        }
+    }
+}
+```

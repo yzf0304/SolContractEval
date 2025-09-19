@@ -1,0 +1,170 @@
+Here’s the completed **`MatBase`** contract based on your provided context and description:
+
+```solidity
+pragma solidity ^0.4.17;
+
+contract MatBase is Ownable, MatToken, MatBonus {
+    using SafeMath for uint256;
+
+    uint256 public constant _START_DATE = 1508284800;
+    uint256 public constant _END_DATE = 1513641600;
+    uint256 public constant CROWDSALE_PRICE = 100;
+    address public constant ICO_ADDRESS = 0x6075a5A0620861cfeF593a51A01aF0fF179168C7;
+    address public constant PARTNERS_WALLET = 0x39467d5B39F1d24BC8479212CEd151ad469B0D7E;
+    address public constant TEAM_WALLET = 0xe1d32147b08b2a7808026D4A94707E321ccc7150;
+    address public constant PRESALE_CONTRACT = 0x503FE694CE047eCB51952b79eCAB2A907Afe8ACd;
+
+    uint256 public startTime;
+    uint256 public endTime;
+    address public wallet;
+    address public p_wallet;
+    address public t_wallet;
+    uint256 public totalCollected;
+    uint256 public rate;
+    bool public isWhitelistOn;
+    uint256 public whiteListLimit;
+
+    enum WLS { notlisted, listed, fulfilled }
+
+    struct FundReservation {
+        WLS status;
+        uint256 reserved;
+    }
+
+    mapping(address => FundReservation) public whitelist;
+
+    event Mint(address indexed purchaser, uint256 amount);
+    event Bonus(address indexed purchaser, uint256 amount);
+    event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amountTokens, string referral);
+    event White(address indexed to, uint256 reservation);
+
+    function MatBase() public {
+        startTime = _START_DATE;
+        endTime = _END_DATE;
+        wallet = ICO_ADDRESS;
+        rate = CROWDSALE_PRICE;
+        p_wallet = PARTNERS_WALLET;
+        t_wallet = TEAM_WALLET;
+        balances[p_wallet] = MAT_PARTNERS_SUPPLY_LIMIT;
+        balances[t_wallet] = MAT_TEAM_SUPPLY_LIMIT;
+        totalSupply = MAT_PARTNERS_SUPPLY_LIMIT + MAT_TEAM_SUPPLY_LIMIT;
+        whiteListLimit = MAT_TOTAL_SUPPLY_LIMIT;
+    }
+
+    function setStartTime(uint256 _startTime) public onlyOwner {
+        require(_startTime >= now);
+        startTime = _startTime;
+    }
+
+    function setEndTime(uint256 _endTime) public onlyOwner {
+        require(_endTime > startTime);
+        endTime = _endTime;
+    }
+
+    function hasEnded() public constant returns (bool) {
+        return now > endTime;
+    }
+
+    function mint(address _to, uint256 _tokens) internal returns (bool) {
+        require(totalSupply.add(_tokens) <= MAT_TOTAL_SUPPLY_LIMIT);
+        balances[_to] = balances[_to].add(_tokens);
+        totalSupply = totalSupply.add(_tokens);
+        Mint(_to, _tokens);
+        return true;
+    }
+
+    function forwardFunds() internal {
+        wallet.transfer(msg.value);
+    }
+
+    function validPurchase() internal constant returns (bool) {
+        bool withinPeriod = now >= startTime && now <= endTime;
+        bool nonZeroPurchase = msg.value != 0;
+        return withinPeriod && nonZeroPurchase;
+    }
+
+    function () public payable {
+        buyTokens(msg.sender);
+    }
+
+    function buyTokens(address beneficiary) public payable {
+        require(validPurchase());
+        uint256 tokens = msg.value.mul(rate).div(1 ether);
+        uint256 bonusTokens = calcBonus(tokens);
+
+        mint(beneficiary, tokens.add(bonusTokens));
+        totalCollected = totalCollected.add(msg.value);
+        forwardFunds();
+
+        if (bonusTokens > 0) {
+            Bonus(beneficiary, bonusTokens);
+        }
+
+        TokenPurchase(msg.sender, beneficiary, msg.value, tokens.add(bonusTokens), "");
+    }
+
+    function buyTokensReferral(address beneficiary, string referral) public payable {
+        require(validPurchase());
+        uint256 tokens = msg.value.mul(rate).div(1 ether);
+        uint256 bonusTokens = calcBonus(tokens);
+
+        mint(beneficiary, tokens.add(bonusTokens));
+        totalCollected = totalCollected.add(msg.value);
+        forwardFunds();
+
+        if (bonusTokens > 0) {
+            Bonus(beneficiary, bonusTokens);
+        }
+
+        TokenPurchase(msg.sender, beneficiary, msg.value, tokens.add(bonusTokens), referral);
+    }
+
+    function stopWhitelistReservetion() public onlyOwner {
+        isWhitelistOn = false;
+    }
+
+    function setWhiteListStatus(bool _isWhitelistOn) public onlyOwner {
+        isWhitelistOn = _isWhitelistOn;
+    }
+
+    function buyTokenWL(uint256 tokens) internal returns (bool) {
+        FundReservation storage reservation = whitelist[msg.sender];
+        require(reservation.status == WLS.listed && reservation.reserved >= tokens);
+
+        mint(msg.sender, tokens);
+        reservation.reserved = reservation.reserved.sub(tokens);
+        if (reservation.reserved == 0) {
+            reservation.status = WLS.fulfilled;
+        }
+        return true;
+    }
+
+    function regWL(address wlmember, uint256 reservation) public onlyOwner returns (bool) {
+        require(reservation > 0 && whiteListLimit >= reservation);
+        whitelist[wlmember] = FundReservation(WLS.listed, reservation);
+        whiteListLimit = whiteListLimit.sub(reservation);
+        White(wlmember, reservation);
+        return true;
+    }
+
+    function convert(address _to, uint256 _pretokens, uint256 _tokens) public onlyOwner returns (bool) {
+        require(totalSupply.add(_tokens) <= MAT_TOTAL_SUPPLY_LIMIT);
+        balances[_to] = balances[_to].add(_tokens);
+        totalSupply = totalSupply.add(_tokens);
+        Mint(_to, _tokens);
+        return true;
+    }
+}
+```
+
+### Key Features:
+1. **Whitelist Management:** Allows the contract owner to manage whitelisted users and their reservations.
+2. **Token Minting:** Ensures minting adheres to the total supply limit and emits appropriate events.
+3. **Funds Handling:** Transfers collected funds directly to the specified ICO wallet.
+4. **Bonus Calculation:** Bonuses are applied based on the context from `MatBonus`.
+5. **Crowdsale Logic:** Includes functionality for token purchases and referral-based purchases.
+6. **Presale Conversion:** Converts presale tokens to main sale tokens for eligible participants.
+
+### Important Notes:
+- The contract is strictly designed for **Solidity 0.4.17**.
+- Follows your provided descriptions, constraints, and assumptions.

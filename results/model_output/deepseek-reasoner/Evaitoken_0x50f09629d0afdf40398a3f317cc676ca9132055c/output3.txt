@@ -1,0 +1,98 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.6.10;
+
+/**
+ * @title Evaitoken
+ * @notice ERC20 token implementation with profit tracking and burning capabilities
+ */
+contract Evaitoken is ERC20Interface, SafeMath {
+    string public override name = "EVAI.IO";
+    string public override symbol = "EVAI";
+    uint8 public override decimals = 8;
+    uint256 public override initialSupply;
+    uint256 public override _totalSupply;
+    address public override owner;
+    uint256 public override totalProfit;
+    uint256 public override profit;
+
+    mapping(address => uint256) internal balances;
+    mapping(address => mapping(address => uint256)) internal allowed;
+
+    constructor() public {
+        _totalSupply = 1000000000 * 10**uint256(decimals);
+        initialSupply = _totalSupply;
+        balances[msg.sender] = _totalSupply;
+        owner = msg.sender;
+        emit Transfer(address(0), msg.sender, _totalSupply);
+    }
+
+    function totalSupply() external view override returns (uint256) {
+        return _totalSupply - balances[address(0)];
+    }
+
+    function balanceOf(address tokenOwner) external view override returns (uint256) {
+        return balances[tokenOwner];
+    }
+
+    function allowance(address tokenOwner, address spender) external view override returns (uint256) {
+        return allowed[tokenOwner][spender];
+    }
+
+    function approve(address spender, uint256 tokens) external override returns (bool) {
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    function transfer(address to, uint256 tokens) external override returns (bool) {
+        require(balances[msg.sender] >= tokens, "Insufficient balance");
+        balances[msg.sender] = safeSub(balances[msg.sender], tokens);
+        balances[to] = safeAdd(balances[to], tokens);
+        emit Transfer(msg.sender, to, tokens);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 tokens) external override returns (bool) {
+        require(allowed[from][msg.sender] >= tokens, "Allowance exceeded");
+        require(balances[from] >= tokens, "Insufficient balance");
+        
+        allowed[from][msg.sender] = safeSub(allowed[from][msg.sender], tokens);
+        balances[from] = safeSub(balances[from], tokens);
+        balances[to] = safeAdd(balances[to], tokens);
+        emit Transfer(from, to, tokens);
+        return true;
+    }
+
+    function buy(address to, uint256 tokens) external override returns (bool) {
+        require(msg.sender == owner, "Only owner can execute buy");
+        require(balances[owner] >= tokens, "Insufficient balance");
+        
+        balances[owner] = safeSub(balances[owner], tokens);
+        balances[to] = safeAdd(balances[to], tokens);
+        emit Transfer(owner, to, tokens);
+        return true;
+    }
+
+    function operationProfit(uint256 _profit) external override returns (bool) {
+        require(msg.sender == owner, "Only owner can record profit");
+        profit = _profit;
+        totalProfit = safeAdd(totalProfit, _profit);
+        emit Profit(msg.sender, _profit, totalProfit);
+        return true;
+    }
+
+    function burn(uint256 tokens) external override returns (bool) {
+        require(msg.sender == owner, "Only owner can burn");
+        require(balances[msg.sender] >= tokens, "Insufficient balance");
+        
+        balances[msg.sender] = safeSub(balances[msg.sender], tokens);
+        _totalSupply = safeSub(_totalSupply, tokens);
+        emit Burn(msg.sender, address(0), tokens);
+        emit Transfer(msg.sender, address(0), tokens);
+        return true;
+    }
+
+    receive() external payable {}
+}
+```

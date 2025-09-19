@@ -1,0 +1,178 @@
+Below is the smart contract code for `OMNIDOORS`, implemented in accordance with the described requirements and provided context.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract OMNIDOORS is Ownable, ERC721, NonblockingReceiver {
+    address public _owner;
+    string private baseURI;
+    uint256 public nextTokenId = 5900;
+    uint256 public constant MAX_NETWORK_MINT = 9300;
+
+    uint256 public gasForDestinationLzReceive = 350000;
+
+    /**
+     * @notice Initializes the contract with the provided base URI and LayerZero endpoint.
+     * @dev Mints 330 tokens to the contract owner upon deployment.
+     * @param baseURI_ The base URI for the NFTs.
+     * @param _layerZeroEndpoint The LayerZero endpoint address.
+     */
+    constructor(string memory baseURI_, address _layerZeroEndpoint)
+        ERC721("Omni Doors", "odoors")
+    {
+        _owner = msg.sender;
+        endpoint = ILayerZeroEndpoint(_layerZeroEndpoint);
+        baseURI = baseURI_;
+        for (uint256 i = 0; i < 330; i++) {
+            _safeMint(_owner, ++nextTokenId);
+        }
+    }
+
+    /**
+     * @notice Allows users to mint up to one NFT per transaction.
+     * @dev Checks if the number of tokens to mint does not exceed the maximum allowed per transaction and the total supply limit.
+     * @param numTokens The number of tokens to mint (must be 1).
+     */
+    function mint(uint8 numTokens) external payable {
+        require(numTokens == 1, "OMNIDOORS: Max 1 token per transaction");
+        require(nextTokenId < MAX_NETWORK_MINT, "OMNIDOORS: Mint limit reached");
+
+        _safeMint(msg.sender, ++nextTokenId);
+    }
+
+    /**
+     * @dev Transfers an NFT to another chain via LayerZero.
+     * @notice Emits Transfer event when burning the NFT.
+     * @param _chainId Destination chain ID.
+     * @param tokenId ID of the NFT to transfer.
+     */
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        require(
+            _isApprovedOrOwner(msg.sender, tokenId),
+            "OMNIDOORS: Caller is not owner nor approved"
+        );
+        require(
+            trustedRemoteLookup[_chainId].length > 0,
+            "OMNIDOORS: Destination chain not configured"
+        );
+
+        _burn(tokenId);
+
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        uint16 version = 1;
+        bytes memory adapterParams = abi.encodePacked(
+            version,
+            gasForDestinationLzReceive
+        );
+        (uint256 messageFee, ) = endpoint.estimateFees(
+            _chainId,
+            address(this),
+            payload,
+            false,
+            adapterParams
+        );
+        require(msg.value >= messageFee, "OMNIDOORS: Insufficient message fee");
+
+        _lzSend(
+            _chainId,
+            payload,
+            payable(msg.sender),
+            address(0),
+            adapterParams
+        );
+    }
+
+    /**
+     * @notice Allows the contract owner to set the base URI for the NFTs.
+     * @param URI The new base URI.
+     */
+    function setBaseURI(string memory URI) external onlyOwner {
+        baseURI = URI;
+    }
+
+    /**
+     * @notice Allows anyone to donate ETH to the contract.
+     */
+    function donate() external payable {
+        require(msg.value > 0, "OMNIDOORS: Cannot donate 0 ETH");
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw a specified amount of ETH from the contract.
+     * @param amt The amount of ETH to withdraw.
+     */
+    function withdraw(uint256 amt) external onlyOwner {
+        require(address(this).balance >= amt, "OMNIDOORS: Insufficient balance");
+        payable(msg.sender).transfer(amt);
+    }
+
+    /**
+     * @notice Allows the contract owner to set the gas for the destination LayerZero receive function.
+     * @param newVal The new gas value.
+     */
+    function setGasForDestinationLzReceive(uint256 newVal) external onlyOwner {
+        gasForDestinationLzReceive = newVal;
+    }
+
+    /**
+     * @notice Internal function to handle LayerZero messages.
+     * @dev Decodes the payload and mints the NFT on the destination chain.
+     * @param _srcChainId The source chain ID.
+     * @param _srcAddress The source address.
+     * @param _nonce The nonce of the message.
+     * @param _payload The encoded payload.
+     */
+    function _LzReceive(
+        uint16 _srcChainId,
+        bytes memory _srcAddress,
+        uint64 _nonce,
+        bytes memory _payload
+    ) internal override {
+        (address toAddr, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        _safeMint(toAddr, tokenId);
+    }
+
+    /**
+     * @notice Returns the base URI for the NFTs.
+     * @return The base URI.
+     */
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+
+    /**
+     * @dev Fallback and receive functions to accept ether.
+     */
+    receive() external payable {}
+
+    fallback() external payable {}
+}
+```
+
+### Key Features:
+1. **Minting:**
+   - Users can mint one token per transaction (`mint` function).
+   - Tokens are capped by a supply limit of `MAX_NETWORK_MINT`.
+
+2. **Cross-Chain NFT Transfer:**
+   - The `traverseChains` function facilitates sending NFTs to other chains using LayerZero messaging.
+
+3. **Base URI:**
+   - The `setBaseURI` allows dynamic configuration of the token's base URI.
+
+4. **ETH Donations and Withdrawals:**
+   - Supports `donate`, allowing anyone to contribute ETH to the contract.
+   - The owner can withdraw funds via `withdraw`.
+
+5. **Reentrancy Mitigation:**
+   - The contract relies on trusted remote management for cross-chain messaging to prevent unauthorized transfers.
+
+6. **Fallback Functions:**
+   - Included to let the contract accept ETH directly via `receive` or `fallback`.
+
+### LayerZero Dependency:
+- Uses `NonblockingReceiver`, ensuring retry capabilities for failed cross-chain transactions.
+
+Let me know if you require further clarifications!

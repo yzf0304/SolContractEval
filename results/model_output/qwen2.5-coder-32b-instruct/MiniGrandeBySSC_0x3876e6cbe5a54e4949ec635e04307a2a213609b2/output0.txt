@@ -1,0 +1,160 @@
+Below is the complete implementation of the `MiniGrandeBySSC` contract based on the provided context and description:
+
+```solidity
+/**
+ * @title MiniGrandeBySSC
+ * @notice This contract is an NFT minting contract that supports both public and whitelist mints. It includes functionalities for setting prices, pausing the contract, and managing the whitelist.
+ * @dev The contract inherits from Ownable, ERC721A, and ReentrancyGuard. It uses a Merkle tree for whitelist verification and allows for different minting phases (presale and public sale).
+ */
+contract MiniGrandeBySSC is Ownable, ERC721A, ReentrancyGuard {
+    using MerkleProof for bytes32[];
+
+    uint256 private _publicPrice = 0.007 ether;
+    uint256 private _presalePrice = 0 ether;
+    uint256 private _maxPurchaseDuringWhitelist = 1;
+    uint256 private _maxPurchaseDuringSale = 1;
+    uint256 private _maxPerTransaction = 1;
+    uint256 private _maxMint = 2000;
+    address private _team = 0x6FEf5A781A35d158096736dBc561F298ef47B86c;
+    bytes32 public merkleRoot = 0x8daf3296866531d8a9a23e382da52d37f29af1f17e5e9ed8a403c896de82be5f;
+    mapping(address => uint256) public presaleAddressMintCount;
+    mapping(address => uint256) public saleAddressMintCount;
+    uint32 public whitelistMinted = 0;
+    uint32 private _maxWhitelistMints = 200;
+
+    bool public isPaused = false;
+    bool public isPublicMint = false;
+    bool public isWhitelistMint = false;
+    string private _tokenURI = "ipfs://QmZzPHpPmtBHACKpu4MQ6XH2mNXJcJgRhdv1KYpnHqQ6q9/";
+
+    constructor() ERC721A("MiniGrandeBySecretSocietyClub", "MINIBYSSC", _maxPerTransaction, _maxMint) {}
+
+    function setMaxWhitelistMints(uint32 val) external onlyOwner {
+        _maxWhitelistMints = val;
+    }
+
+    function setMaxMintPerWalletWhitelist(uint256 val) external onlyOwner {
+        _maxPurchaseDuringWhitelist = val;
+    }
+
+    function setMaxMintPerWalletSale(uint256 val) external onlyOwner {
+        _maxPurchaseDuringSale = val;
+    }
+
+    function checkIsPublicMint() external view returns (bool) {
+        return isPublicMint;
+    }
+
+    function pause() external onlyOwner {
+        isPaused = true;
+    }
+
+    function unpause() external onlyOwner {
+        isPaused = false;
+    }
+
+    function setTeam(address team) external onlyOwner {
+        _team = team;
+    }
+
+    function getPublicPrice() external view returns(uint256) {
+        return _publicPrice;
+    }
+
+    function setPublicMint(bool value) external onlyOwner {
+        isPublicMint = value;
+    }
+
+    function setWhitelistMint(bool value) external onlyOwner {
+        isWhitelistMint = value;
+    }
+
+    function setPresalePrice(uint256 price) external onlyOwner {
+        _presalePrice = price;
+    }
+
+    function setPublicPrice(uint256 price) external onlyOwner {
+        _publicPrice = price;
+    }
+
+    function setCollectionSize(uint256 size) external onlyOwner {
+        require(size > 0, "Collection size must be greater than 0");
+        _maxMint = size;
+    }
+
+    modifier mintGuard(uint256 tokenCount) {
+        require(!isPaused, "Paused!");
+        require(tokenCount > 0 && tokenCount <= _maxPerTransaction, "Invalid token count");
+        require(msg.sender == tx.origin, "No bots allowed");
+        require(totalSupply() + tokenCount <= _maxMint, "Sold out!");
+        _;
+    }
+
+    function mint(uint256 amount) external payable mintGuard(amount) nonReentrant {
+        require(isPublicMint, "Public mint is not active");
+        require(amount <= _maxPurchaseDuringSale - saleAddressMintCount[msg.sender], "Exceeds max purchase per wallet");
+        require(msg.value >= _publicPrice * amount, "Insufficient funds");
+        _safeMint(msg.sender, amount);
+        saleAddressMintCount[msg.sender] += amount;
+    }
+
+    function mintPresale(bytes32[] calldata proof, uint256 amount) external payable mintGuard(amount) nonReentrant {
+        require(isWhitelistMint, "Whitelist mint is not active");
+        require(whitelistMinted + uint32(amount) <= _maxWhitelistMints, "Exceeds max whitelist mints");
+        require(amount <= _maxPurchaseDuringWhitelist - presaleAddressMintCount[msg.sender], "Exceeds max purchase per wallet");
+        require(MerkleProof.verify(proof, merkleRoot, keccak256(abi.encodePacked(msg.sender))), "Not on whitelist");
+        require(msg.value >= _presalePrice * amount, "Insufficient funds");
+        _safeMint(msg.sender, amount);
+        whitelistMinted += uint32(amount);
+        presaleAddressMintCount[msg.sender] += amount;
+    }
+
+    function setMaxBatchSize(uint256 val) external onlyOwner {
+        require(val > 0, "Max batch size must be greater than 0");
+        _maxPerTransaction = val;
+    }
+
+    function cashout() external onlyOwner {
+        Address.sendValue(payable(_team), address(this).balance);
+    }
+
+    function setCashout(address addr) external onlyOwner returns(address) {
+        _team = addr;
+        return _team;
+    }
+
+    function devMint(uint32 qty) external onlyOwner {
+        require(qty <= _maxMint - totalSupply(), "Exceeds max mint");
+        _safeMint(msg.sender, qty);
+    }
+
+    function setMerkleRoot(bytes32 root) external onlyOwner {
+        merkleRoot = root;
+    }
+
+    function setMaxMint(uint256 maxMint) external onlyOwner {
+        require(maxMint > 0, "Max mint must be greater than 0");
+        _maxMint = maxMint;
+    }
+
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _tokenURI = baseURI;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _tokenURI;
+    }
+}
+```
+
+### Explanation:
+- **Constructor**: Initializes the contract with the token name, symbol, max tokens per transaction, and total collection size.
+- **Modifiers**: 
+  - `mintGuard`: Ensures that the mint is not paused, the transaction count is valid, and the sender is the originator.
+  - `nonReentrant`: Prevents reentrancy attacks.
+- **Mint Functions**: 
+  - `mint`: Allows public minting if enabled within the mint limits and payment conditions.
+  - `mintPresale`: Allows whitelist minting if enabled, verifies the sender's inclusion in the whitelist, and respects the mint limits.
+- **Admin Functions**: Various functions to set and manage contract parameters like mint prices, pause/unpause the contract, set merkle root for whitelist, etc.
+- **Cashout Functionality**: Transfers the contract's balance to the specified team address.
+- **Dev Mint**: Allows the owner to mint tokens directly, useful for reserve mints or giveaways.

@@ -1,0 +1,282 @@
+```solidity
+pragma solidity ^0.4.22;
+
+contract BTMC is ERC20, Ownable, Pausable {
+    using SafeMath for uint256;
+
+    // Base information of the token
+    string public constant name = "MinerCoin";
+    string public constant symbol = "BTMC";
+    string public constant version = "1.0";
+    uint256 public constant decimals = 18;
+
+    // Initial supply for the team
+    uint256 public constant INIT_SUPPLY = 100000000 * 10**decimals;
+    // Mining supply (not generated in the initial phase)
+    uint256 public constant MINING_SUPPLY = 500000000 * 10**decimals;
+    // Maximum supply for public funding
+    uint256 public constant MAX_FUNDING_SUPPLY = 200000000 * 10**decimals;
+    // Team keeping supply
+    uint256 public constant TEAM_KEEPING = 200000000 * 10**decimals;
+    // Total maximum supply
+    uint256 public constant MAX_SUPPLY = INIT_SUPPLY
+                                      + MINING_SUPPLY
+                                      + MAX_FUNDING_SUPPLY
+                                      + TEAM_KEEPING;
+
+    // Public funding parameters
+    uint256 public totalFundingSupply;
+    uint256 public startTime;
+    uint256 public endTime;
+    uint256 public rate;
+
+    // Team unfreezing parameters
+    uint256 public constant TEAM_UNFREEZE = 40000000 * 10**decimals;
+    bool public hasOneStepWithdraw;
+    bool public hasTwoStepWithdraw;
+    bool public hasThreeStepWithdraw;
+    bool public hasFourStepWithdraw;
+    bool public hasFiveStepWithdraw;
+
+    // ERC20 balances & allowances
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+
+    event CreateBTMC(address indexed _to, uint256 _value);
+
+    modifier notReachTotalSupply(uint256 _value, uint256 _rate) {
+        assert(MAX_SUPPLY >= totalSupply.add(_value.mul(_rate)));
+        _;
+    }
+
+    modifier notReachFundingSupply(uint256 _value, uint256 _rate) {
+        assert(MAX_FUNDING_SUPPLY >= totalFundingSupply.add(_value.mul(_rate)));
+        _;
+    }
+
+    modifier assertFalse(bool withdrawStatus) {
+        assert(!withdrawStatus);
+        _;
+    }
+
+    modifier notBeforeTime(uint256 targetTime) {
+        assert(now > targetTime);
+        _;
+    }
+
+    modifier notAfterTime(uint256 targetTime) {
+        assert(now <= targetTime);
+        _;
+    }
+
+    /**
+     * @notice Constructor
+     */
+    function BTMC() public {
+        totalSupply = INIT_SUPPLY;
+        balances[msg.sender] = INIT_SUPPLY;
+        Transfer(address(0), msg.sender, INIT_SUPPLY);
+
+        totalFundingSupply = 0;
+        startTime = 1524499199; // 2018-04-23 23:59:59
+        endTime   = 1526313600; // 2018-05-15 00:00:00
+        rate = 5000;
+
+        hasOneStepWithdraw   = false;
+        hasTwoStepWithdraw   = false;
+        hasThreeStepWithdraw = false;
+        hasFourStepWithdraw  = false;
+        hasFiveStepWithdraw  = false;
+    }
+
+    /**
+     * @notice Withdraw all ETH from this contract to owner
+     */
+    function etherProceeds() external onlyOwner {
+        owner.transfer(address(this).balance);
+    }
+
+    /**
+     * @dev Mint tokens (public or team) and assign to receiver
+     */
+    function processFunding(address receiver, uint256 _value, uint256 _rate)
+        internal
+        notReachTotalSupply(_value, _rate)
+    {
+        uint256 tokenAmount = _value.mul(_rate);
+        totalSupply = totalSupply.add(tokenAmount);
+        balances[receiver] = balances[receiver].add(tokenAmount);
+        Transfer(address(0), receiver, tokenAmount);
+        CreateBTMC(receiver, tokenAmount);
+    }
+
+    /**
+     * @dev Public funding
+     */
+    function funding(address receiver, uint256 _value, uint256 _rate)
+        whenNotPaused
+        internal
+        notReachFundingSupply(_value, _rate)
+    {
+        uint256 tokenAmount = _value.mul(_rate);
+        totalFundingSupply = totalFundingSupply.add(tokenAmount);
+        processFunding(receiver, _value, _rate);
+    }
+
+    /**
+     * @notice Fallback: accept ETH and issue tokens during funding period
+     */
+    function () external payable
+        notBeforeTime(startTime)
+        notAfterTime(endTime)
+    {
+        funding(msg.sender, msg.value, rate);
+    }
+
+    /**
+     * @notice Team vesting withdrawals
+     */
+    function withdrawForOneStep()
+        external
+        onlyOwner
+        assertFalse(hasOneStepWithdraw)
+        notBeforeTime(1587571200) // 2020-04-23 00:00:00
+    {
+        processFunding(owner, TEAM_UNFREEZE, 1);
+        hasOneStepWithdraw = true;
+    }
+
+    function withdrawForTwoStep()
+        external
+        onlyOwner
+        assertFalse(hasTwoStepWithdraw)
+        notBeforeTime(1603382400) // 2020-10-22 00:00:00
+    {
+        processFunding(owner, TEAM_UNFREEZE, 1);
+        hasTwoStepWithdraw = true;
+    }
+
+    function withdrawForThreeStep()
+        external
+        onlyOwner
+        assertFalse(hasThreeStepWithdraw)
+        notBeforeTime(1619107200) // 2021-04-22 00:00:00
+    {
+        processFunding(owner, TEAM_UNFREEZE, 1);
+        hasThreeStepWithdraw = true;
+    }
+
+    function withdrawForFourStep()
+        external
+        onlyOwner
+        assertFalse(hasFourStepWithdraw)
+        notBeforeTime(1634918400) // 2021-10-22 00:00:00
+    {
+        processFunding(owner, TEAM_UNFREEZE, 1);
+        hasFourStepWithdraw = true;
+    }
+
+    function withdrawForFiveStep()
+        external
+        onlyOwner
+        assertFalse(hasFiveStepWithdraw)
+        notBeforeTime(1650643200) // 2022-04-22 00:00:00
+    {
+        processFunding(owner, TEAM_UNFREEZE, 1);
+        hasFiveStepWithdraw = true;
+    }
+
+    /**
+     * @notice ERC20 transfer
+     */
+    function transfer(address _to, uint256 _value)
+        whenNotPaused
+        public
+        returns (bool)
+    {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _value);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice ERC20 balanceOf
+     */
+    function balanceOf(address _owner)
+        public
+        view
+        returns (uint256 balance)
+    {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice ERC20 transferFrom
+     */
+    function transferFrom(address _from, address _to, uint256 _value)
+        whenNotPaused
+        public
+        returns (bool)
+    {
+        require(_to != address(0));
+        require(balances[_from] >= _value);
+        require(allowed[_from][msg.sender] >= _value);
+
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to]   = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice ERC20 approve
+     */
+    function approve(address _spender, uint256 _value)
+        whenNotPaused
+        public
+        returns (bool)
+    {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice ERC20 allowance
+     */
+    function allowance(address _owner, address _spender)
+        public
+        view
+        returns (uint256 remaining)
+    {
+        return allowed[_owner][_spender];
+    }
+
+    /**
+     * @notice Owner can adjust funding rate
+     */
+    function setupFundingRate(uint256 _rate)
+        external
+        onlyOwner
+    {
+        rate = _rate;
+    }
+
+    /**
+     * @notice Owner can adjust funding period
+     */
+    function setupFundingTime(uint256 _startTime, uint256 _endTime)
+        external
+        onlyOwner
+    {
+        startTime = _startTime;
+        endTime   = _endTime;
+    }
+}
+```

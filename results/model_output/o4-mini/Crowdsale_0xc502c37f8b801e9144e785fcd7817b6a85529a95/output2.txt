@@ -1,0 +1,182 @@
+Here is the completed Crowdsale contract (0.4.18) with all functions implemented as per your specification. It assumes that tokens are locked until the official `endTime` of the sale, and that the reserve address (`tokenReserve`) has already approved this contract via `approve(...)` for the full amount of tokens to be sold.
+
+```solidity
+pragma solidity ^0.4.18;
+
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) { return 0; }
+        uint256 c = a * b;
+        assert(c / a == b);
+        return c;
+    }
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // Solidity throws on div by zero automatically
+        return a / b;
+    }
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+contract Ownable {
+    address public owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    function Ownable() public {
+        owner = msg.sender;
+    }
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0));
+        OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+}
+
+contract DragonToken {
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool);
+}
+
+contract Crowdsale is Ownable {
+    using SafeMath for uint256;
+
+    DragonToken public token;
+    address    public tokenReserve;
+    uint256    public startTime;
+    uint256    public endTime;
+    address    public wallet;
+    uint256    public rate;         // price in wei per token
+    uint256    public weiRaised;
+    uint256    public tokensSold;
+
+    mapping(address => uint256) private balances;
+    mapping(address => uint256) private releaseTime;
+
+    event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amount, uint256 releaseTime);
+    event EndTimeUpdated();
+    event DragonPriceUpdated();
+    event TokenReleased(address indexed holder, uint256 amount);
+
+    function Crowdsale() public {
+        // override owner
+        owner         = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+        startTime     = now;
+        endTime       = 1521187200;                              // 2018-03-16 00:00:00 UTC
+        rate          = 5000000000000000;                        // 0.005 ETH per token
+        wallet        = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+        token         = DragonToken(0x814F67fA286f7572B041D041b1D99b432c9155Ee);
+        tokenReserve  = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    }
+
+    // fallback → buy for msg.sender
+    function () external payable {
+        buyTokens(msg.sender);
+    }
+
+    // purchase tokens
+    function buyTokens(address beneficiary) public payable {
+        require(beneficiary != address(0));
+        require(validPurchase());
+
+        uint256 weiAmount = msg.value;
+        uint256 tokens    = getTokenAmount(weiAmount);
+
+        // update state
+        weiRaised  = weiRaised.add(weiAmount);
+        tokensSold = tokensSold.add(tokens);
+
+        // lock tokens until endTime
+        uint256 releaseAt = assignTokens(beneficiary, tokens);
+
+        TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, releaseAt);
+
+        // forward funds
+        forwardFunds();
+    }
+
+    // true if sale period is active and non‐zero purchase
+    function validPurchase() internal view returns (bool) {
+        bool withinPeriod = now >= startTime && now <= endTime;
+        bool nonZero      = msg.value != 0;
+        return withinPeriod && nonZero;
+    }
+
+    // send ETH to funding wallet
+    function forwardFunds() internal {
+        wallet.transfer(msg.value);
+    }
+
+    // price * tokens, here rate = wei per token → tokens = weiAmount / rate
+    function getTokenAmount(uint256 weiAmount) internal view returns (uint256) {
+        return weiAmount.div(rate);
+    }
+
+    // sale end check
+    function hasEnded() public view returns (bool) {
+        return now > endTime;
+    }
+
+    // owner can push sale end forward (or shorten)
+    function updateEndTime(uint256 newTime) onlyOwner external {
+        require(newTime >= now);
+        endTime = newTime;
+        EndTimeUpdated();
+    }
+
+    // owner can change token price in wei
+    function updateDragonPrice(uint256 newRate) onlyOwner external {
+        require(newRate > 0);
+        rate = newRate;
+        DragonPriceUpdated();
+    }
+
+    // assign/lock tokens until endTime, but do NOT transfer on purchase
+    function assignTokens(address beneficiary, uint256 amount) private returns (uint256) {
+        balances[beneficiary] = balances[beneficiary].add(amount);
+        // always unlock at official endTime
+        releaseTime[beneficiary] = endTime;
+        return releaseTime[beneficiary];
+    }
+
+    // view a user’s locked token balance
+    function balanceOf(address _owner) public view returns (uint256) {
+        return balances[_owner];
+    }
+
+    // view when user’s tokens unlock
+    function unlockTime(address _owner) public view returns (uint256) {
+        return releaseTime[_owner];
+    }
+
+    // after sale end, users call this to pull their tokens from reserve
+    function releaseDragonTokens() public {
+        uint256 amount = balances[msg.sender];
+        require(amount > 0);
+        require(now >= releaseTime[msg.sender]);
+
+        // zero out before external call
+        balances[msg.sender] = 0;
+
+        // pull from reserve → beneficiary
+        require(token.transferFrom(tokenReserve, msg.sender, amount));
+
+        TokenReleased(msg.sender, amount);
+    }
+}
+```
+
+Key points:  
+• Users send ETH (or invoke `buyTokens`) during `startTime…endTime`.  
+• Tokens are accounted in `balances[...]` but not moved until sale close.  
+• After `endTime`, each user calls `releaseDragonTokens()` to transfer their tokens from the reserved account to themselves (it assumes `tokenReserve` has pre‐approved this contract for at least the total sale amount).  
+• The owner may adjust `endTime` or `rate` at any point before closure.

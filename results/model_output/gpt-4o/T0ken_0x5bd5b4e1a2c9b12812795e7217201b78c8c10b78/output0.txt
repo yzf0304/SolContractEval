@@ -1,0 +1,251 @@
+Below is the completed implementation of the `T0ken` contract based on the provided description and context. The implementation includes function bodies, event emissions, and required logic to satisfy the contract's requirements.
+
+```solidity
+pragma solidity 0.5.2;
+
+contract T0ken is ERC20, Ownable, LockableDestroyable {
+    using AdditiveMath for uint256;
+    using AddressMap for AddressMap.Data;
+
+    address constant internal ZERO_ADDRESS = address(0);
+    string public constant name = "TZERO PREFERRED";
+    string public constant symbol = "TZROP";
+    uint8 public constant decimals = 0;
+
+    AddressMap.Data private shareholders;
+    Compliance public compliance;
+    address public issuer;
+    bool public issuingFinished = false;
+    mapping(address => address) public cancellations;
+
+    mapping(address => uint256) private balances;
+    uint256 private totalSupplyTokens;
+
+    mapping(address => mapping(address => uint256)) private allowed;
+
+    // ------------------------------- Modifiers -------------------------------
+    modifier onlyIssuer() {
+        require(msg.sender == issuer, "Only issuer allowed");
+        _;
+    }
+
+    modifier canIssue() {
+        require(!issuingFinished, "Issuing is already finished");
+        _;
+    }
+
+    modifier isNotCancelled(address addr) {
+        require(cancellations[addr] == ZERO_ADDRESS, "Address has been cancelled");
+        _;
+    }
+
+    modifier hasFunds(address addr, uint256 tokens) {
+        require(tokens <= balances[addr], "Insufficient funds");
+        _;
+    }
+
+    // -------------------------------- Functions -----------------------------
+    function transfer(address to, uint256 tokens)
+        external
+        isUnlocked
+        isNotCancelled(to)
+        hasFunds(msg.sender, tokens)
+        returns (bool)
+    {
+        require(to != ZERO_ADDRESS, "Cannot transfer to zero address");
+        require(canTransfer(msg.sender, to, tokens, false), "Compliance check failed");
+
+        transferTokens(msg.sender, to, tokens);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 tokens)
+        external
+        isUnlocked
+        isNotCancelled(to)
+        hasFunds(from, tokens)
+        returns (bool)
+    {
+        require(to != ZERO_ADDRESS, "Cannot transfer to zero address");
+        require(tokens <= allowed[from][msg.sender], "Allowance exceeded");
+        require(canTransfer(from, to, tokens, false), "Compliance check failed");
+
+        allowed[from][msg.sender] = allowed[from][msg.sender].subtract(tokens);
+        transferTokens(from, to, tokens);
+        return true;
+    }
+
+    function transferOverride(address from, address to, uint256 tokens)
+        external
+        isUnlocked
+        isNotCancelled(to)
+        hasFunds(from, tokens)
+        returns (bool)
+    {
+        require(msg.sender == issuer || msg.sender == owner, "Unauthorized override");
+        require(canTransfer(from, to, tokens, true), "Compliance check failed");
+
+        transferTokens(from, to, tokens);
+        return true;
+    }
+
+    function issueTokens(uint256 quantity)
+        external
+        isUnlocked
+        onlyIssuer
+        canIssue
+        returns (bool)
+    {
+        require(quantity > 0, "Quantity must be greater than 0");
+
+        balances[issuer] = balances[issuer].add(quantity);
+        totalSupplyTokens = totalSupplyTokens.add(quantity);
+
+        if (!shareholders.exists(issuer)) {
+            shareholders.append(issuer);
+            emit ShareholderAdded(issuer);
+        }
+
+        emit Issue(issuer, quantity);
+        return true;
+    }
+
+    function finishIssuing()
+        external
+        isUnlocked
+        onlyIssuer
+        canIssue
+        returns (bool)
+    {
+        issuingFinished = true;
+        emit IssueFinished();
+        return true;
+    }
+
+    function cancelAndReissue(address original, address replacement)
+        external
+        isUnlocked
+        onlyIssuer
+        isNotCancelled(replacement)
+    {
+        require(shareholders.exists(original), "Original address is not a shareholder");
+        require(!shareholders.exists(replacement), "Replacement address must not be a shareholder");
+
+        uint256 originalBalance = balances[original];
+
+        balances[original] = 0;
+        balances[replacement] = balances[replacement].add(originalBalance);
+
+        cancellations[original] = replacement;
+
+        shareholders.remove(original);
+        shareholders.append(replacement);
+
+        emit ShareholderRemoved(original);
+        emit ShareholderAdded(replacement);
+        emit VerifiedAddressSuperseded(original, replacement, msg.sender);
+    }
+
+    function approve(address spender, uint256 tokens)
+        external
+        isUnlocked
+        isNotCancelled(msg.sender)
+        returns (bool)
+    {
+        require(spender != ZERO_ADDRESS, "Cannot approve zero address");
+
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    function setIssuer(address newIssuer)
+        external
+        isUnlocked
+        onlyOwner
+    {
+        require(newIssuer != ZERO_ADDRESS, "Issuer cannot be zero address");
+        emit IssuerSet(issuer, newIssuer);
+        issuer = newIssuer;
+    }
+
+    function setCompliance(address newComplianceAddress)
+        external
+        isUnlocked
+        onlyOwner
+    {
+        require(newComplianceAddress != ZERO_ADDRESS, "Compliance address cannot be zero address");
+        compliance = Compliance(newComplianceAddress);
+    }
+
+    // ------------------------------- Getters -------------------------------
+    function totalSupply() external view returns (uint256) {
+        return totalSupplyTokens;
+    }
+
+    function balanceOf(address addr) external view returns (uint256) {
+        return balances[addr];
+    }
+
+    function allowance(address addrOwner, address spender) external view returns (uint256) {
+        return allowed[addrOwner][spender];
+    }
+
+    function holderAt(int256 index) external view returns (address) {
+        return shareholders.at(index);
+    }
+
+    function isHolder(address addr) external view returns (bool) {
+        return shareholders.exists(addr);
+    }
+
+    function isSuperseded(address addr) external view returns (bool) {
+        return cancellations[addr] != ZERO_ADDRESS;
+    }
+
+    function getSuperseded(address addr) external view returns (address) {
+        while (cancellations[addr] != ZERO_ADDRESS) {
+            addr = cancellations[addr];
+        }
+        return addr;
+    }
+
+    // ------------------------------- Private -------------------------------
+    function canTransfer(address from, address to, uint256 tokens, bool isOverride)
+        private
+        isNotCancelled(to)
+        returns (bool)
+    {
+        if (isOverride) {
+            return compliance.canOverride(msg.sender, from, to, tokens);
+        }
+        return compliance.canTransfer(msg.sender, from, to, tokens);
+    }
+
+    function transferTokens(address from, address to, uint256 tokens)
+        private
+    {
+        balances[from] = balances[from].subtract(tokens);
+        balances[to] = balances[to].add(tokens);
+
+        if (!shareholders.exists(to)) {
+            shareholders.append(to);
+            emit ShareholderAdded(to);
+        }
+
+        if (balances[from] == 0 && shareholders.exists(from)) {
+            shareholders.remove(from);
+            emit ShareholderRemoved(from);
+        }
+
+        emit Transfer(from, to, tokens);
+    }
+}
+```
+
+### Key Notes:
+1. The `transferTokens` function handles shareholder additions/removals based on balances, as required.
+2. Token issuance is controlled with `canIssue` and ensures that it can only be called by the issuer.
+3. Compliance checks are integrated into `transfer`, `transferFrom`, and `transferOverride` through `canTransfer`.
+4. Cancellation and reissuance are handled while maintaining a mapping of superseded addresses.
+5. Shareholder management is seamlessly handled by the `AddressMap` library.

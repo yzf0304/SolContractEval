@@ -1,0 +1,219 @@
+Certainly! Below is the completed `Manager` contract with the `managerOn` and `managerOff` functions implemented according to the provided specification:
+
+```solidity
+pragma solidity ^0.4.16;
+
+contract Owner {
+
+	// Адреса владельцев
+	mapping ( address => bool ) public ownerAddressMap;
+
+	// Соответствие адреса владельца и его номера
+	mapping ( address => uint256 ) public ownerAddressNumberMap;
+
+	// список менеджеров
+	mapping ( uint256 => address ) public ownerListMap;
+
+	// сколько всего менеджеров
+	uint256 public ownerCountInt = 0;
+
+	// событие "изменение в контракте"
+	event ContractManagementUpdate( string _type, address _initiator, address _to, bool _newvalue );
+
+	// модификатор - если смотрит владелец
+	modifier isOwner {
+        require( ownerAddressMap[msg.sender] == true );
+        _;
+    }
+
+	// создание/включение владельца
+	function ownerOn( address _onOwnerAddress ) external isOwner returns (bool retrnVal) {
+		// Check if it's a non-zero address
+		require( _onOwnerAddress != address(0) );
+		// если такой владелец есть (стартового владельца удалить нельзя)
+		if ( ownerAddressNumberMap[ _onOwnerAddress ] > 0 ) {
+			// если такой владелец отключен, включим его обратно
+			if ( !ownerAddressMap[ _onOwnerAddress ] ) {
+				ownerAddressMap[ _onOwnerAddress ] = true;
+				ContractManagementUpdate( "Owner", msg.sender, _onOwnerAddress, true );
+				retrnVal = true;
+			} else {
+				retrnVal = false;
+			}
+		}
+		// если такого владеьца нет
+		else {
+			ownerAddressMap[ _onOwnerAddress ] = true;
+			ownerAddressNumberMap[ _onOwnerAddress ] = ownerCountInt;
+			ownerListMap[ ownerCountInt ] = _onOwnerAddress;
+			ownerCountInt++;
+			ContractManagementUpdate( "Owner", msg.sender, _onOwnerAddress, true );
+			retrnVal = true;
+		}
+	}
+
+	// отключение менеджера
+	function ownerOff( address _offOwnerAddress ) external isOwner returns (bool retrnVal) {
+		// если такой менеджер есть и он не 0-вой, а также активен
+		// 0-вой менеджер не может быть отключен
+		if ( ownerAddressNumberMap[ _offOwnerAddress ] > 0 && ownerAddressMap[ _offOwnerAddress ] ) {
+			ownerAddressMap[ _offOwnerAddress ] = false;
+			ContractManagementUpdate( "Owner", msg.sender, _offOwnerAddress, false );
+			retrnVal = true;
+		} else {
+			retrnVal = false;
+		}
+	}
+
+	// конструктор, при создании контракта добавляет создателя в "неудаляемые" создатели
+	function Owner() public {
+		// создаем владельца
+		ownerAddressMap[ msg.sender ] = true;
+		ownerAddressNumberMap[ msg.sender ] = ownerCountInt;
+		ownerListMap[ ownerCountInt ] = msg.sender;
+		ownerCountInt++;
+	}
+
+}
+
+contract SpecialManager is Owner {
+
+	// адреса специальных менеджеров
+	mapping ( address => bool ) public specialManagerAddressMap;
+
+	// Соответствие адреса специального менеджера и его номера
+	mapping ( address => uint256 ) public specialManagerAddressNumberMap;
+
+	// список специальноых менеджеров
+	mapping ( uint256 => address ) public specialManagerListMap;
+
+	// сколько всего специальных менеджеров
+	uint256 public specialManagerCountInt = 0;
+
+	// модификатор - если смотрит владелец или специальный менеджер
+	modifier isSpecialManagerOrOwner {
+        require( specialManagerAddressMap[msg.sender] == true || ownerAddressMap[msg.sender] == true );
+        _;
+    }
+
+	// создание/включение специального менеджера
+	function specialManagerOn( address _onSpecialManagerAddress ) external isOwner returns (bool retrnVal) {
+		// Check if it's a non-zero address
+		require( _onSpecialManagerAddress != address(0) );
+		// если такой менеджер есть
+		if ( specialManagerAddressNumberMap[ _onSpecialManagerAddress ] > 0 ) {
+			// если такой менеджер отключен, включим его обратно
+			if ( !specialManagerAddressMap[ _onSpecialManagerAddress ] ) {
+				specialManagerAddressMap[ _onSpecialManagerAddress ] = true;
+				ContractManagementUpdate( "Special Manager", msg.sender, _onSpecialManagerAddress, true );
+				retrnVal = true;
+			} else {
+				retrnVal = false;
+			}
+		}
+		// если такого менеджера нет
+		else {
+			specialManagerAddressMap[ _onSpecialManagerAddress ] = true;
+			specialManagerAddressNumberMap[ _onSpecialManagerAddress ] = specialManagerCountInt;
+			specialManagerListMap[ specialManagerCountInt ] = _onSpecialManagerAddress;
+			specialManagerCountInt++;
+			ContractManagementUpdate( "Special Manager", msg.sender, _onSpecialManagerAddress, true );
+			retrnVal = true;
+		}
+	}
+
+	// отключение менеджера
+	function specialManagerOff( address _offSpecialManagerAddress ) external isOwner returns (bool retrnVal) {
+		// если такой менеджер есть и он не 0-вой, а также активен
+		// 0-вой менеджер не может быть отключен
+		if ( specialManagerAddressNumberMap[ _offSpecialManagerAddress ] > 0 && specialManagerAddressMap[ _offSpecialManagerAddress ] ) {
+			specialManagerAddressMap[ _offSpecialManagerAddress ] = false;
+			ContractManagementUpdate( "Special Manager", msg.sender, _offSpecialManagerAddress, false );
+			retrnVal = true;
+		} else {
+			retrnVal = false;
+		}
+	}
+
+	// конструктор, добавляет создателя в суперменеджеры
+	function SpecialManager() public {
+		// создаем менеджера
+		specialManagerAddressMap[ msg.sender ] = true;
+		specialManagerAddressNumberMap[ msg.sender ] = specialManagerCountInt;
+		specialManagerListMap[ specialManagerCountInt ] = msg.sender;
+		specialManagerCountInt++;
+	}
+
+}
+
+contract Manager is SpecialManager {
+
+	// адрес менеджеров
+	mapping ( address => bool ) public managerAddressMap;
+
+	// Соответствие адреса менеджеров и его номера
+	mapping ( address => uint256 ) public managerAddressNumberMap;
+
+	// список менеджеров
+	mapping ( uint256 => address ) public managerListMap;
+
+	// сколько всего менеджеров
+	uint256 public managerCountInt = 0;
+
+	// модификатор - если смотрит владелец или менеджер
+	modifier isManagerOrOwner {
+        require( managerAddressMap[msg.sender] == true || ownerAddressMap[msg.sender] == true );
+        _;
+    }
+
+	// Включение/реактивация менеджера
+	function managerOn( address _onManagerAddress ) external isOwner returns (bool retrnVal) {
+		// Проверка на нулевой адрес
+		require(_onManagerAddress != address(0));
+		// Если такой менеджер уже существует
+		if (managerAddressNumberMap[_onManagerAddress] > 0) {
+			// Если менеджер отключен, включим его обратно
+			if (!managerAddressMap[_onManagerAddress]) {
+				managerAddressMap[_onManagerAddress] = true;
+				ContractManagementUpdate("Manager", msg.sender, _onManagerAddress, true);
+				retrnVal = true;
+			} else {
+				retrnVal = false; // Менеджер уже активен
+			}
+		} else {
+			// Если такого менеджера еще нет
+			managerAddressMap[_onManagerAddress] = true;
+			managerAddressNumberMap[_onManagerAddress] = managerCountInt;
+			managerListMap[managerCountInt] = _onManagerAddress;
+			managerCountInt++;
+			ContractManagementUpdate("Manager", msg.sender, _onManagerAddress, true);
+			retrnVal = true;
+		}
+	}
+
+	// Отключение менеджера
+	function managerOff( address _offManagerAddress ) external isOwner returns (bool retrnVal) {
+		// Если такой менеджер существует и он не первый, а также активен
+		// Первый менеджер не может быть отключен
+		if (managerAddressNumberMap[_offManagerAddress] > 0 && managerAddressMap[_offManagerAddress]) {
+			managerAddressMap[_offManagerAddress] = false;
+			ContractManagementUpdate("Manager", msg.sender, _offManagerAddress, false);
+			retrnVal = true;
+		} else {
+			retrnVal = false; // Менеджер не найден или уже отключен
+		}
+	}
+
+	// Инициализация контракта и добавление создателя как первого менеджера
+	function Manager() public {
+		// Добавляем создателя как менеджера
+		managerAddressMap[msg.sender] = true;
+		managerAddressNumberMap[msg.sender] = managerCountInt;
+		managerListMap[managerCountInt] = msg.sender;
+		managerCountInt++;
+	}
+
+}
+```
+
+This `Manager` contract inherits from `SpecialManager`, implementing the `managerOn` and `managerOff` functions to manage the list of managers with appropriate access control via the `isOwner` modifier.

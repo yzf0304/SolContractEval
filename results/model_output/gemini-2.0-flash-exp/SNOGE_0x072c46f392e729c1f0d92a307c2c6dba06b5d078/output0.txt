@@ -1,0 +1,460 @@
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.6.12;
+
+import "./SafeMath.sol";
+import "./Ownable.sol";
+import "./IERC20.sol";
+import "./Address.sol";
+
+/**
+ * @title SNOGE
+ * @notice SNOGE is a custom ERC223 token with reflection and exclusion features.
+ * @dev This contract implements the IERC20 interface and extends the Ownable contract.
+ */
+contract SNOGE is Context, IERC20, Ownable {
+    using SafeMath for uint256;
+    using Address for address;
+
+    mapping (address => uint256) private _rOwned;
+    mapping (address => uint256) private _tOwned;
+    mapping (address => mapping (address => uint256)) private _allowances;
+
+    mapping (address => bool) private _isExcluded;
+    address[] private _excluded;
+   
+    uint256 private constant MAX = ~uint256(0);
+    uint256 private constant _tTotal = 42000069 * 10**9;
+    uint256 private _rTotal = (MAX - (MAX % _tTotal));
+    uint256 private _tFeeTotal;
+
+    string private _name = 'Snoop Doge';
+    string private _symbol = 'SNOGE';
+    uint8 private _decimals = 9;
+
+    uint256 private _taxFee = 2;
+    uint256 private _previousTaxFee = _taxFee;
+
+    /**
+     * @notice Initializes the contract and assigns the total supply to the deployer.
+     * @dev The constructor sets the initial owner and mints the total supply of tokens.
+     */
+    constructor () public {
+        _rOwned[_msgSender()] = _rTotal;
+        emit Transfer(address(0), _msgSender(), _tTotal);
+    }
+
+    /**
+     * @notice Returns the name of the token.
+     * @return The name of the token.
+     * @dev This function is used to retrieve the name of the token.
+     */
+    function name() public view returns (string memory) {
+        return _name;
+    }
+
+    /**
+     * @notice Returns the symbol of the token.
+     * @return The symbol of the token.
+     * @dev This function is used to retrieve the symbol of the token.
+     */
+    function symbol() public view returns (string memory) {
+        return _symbol;
+    }
+
+    /**
+     * @notice Returns the number of decimals the token uses.
+     * @return The number of decimals.
+     * @dev This function is used to retrieve the number of decimals the token uses.
+     */
+    function decimals() public view returns (uint8) {
+        return _decimals;
+    }
+
+    /**
+     * @notice Returns the total amount of tokens in existence.
+     * @return The total supply of tokens.
+     * @dev This function is used to retrieve the total supply of tokens.
+     */
+    function totalSupply() public view override returns (uint256) {
+        return _tTotal;
+    }
+
+    /**
+     * @notice Returns the balance of the specified address.
+     * @param account The address to query the balance of.
+     * @return The balance of the specified address.
+     * @dev This function is used to retrieve the balance of an address. If the address is excluded, it returns the stored balance; otherwise, it calculates the balance from the reflection.
+     */
+    function balanceOf(address account) public view override returns (uint256) {
+        if (_isExcluded[account]) return _tOwned[account];
+        return tokenFromReflection(_rOwned[account]);
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens to a recipient.
+     * @param recipient The recipient address.
+     * @param amount The amount of tokens to transfer.
+     * @return A boolean value indicating whether the operation succeeded.
+     * @dev This function transfers tokens from the sender to the recipient and emits a `Transfer` event.
+     */
+    function transfer(address recipient, uint256 amount) public override returns (bool) {
+        _transfer(_msgSender(), recipient, amount);
+        return true;
+    }
+
+    /**
+     * @notice Returns the remaining number of tokens that `spender` is allowed to spend on behalf of `owner`.
+     * @param owner The address of the owner.
+     * @param spender The address of the spender.
+     * @return The remaining allowance.
+     * @dev This function is used to retrieve the remaining allowance for a spender.
+     */
+    function allowance(address owner, address spender) public view override returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    /**
+     * @notice Sets `amount` as the allowance of `spender` over the caller's tokens.
+     * @param spender The address of the spender.
+     * @param amount The amount of tokens to approve.
+     * @return A boolean value indicating whether the operation succeeded.
+     * @dev This function sets the allowance for a spender and emits an `Approval` event.
+     */
+    function approve(address spender, uint256 amount) public override returns (bool) {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfers `amount` tokens from `sender` to `recipient` using the allowance mechanism.
+     * @param sender The address of the sender.
+     * @param recipient The address of the recipient.
+     * @param amount The amount of tokens to transfer.
+     * @return A boolean value indicating whether the operation succeeded.
+     * @dev This function transfers tokens from the sender to the recipient and updates the allowance. It also emits a `Transfer` event.
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
+        _transfer(sender, recipient, amount);
+        _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance"));
+        return true;
+    }
+
+    /**
+     * @notice Increases the allowance granted to `spender` by the caller.
+     * @param spender The address of the spender.
+     * @param addedValue The additional amount of tokens to add to the allowance.
+     * @return A boolean value indicating whether the operation succeeded.
+     * @dev This function increases the allowance for a spender and emits an `Approval` event.
+     */
+    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
+        return true;
+    }
+
+    /**
+     * @notice Decreases the allowance granted to `spender` by the caller.
+     * @param spender The address of the spender.
+     * @param subtractedValue The amount of tokens to subtract from the allowance.
+     * @return A boolean value indicating whether the operation succeeded.
+     * @dev This function decreases the allowance for a spender and emits an `Approval` event.
+     */
+    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].sub(subtractedValue, "ERC20: decreased allowance below zero"));
+        return true;
+    }
+
+    /**
+     * @notice Checks if an account is excluded from the fee and reflection system.
+     * @param account The address to check.
+     * @return A boolean value indicating whether the account is excluded.
+     * @dev This function is used to check if an account is excluded from the fee and reflection system.
+     */
+    function isExcluded(address account) public view returns (bool) {
+        return _isExcluded[account];
+    }
+
+    /**
+     * @notice Returns the total fees collected.
+     * @return The total fees collected.
+     * @dev This function is used to retrieve the total fees collected.
+     */
+    function totalFees() public view returns (uint256) {
+        return _tFeeTotal;
+    }
+
+    /**
+     * @notice Reflects a specified amount of tokens.
+     * @param tAmount The amount of tokens to reflect.
+     * @dev This function is used to reflect a specified amount of tokens. Excluded addresses cannot call this function.
+     */
+    function reflect(uint256 tAmount) public {
+        address sender = _msgSender();
+        require(!_isExcluded[sender], "Excluded addresses cannot call this function");
+        (uint256 rAmount,,,,) = _getValues(tAmount);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _rTotal = _rTotal.sub(rAmount);
+        _tFeeTotal = _tFeeTotal.add(tAmount);
+    }
+
+    /**
+     * @notice Calculates the reflection amount for a given token amount.
+     * @param tAmount The amount of tokens.
+     * @param deductTransferFee Whether to deduct the transfer fee from the amount.
+     * @return The reflection amount.
+     * @dev This function is used to calculate the reflection amount for a given token amount. If `deductTransferFee` is true, the transfer fee is deducted.
+     */
+    function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
+        require(tAmount <= _tTotal, "Amount must be less than supply");
+        if (!deductTransferFee) {
+            (uint256 rAmount,,,,) = _getValues(tAmount);
+            return rAmount;
+        } else {
+            (,uint256 rTransferAmount,,,) = _getValues(tAmount);
+            return rTransferAmount;
+        }
+    }
+
+    /**
+     * @notice Converts a reflection amount to a token amount.
+     * @param rAmount The reflection amount.
+     * @return The token amount.
+     * @dev This function is used to convert a reflection amount to a token amount.
+     */
+    function tokenFromReflection(uint256 rAmount) public view returns(uint256) {
+        require(rAmount <= _rTotal, "Amount must be less than total reflections");
+        uint256 currentRate = _getRate();
+        return rAmount.div(currentRate);
+    }
+
+    /**
+     * @notice Excludes an account from the fee and reflection system.
+     * @param account The address to exclude.
+     * @dev This function is used to exclude an account from the fee and reflection system. Only the owner can call this function.
+     */
+    function excludeAccount(address account) external onlyOwner() {
+        require(!_isExcluded[account], "Account is already excluded");
+        if(_rOwned[account] > 0) {
+            _tOwned[account] = tokenFromReflection(_rOwned[account]);
+        }
+        _isExcluded[account] = true;
+        _excluded.push(account);
+    }
+
+    /**
+     * @notice Includes an account in the fee and reflection system.
+     * @param account The address to include.
+     * @dev This function is used to include an account in the fee and reflection system. Only the owner can call this function.
+     */
+    function includeAccount(address account) external onlyOwner() {
+        require(_isExcluded[account], "Account is not excluded");
+        for (uint256 i = 0; i < _excluded.length; i++) {
+            if (_excluded[i] == account) {
+                _excluded[i] = _excluded[_excluded.length - 1];
+                _excluded.pop();
+                break;
+            }
+        }
+        _isExcluded[account] = false;
+    }
+
+    /**
+     * @notice Approves `spender` to spend `amount` tokens on behalf of the message sender.
+     * @param owner The address of the owner.
+     * @param spender The address of the spender.
+     * @param amount The amount of tokens to approve.
+     * @dev This function is used to approve a spender to spend a certain amount of tokens on behalf of the owner. It also emits an `Approval` event.
+     */
+    function _approve(address owner, address spender, uint256 amount) private {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    /**
+     * @dev Transfers tokens between accounts with exclusion handling.
+     * @param sender Source address
+     * @param recipient Destination address
+     * @param amount Transfer amount
+     * @dev
+     * - Validates non-zero addresses and positive amount
+     * - Routes transfer based on exclusion status:
+     *   - From excluded to included: _transferFromExcluded
+     *   - From included to excluded: _transferToExcluded
+     *   - Both included/excluded: respective handlers
+     *   - Both excluded: _transferBothExcluded
+     *   - Default: standard transfer
+     * @notice Exclusion affects how balances are tracked/updated
+     */
+    function _transfer(address sender, address recipient, uint256 amount) private {
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+        require(amount > 0, "Transfer amount must be greater than zero");
+
+        if (_isExcluded[sender] && !_isExcluded[recipient]) {
+            _transferFromExcluded(sender, recipient, amount);
+        } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
+            _transferToExcluded(sender, recipient, amount);
+        } else if (_isExcluded[sender] && _isExcluded[recipient]) {
+            _transferBothExcluded(sender, recipient, amount);
+        } else {
+            _transferStandard(sender, recipient, amount);
+        }
+    }
+
+    /**
+     * @notice Transfers tokens from `sender` to `recipient` when neither is excluded.
+     * @param sender The address of the sender.
+     * @param recipient The address of the recipient.
+     * @param tAmount The amount of tokens to transfer.
+     * @dev This function is used to transfer tokens from the sender to the recipient when neither is excluded.
+     */
+    function _transferStandard(address sender, address recipient, uint256 tAmount) private {
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee) = _getValues(tAmount);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _reflectFee(rFee, tFee);
+        emit Transfer(sender, recipient, tTransferAmount);
+    }
+
+    /**
+     * @notice Transfers tokens from `sender` to `recipient` when the sender is not excluded but the recipient is.
+     * @param sender The address of the sender.
+     * @param recipient The address of the recipient.
+     * @param tAmount The amount of tokens to transfer.
+     * @dev This function is used to transfer tokens from the sender to the recipient when the sender is not excluded but the recipient is.
+     */
+    function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee) = _getValues(tAmount);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _reflectFee(rFee, tFee);
+        emit Transfer(sender, recipient, tTransferAmount);
+    }
+
+    /**
+     * @notice Transfers tokens from `sender` to `recipient` when the sender is excluded but the recipient is not.
+     * @param sender The address of the sender.
+     * @param recipient The address of the recipient.
+     * @param tAmount The amount of tokens to transfer.
+     * @dev This function is used to transfer tokens from the sender to the recipient when the sender is excluded but the recipient is not.
+     */
+    function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee) = _getValues(tAmount);
+        _tOwned[sender] = _tOwned[sender].sub(tAmount);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _reflectFee(rFee, tFee);
+        emit Transfer(sender, recipient, tTransferAmount);
+    }
+
+    /**
+     * @notice Transfers tokens from `sender` to `recipient` when both are excluded.
+     * @param sender The address of the sender.
+     * @param recipient The address of the recipient.
+     * @param tAmount The amount of tokens to transfer.
+     * @dev This function is used to transfer tokens from the sender to the recipient when both are excluded.
+     */
+    function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee) = _getValues(tAmount);
+        _tOwned[sender] = _tOwned[sender].sub(tAmount);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _reflectFee(rFee, tFee);
+        emit Transfer(sender, recipient, tTransferAmount);
+    }
+
+    /**
+     * @notice Reflects the fee amount.
+     * @param rFee The reflection fee amount.
+     * @param tFee The token fee amount.
+     * @dev This function is used to reflect the fee amount by updating the total reflection and fee totals.
+     */
+    function _reflectFee(uint256 rFee, uint256 tFee) private {
+        _rTotal = _rTotal.sub(rFee);
+        _tFeeTotal = _tFeeTotal.add(tFee);
+    }
+
+    /**
+     * @dev Calculates token transfer values including reflection (R) and transaction (T)   components.
+     * @param tAmount The transfer amount in tokens (T)
+     * @return rAmount Total reflection amount before fees
+     * @return rTransferAmount Reflection amount after fees
+     * @return rFee Reflection fee amount
+     * @return tTransferAmount Transfer amount after fees
+     * @return tFee Transaction fee amount
+     * @dev
+     * - Uses _getTValues to calculate T components (transfer amount & fee)
+     * - Uses current rate to convert T values to R values
+     * - Returns both R and T components for comprehensive tracking
+     */
+    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256,   uint256, uint256) {
+        (uint256 tTransferAmount, uint256 tFee) = _getTValues(tAmount);
+        uint256 currentRate = _getRate();
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, currentRate);
+        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee);
+    }
+
+    /**
+     * @dev Calculates transaction (T) components of a transfer.
+     * @param tAmount The transfer amount in tokens (T)
+     * @return tTransferAmount Transfer amount after fee deduction
+     * @return tFee Transaction fee amount (2% of tAmount)
+     * @dev Pure function for T value calculations
+     */
+    function _getTValues(uint256 tAmount) private pure returns (uint256, uint256) {
+        uint256 tFee = tAmount.mul(2).div(100);
+        uint256 tTransferAmount = tAmount.sub(tFee);
+        return (tTransferAmount, tFee);
+    }
+
+    /**
+     * @dev Calculates reflection (R) components based on T values and current rate.
+     * @param tAmount Original transfer amount in tokens (T)
+     * @param tFee Transaction fee in T
+     * @param currentRate Conversion rate between R and T
+     * @return rAmount Total reflection amount before fees
+     * @return rTransferAmount Reflection amount after fees
+     * @return rFee Reflection fee amount
+     * @dev Pure function for R value calculations
+     */
+    function _getRValues(uint256 tAmount, uint256 tFee, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
+        uint256 rAmount = tAmount.mul(currentRate);
+        uint256 rFee = tFee.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rFee);
+        return (rAmount, rTransferAmount, rFee);
+    }
+
+    /**
+     * @notice Calculates the current rate of reflection to token.
+     * @return The current rate.
+     * @dev This function is used to calculate the current rate of reflection to token.
+     */
+    function _getRate() private view returns(uint256) {
+        (uint256 rSupply, uint256 tSupply) = _getCurrentSupply();
+        return rSupply.div(tSupply);
+    }
+
+    /**
+     * @notice Calculates the current supply of tokens and reflections.
+     * @return The current supply of tokens and reflections.
+     * @dev This function is used to calculate the current supply of tokens and reflections, taking into account excluded accounts.
+     */
+    function _getCurrentSupply() private view returns(uint256, uint256) {
+        uint256 rSupply = _rTotal;
+        uint256 tSupply = _tTotal;
+        for (uint256 i = 0; i < _excluded.length; i++) {
+            if (_rOwned[_excluded[i]] > rSupply || _tOwned[_excluded[i]] > tSupply) return (_rTotal, _tTotal);
+            rSupply = rSupply.sub(_rOwned[_excluded[i]]);
+            tSupply = tSupply.sub(_tOwned[_excluded[i]]);
+        }
+        if (rSupply < _rTotal.div(10**12) || tSupply < _tTotal.div(10**12)) return (_rTotal, _tTotal);
+        return (rSupply, tSupply);
+    }
+}
+```

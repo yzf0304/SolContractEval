@@ -1,0 +1,139 @@
+pragma solidity 0.4.23;
+
+contract MESH is StandardToken {
+    // Reject any incoming ETH
+    function () public {
+        revert();
+    }
+
+    string public name            = "MeshBox";
+    uint8  public decimals        = 18;
+    string public symbol          = "MESH";
+    string public version         = "v0.1";
+    uint256 public allocateEndTime;
+
+    // Nonces for replay protection
+    mapping(address => uint256) nonces;
+
+    constructor() public {
+        // Allow one day for token allocation
+        allocateEndTime = now + 1 days;
+    }
+
+    /**
+     * @notice Proxy transfer of MESH tokens with fee.
+     * @dev Verifies an off‐chain signature from `_from`, deducts `_value + _feeMesh`
+     *      from `_from`, credits `_to` with `_value`, and the caller (agent) with `_feeMesh`.
+     */
+    function transferProxy(
+        address _from,
+        address _to,
+        uint256 _value,
+        uint256 _feeMesh,
+        uint8   _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        public
+        transferAllowed(_from)
+        returns (bool)
+    {
+        // Reconstruct the signed message
+        bytes32 digest = keccak256(
+            this,
+            _from,
+            _to,
+            _value,
+            _feeMesh,
+            nonces[_from]
+        );
+        bytes32 prefixed = keccak256("\x19Ethereum Signed Message:\n32", digest);
+
+        // Validate signature
+        require(ecrecover(prefixed, _v, _r, _s) == _from);
+
+        // Check balances
+        require(balances[_from] >= _value + _feeMesh);
+
+        // Consume nonce
+        nonces[_from] += 1;
+
+        // Perform transfers
+        balances[_from]     -= (_value + _feeMesh);
+        balances[_to]       += _value;
+        balances[msg.sender] += _feeMesh;
+
+        emit Transfer(_from, _to,       _value);
+        emit Transfer(_from, msg.sender, _feeMesh);
+
+        return true;
+    }
+
+    /**
+     * @notice Proxy approval of MESH tokens.
+     * @dev Verifies an off‐chain signature from `_from`, then sets `allowance`.
+     */
+    function approveProxy(
+        address _from,
+        address _spender,
+        uint256 _value,
+        uint8   _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        public
+        returns (bool)
+    {
+        // Reconstruct the signed message
+        bytes32 digest = keccak256(
+            this,
+            _from,
+            _spender,
+            _value,
+            nonces[_from]
+        );
+        bytes32 prefixed = keccak256("\x19Ethereum Signed Message:\n32", digest);
+
+        // Validate signature
+        require(ecrecover(prefixed, _v, _r, _s) == _from);
+
+        // Consume nonce and set allowance
+        nonces[_from] += 1;
+        allowed[_from][_spender] = _value;
+
+        emit Approval(_from, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the current nonce for `_addr`. Used for replay protection.
+     */
+    function getNonce(address _addr) public constant returns (uint256) {
+        return nonces[_addr];
+    }
+
+    /**
+     * @notice Mint and allocate tokens to a list of addresses.
+     * @dev Can only be called by owner before `allocateEndTime`.
+     */
+    function allocateTokens(
+        address[] _owners,
+        uint256[] _values
+    )
+        public
+        onlyOwner
+    {
+        require(now <= allocateEndTime);
+        require(_owners.length == _values.length);
+
+        for (uint256 i = 0; i < _owners.length; i++) {
+            address dst   = _owners[i];
+            uint256 value = _values[i];
+            require(dst != address(0));
+
+            balances[dst]    += value;
+            totalSupply      += value;
+            emit Transfer(address(0), dst, value);
+        }
+    }
+}

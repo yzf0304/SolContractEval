@@ -1,0 +1,105 @@
+Here's the complete implementation of the `AxpireToken` contract that complies with both ERC20 and ERC223 standards, incorporating the functionalities as described:
+
+```solidity
+pragma solidity ^0.4.20;
+
+import "./Ownable.sol";
+import "./SafeMath.sol";
+import "./ERC20.sol";
+import "./ERC223.sol";
+import "./ContractReceiver.sol";
+
+contract AxpireToken is ERC223, ERC20 {
+    using SafeMath for uint256;
+
+    uint256 private initialSupply = 350000000 * 10**8;
+    string private tokenName = "aXpire Token";
+    string private tokenSymbol = "AXP";
+    uint8 private decimalUnits = 8;
+
+    // Constructor
+    function AxpireToken() public
+        ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data);
+    }
+
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, true, customFallback);
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _value);
+        bool _success = transferInternal(_from, _to, _value);
+
+        if (_success) {
+            allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        }
+
+        return _success;
+    }
+
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        return transferInternal(from, to, value, data, false, "");
+    }
+
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        require(balances[from] >= value);
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                require(to.call.value(0)(bytes4(keccak256(customFallback)), from, value, data));
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+        
+        emit Transfer(from, to, value, data);
+
+        return true;
+    }
+
+    function transferInternal(address from, address to, uint256 value) internal returns (bool success) {
+        require(balances[from] >= value);
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+
+        emit Transfer(from, to, value);
+        return true;
+    }
+
+    function isContract(address _addr) private returns (bool) {
+        uint256 length;
+        assembly {
+            length := extcodesize(_addr)
+        }
+        return (length > 0);
+    }
+}
+```
+
+### Key Points:
+- The `AxpireToken` contract inherits from `ERC20` and `ERC223`, implementing both standards.
+- Transfer functions allow sending tokens with optional data, handling both standard and contract addresses.
+- Checks if a recipient is a contract and calls the appropriate fallback function.
+- Uses the `SafeMath` library to prevent arithmetic overflows.
+- Ensures `transferFrom` respects allowances before proceeding.
+- `isContract` checks if an address contains contract code, using `extcodesize`.
+
+This contract uses Solidity version `0.4.20`, as required, and follows the specified patterns and practices.

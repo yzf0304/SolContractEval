@@ -1,0 +1,103 @@
+Below is the completed `MoonCatKeyVote` contract implementing all the required functionalities as per the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.1;
+
+contract MoonCatKeyVote {
+    event VoteSubmitted(address voter, bool vote);
+
+    uint public voteStartTime = 0;
+    bool public voteCancelled = false;
+    mapping (address => bool) public hasVoted;
+    uint32 public yesVotes = 0;
+    uint32 public noVotes = 0;
+
+    bytes32 public immutable merkleRoot;
+    address public immutable owner;
+
+    modifier onlyOwner {
+        require(msg.sender == owner, "Owner Only");
+        _;
+    }
+
+    modifier voteContractIsPending {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime == 0, "Vote Already Started");
+        _;
+    }
+
+    modifier voteContractIsActive {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime > 0, "Vote Not Started");
+        require(block.timestamp < (voteStartTime + 48 hours), "Vote Ended");
+        _;
+    }
+
+    modifier voteContractIsComplete {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime > 0, "Vote Not Started");
+        require(block.timestamp > (voteStartTime + 48 hours), "Vote Not Ended");
+        _;
+    }
+
+    constructor(bytes32 merkleRoot_) {
+        merkleRoot = merkleRoot_;
+        owner = msg.sender;
+    }
+
+    function startVote() public onlyOwner voteContractIsPending {
+        voteStartTime = block.timestamp;
+    }
+
+    function cancelVote() public onlyOwner voteContractIsPending {
+        voteCancelled = true;
+    }
+
+    function getResult() public view voteContractIsComplete returns (bool) {
+        return yesVotes > noVotes;
+    }
+
+    function submitVote(bytes32[] calldata eligibilityProof, bool vote) public voteContractIsActive {
+        require(!hasVoted[msg.sender], "Already Voted");
+
+        // Verify voter eligibility using the Merkle proof
+        require(verifyProof(eligibilityProof, keccak256(abi.encodePacked(msg.sender))), "Invalid Proof");
+
+        // Record the vote
+        hasVoted[msg.sender] = true;
+        if (vote) {
+            yesVotes++;
+        } else {
+            noVotes++;
+        }
+
+        emit VoteSubmitted(msg.sender, vote);
+    }
+
+    function verifyProof(bytes32[] memory proof, bytes32 leaf) internal view returns (bool) {
+        bytes32 computedHash = leaf;
+
+        for (uint i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+
+        // Check if the final hash matches the root of the Merkle tree
+        return computedHash == merkleRoot;
+    }
+}
+```
+
+This contract includes:
+- Modifiers for controlling access and state checks.
+- Functions to start, cancel, and retrieve the result of the vote.
+- A function to submit votes with Merkle proof verification.
+- Events to log vote submissions.

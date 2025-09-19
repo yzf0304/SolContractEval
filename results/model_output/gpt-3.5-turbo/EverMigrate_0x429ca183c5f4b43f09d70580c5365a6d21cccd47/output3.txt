@@ -1,0 +1,101 @@
+To complete the smart contract `EverMigrate` according to the provided context and description, you can implement the following functions:
+
+```solidity
+contract EverMigrate is IEverMigrate, Context, Ownable {
+    using SafeMath for uint256;
+
+    struct TokenDetails {
+        address sourceToken;
+        address targetToken;
+        address devAddress;
+        uint256 ratio;
+        bool isPresent;
+    }
+
+    struct Transaction {
+        uint256 amount;
+        uint256 timestamp;
+        uint32 txnId;
+    }
+
+    mapping (address => TokenDetails) private _tokenList;
+    address[] private _allTokens;
+
+    uint32 private _txnId = 0;
+    mapping (address => mapping (address => Transaction[])) private _userTxns;
+
+    constructor() {}
+
+    function addTokenDetails(
+        address sourceToken,
+        address targetToken,
+        address devAddress,
+        uint256 ratio
+    ) external onlyOwner {
+        require(!_tokenList[sourceToken].isPresent, "Token pair already exists");
+        
+        TokenDetails memory newToken = TokenDetails({
+            sourceToken: sourceToken,
+            targetToken: targetToken,
+            devAddress: devAddress,
+            ratio: ratio,
+            isPresent: true
+        });
+        
+        _tokenList[sourceToken] = newToken;
+        _allTokens.push(sourceToken);
+    }
+
+    function migrateTokens(address sourceToken, address toAddress, uint256 amount) external {
+        require(_tokenList[sourceToken].isPresent, "Source token not supported");
+        
+        TokenDetails memory token = _tokenList[sourceToken];
+        IERC20(sourceToken).transferFrom(_msgSender(), token.devAddress, amount);
+        
+        uint256 convertedAmount = amount.mul(token.ratio).div(1e18);
+        IERC20(token.targetToken).transfer(toAddress, convertedAmount);
+        
+        _userTxns[sourceToken][_msgSender()].push(Transaction(amount, block.timestamp, _txnId));
+        _txnId++;
+        
+        emit TokensMigrated(sourceToken, token.targetToken, amount, convertedAmount);
+    }
+
+    function userTransactionsLength(address sourceToken, address userAddress) external view returns (uint256) {
+        return _userTxns[sourceToken][userAddress].length;
+    }
+
+    function userTransaction(address sourceToken, address userAddress, uint256 position) external view returns (uint256, uint256, uint32) {
+        Transaction memory txn = _userTxns[sourceToken][userAddress][position];
+        return (txn.amount, txn.timestamp, txn.txnId);
+    }
+
+    function returnTokens(address sourceToken, address toAddress, uint256 amount) external onlyOwner {
+        require(_tokenList[sourceToken].isPresent, "Source token not supported");
+        
+        TokenDetails memory token = _tokenList[sourceToken];
+        IERC20(token.targetToken).transfer(toAddress, amount);
+        
+        emit TokensReturned(sourceToken, toAddress, amount);
+    }
+
+    function tokenMigrateDetails(address sourceToken) external view returns (address, uint256) {
+        TokenDetails memory token = _tokenList[sourceToken];
+        return (token.targetToken, token.ratio);
+    }
+
+    function allSupportedTokens() external view returns (address[] memory) {
+        return _allTokens;
+    }
+
+    function allSupportedTokensLength() external view returns (uint256) {
+        return _allTokens.length;
+    }
+
+    function supportsToken(address sourceToken) public view returns (bool) {
+        return _tokenList[sourceToken].isPresent;
+    }
+}
+```
+
+This implementation follows the provided context and description for the `EverMigrate` contract. It includes functions to add token pairs, migrate tokens, retrieve transaction details, return tokens, get migration details, and check supported tokens.

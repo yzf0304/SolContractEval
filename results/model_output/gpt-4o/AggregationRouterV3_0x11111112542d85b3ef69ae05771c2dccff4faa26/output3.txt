@@ -1,0 +1,161 @@
+Below is the completed implementation of the `AggregationRouterV3` smart contract strictly adhering to the provided context and description. The contract is deployed using Solidity 0.6.12 and avoids introducing any additional dependencies or unrelated implementations:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.6.12;
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     * @dev This function calls the `swap` function internally and handles CHI token burning based on the provided flags.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     * @return chiSpent The amount of CHI tokens burned.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 initialGas = gasleft();
+
+        if (desc.flags & _BURN_FROM_MSG_SENDER != 0 || desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+            IChi chi = IChi(_getChiTokenAddress());
+            uint256 burnAmount = desc.flags & _BURN_FROM_MSG_SENDER != 0
+                ? chi.freeFromUpTo(msg.sender, 50)
+                : chi.freeFromUpTo(tx.origin, 50);
+
+            chiSpent = burnAmount;
+        }
+
+        (returnAmount, gasLeft) = _swapInternal(caller, desc, data);
+
+        gasLeft = gasleft();
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     * @dev This function checks the validity of the input parameters and performs the swap using the specified aggregation executor.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        return _swapInternal(caller, desc, data);
+    }
+
+    function _swapInternal(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        private
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        uint256 initialGas = gasleft();
+
+        if (desc.srcToken != IERC20(address(0))) {
+            _permit(desc.srcToken, desc.amount, desc.permit);
+
+            if (desc.srcReceiver != address(this)) {
+                desc.srcToken.safeTransferFrom(msg.sender, desc.srcReceiver, desc.amount);
+            }
+        }
+
+        caller.callBytes{value: msg.value}(data);
+
+        returnAmount = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+
+        require(
+            desc.flags & _PARTIAL_FILL != 0 || returnAmount >= desc.minReturnAmount,
+            "AggregationRouterV3: insufficient return amount"
+        );
+
+        emit Swapped(msg.sender, desc.srcToken, desc.dstToken, desc.dstReceiver, desc.amount, returnAmount);
+
+        gasLeft = initialGas - gasleft();
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     * @dev This function transfers the specified amount of a given token to the owner.
+     * @param token The token to be rescued.
+     * @param amount The amount of the token to be transferred.
+     */
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        if (token.isETH()) {
+            msg.sender.transfer(amount);
+        } else {
+            token.safeTransfer(msg.sender, amount);
+        }
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send any remaining ETH to the owner.
+     * @dev This function self-destructs the contract and sends the remaining ETH to the owner.
+     */
+    function destroy() external onlyOwner {
+        selfdestruct(msg.sender);
+    }
+
+    function _getChiTokenAddress() private pure returns (address) {
+        return 0x0000000000000000000000000000000000000000; // Replace with actual CHI token address
+    }
+}
+```
+
+### Key Notes:
+1. This contract supports CHI token burning based on flags for gas optimization.
+2. `swap()` and `discountedSwap()` handle all operations related to token swapping.
+3. The `rescueFunds()` function allows the owner to retrieve stuck funds, either ETH or ERC20 tokens.
+4. The `destroy()` function self-destructs the contract, sending remaining ETH to the owner.
+5. The `_getChiTokenAddress()` function should be updated to the actual CHI token address in production.
+
+Let me know if further refinements are needed!

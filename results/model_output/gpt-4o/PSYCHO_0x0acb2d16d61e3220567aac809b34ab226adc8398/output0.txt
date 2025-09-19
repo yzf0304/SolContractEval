@@ -1,0 +1,138 @@
+Below is the completed implementation of the `PSYCHO` smart contract based on the provided description and context:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+contract PSYCHO is Ownable, ERC721A {
+    uint256 public maxSupply = 8888;
+    uint256 public maxFreeSupply = 8888;
+    uint256 public maxPerTxDuringMint = 20;
+    uint256 public maxPerAddressDuringMint = 21;
+    uint256 public maxPerAddressDuringFreeMint = 1;
+    uint256 public price = 0.003 ether;
+    bool public saleIsActive = true;
+    bool public revealed = false;
+
+    address constant internal TEAM_ADDRESS = 0x06C8033719b4fa22DE97d4632b4120D2F429c538;
+    string public baseURI = "";
+    string public constant baseExtension = "";
+    string public hiddenMetadataUri;
+    mapping(address => uint256) public freeMintedAmount;
+    mapping(address => uint256) public mintedAmount;
+
+    constructor() ERC721A("PSYCHO", "PSYCHO") {
+        _safeMint(msg.sender, 1);
+        setHiddenMetadataUri("https://gateway.pinata.cloud/ipfs/QmcJ9dJMmgNiUD9oSASjgxhbuqam7y2WVSxDKLuX3GFyz5");
+    }
+
+    modifier mintCompliance() {
+        require(saleIsActive, "Sale is not active yet.");
+        require(tx.origin == msg.sender, "Caller cannot be a contract.");
+        _;
+    }
+
+    function mint(uint256 _quantity) external payable mintCompliance() {
+        require(_quantity > 0 && _quantity <= maxPerTxDuringMint, "Invalid mint quantity.");
+        require(totalSupply() + _quantity <= maxSupply, "Max supply exceeded.");
+        require(mintedAmount[msg.sender] + _quantity <= maxPerAddressDuringMint, "Max mints per address exceeded.");
+        require(msg.value >= price * _quantity, "Insufficient funds.");
+
+        mintedAmount[msg.sender] += _quantity;
+        _safeMint(msg.sender, _quantity);
+    }
+
+    function freeMint(uint256 _quantity) external mintCompliance() {
+        require(_quantity > 0, "Invalid mint quantity.");
+        require(totalSupply() + _quantity <= maxSupply, "Max supply exceeded.");
+        require(freeMintedAmount[msg.sender] + _quantity <= maxPerAddressDuringFreeMint, "Max free mints per address exceeded.");
+        require(totalSupply() + _quantity <= maxFreeSupply, "Max free supply exceeded.");
+
+        freeMintedAmount[msg.sender] += _quantity;
+        _safeMint(msg.sender, _quantity);
+    }
+
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    function setMaxPerTx(uint256 _amount) external onlyOwner {
+        maxPerTxDuringMint = _amount;
+    }
+
+    function setMaxPerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringMint = _amount;
+    }
+
+    function setMaxFreePerAddress(uint256 _amount) external onlyOwner {
+        maxPerAddressDuringFreeMint = _amount;
+    }
+
+    function flipSale() public onlyOwner {
+        saleIsActive = !saleIsActive;
+    }
+
+    function setMaxSupply(uint256 newSupply) public onlyOwner {
+        require(newSupply >= totalSupply(), "New supply cannot be less than current supply.");
+        maxSupply = newSupply;
+    }
+
+    function cutMaxSupply(uint256 _amount) public onlyOwner {
+        require(maxSupply - _amount >= totalSupply(), "New supply cannot be less than total supply.");
+        maxSupply -= _amount;
+    }
+
+    function setRevealed(bool _state) public onlyOwner {
+        revealed = _state;
+    }
+
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setHiddenMetadataUri(string memory _hiddenMetadataUri) public onlyOwner {
+        hiddenMetadataUri = _hiddenMetadataUri;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
+
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        require(_exists(_tokenId), "ERC721A: URI query for nonexistent token.");
+
+        if (!revealed) {
+            return hiddenMetadataUri;
+        }
+
+        string memory currentBaseURI = _baseURI();
+        return bytes(currentBaseURI).length > 0
+            ? string(abi.encodePacked(currentBaseURI, _toString(_tokenId), baseExtension))
+            : "";
+    }
+
+    function withdrawBalance() external payable onlyOwner {
+        (bool success, ) = TEAM_ADDRESS.call{value: address(this).balance}("");
+        require(success, "Withdraw failed.");
+    }
+}
+```
+
+### Explanation:
+1. **Minting with Payment**:
+    - The `mint` function enforces rules for paid minting, ensuring the caller pays the required price (`price * _quantity`) and adheres to the transaction and per-address limits.
+
+2. **Free Minting**:
+    - The `freeMint` function allows eligible users to mint free tokens as long as they satisfy the `maxFreeSupply` and per-address free minting limits.
+
+3. **Administrative Features**:
+    - Admin-only functions like `setPrice`, `setBaseURI`, `setHiddenMetadataUri`, `flipSale`, etc., allow flexibility in managing the minting process and metadata.
+
+4. **Reveal Mechanism**:
+    - Tokens will have a hidden metadata URI (`hiddenMetadataUri`) until the contract owner toggles the `revealed` state to `true`.
+    - Once revealed, the `baseURI` and token ID are used to construct the token URI.
+
+5. **Withdrawal**:
+    - The `withdrawBalance` function transfers the entire contract balance to the team's address (`TEAM_ADDRESS`).
+
+This fulfills the requirements outlined in the contract description while ensuring efficient management of the minting process, metadata, and sale state.

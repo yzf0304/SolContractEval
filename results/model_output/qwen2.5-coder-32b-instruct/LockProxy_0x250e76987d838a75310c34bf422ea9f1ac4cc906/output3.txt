@@ -1,0 +1,184 @@
+Below is the implementation of the `LockProxy` contract based on the provided context and description:
+
+```solidity
+pragma solidity ^0.5.17;
+
+import "./SafeMath.sol"; // Assuming SafeMath is imported from an existing file
+import "./IERC20.sol";
+import "./SafeERC20.sol";
+import "./Utils.sol";
+import "./ZeroCopySource.sol";
+import "./ZeroCopySink.sol";
+
+contract LockProxy is Ownable {
+    using SafeMath for uint;
+    using SafeERC20 for IERC20;
+
+    struct TxArgs {
+        bytes toAssetHash;
+        bytes toAddress;
+        uint256 amount;
+    }
+
+    address public managerProxyContract;
+    mapping(uint64 => bytes) public proxyHashMap;
+    mapping(address => mapping(uint64 => bytes)) public assetHashMap;
+    mapping(address => bool) safeTransfer;
+
+    event SetManagerProxyEvent(address manager);
+    event BindProxyEvent(uint64 toChainId, bytes targetProxyHash);
+    event BindAssetEvent(address fromAssetHash, uint64 toChainId, bytes targetProxyHash, uint initialAmount);
+    event UnlockEvent(address toAssetHash, address toAddress, uint256 amount);
+    event LockEvent(address fromAssetHash, address fromAddress, uint64 toChainId, bytes toAssetHash, bytes toAddress, uint256 amount);
+
+    modifier onlyManagerContract() {
+        IEthCrossChainManagerProxy ieccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        require(_msgSender() == ieccmp.getEthCrossChainManager(), "msgSender is not EthCrossChainManagerContract");
+        _;
+    }
+
+    function setManagerProxy(address ethCCMProxyAddr) onlyOwner public {
+        managerProxyContract = ethCCMProxyAddr;
+        emit SetManagerProxyEvent(ethCCMProxyAddr);
+    }
+
+    function bindProxyHash(uint64 toChainId, bytes memory targetProxyHash) onlyOwner public returns (bool) {
+        proxyHashMap[toChainId] = targetProxyHash;
+        emit BindProxyEvent(toChainId, targetProxyHash);
+        return true;
+    }
+
+    function bindAssetHash(address fromAssetHash, uint64 toChainId, bytes memory toAssetHash) onlyOwner public returns (bool) {
+        assetHashMap[fromAssetHash][toChainId] = toAssetHash;
+        emit BindAssetEvent(fromAssetHash, toChainId, toAssetHash, IERC20(fromAssetHash).balanceOf(address(this)));
+        return true;
+    }
+
+    function lock(address fromAssetHash, uint64 toChainId, bytes memory toAddress, uint256 amount) public payable returns (bool) {
+        require(assetHashMap[fromAssetHash][toChainId].length > 0, "Asset not bound to chain");
+
+        bool success;
+        if (fromAssetHash == address(0)) {
+            require(msg.value == amount, "Invalid amount");
+            success = _transferToContract(address(0), amount);
+        } else {
+            require(msg.value == 0, "No Ether needed for ERC20");
+            success = _transferToContract(fromAssetHash, amount);
+        }
+
+        if (!success) {
+            return false;
+        }
+
+        TxArgs memory args = TxArgs({
+            toAssetHash: assetHashMap[fromAssetHash][toChainId],
+            toAddress: toAddress,
+            amount: amount
+        });
+
+        IEthCrossChainManagerProxy ieccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        IEthCrossChainManager eccm = IEthCrossChainManager(ieccmp.getEthCrossChainManager());
+        bool result = eccm.crossChain(toChainId, proxyHashMap[toChainId], "unlock", _serializeTxArgs(args));
+
+        if (!result) {
+            _transferFromContract(fromAssetHash, _msgSender(), amount);
+            return false;
+        }
+
+        emit LockEvent(fromAssetHash, _msgSender(), toChainId, assetHashMap[fromAssetHash][toChainId], toAddress, amount);
+        return true;
+    }
+
+    function unlock(bytes memory argsBs, bytes memory fromContractAddr, uint64 fromChainId) onlyManagerContract public returns (bool) {
+        TxArgs memory args = _deserializeTxArgs(argsBs);
+        require(assetHashMap[argsBs.fromAssetHash][fromChainId].length > 0, "Asset not bound to chain");
+        require(proxyHashMap[fromChainId].length > 0, "Proxy not bound to chain");
+        require(addressEq(proxyHashMap[fromChainId], fromContractAddr), "Invalid source proxy");
+
+        bool success = _transferFromContract(args.toAssetHash, argsBs.toAddress, args.amount);
+        if (!success) {
+            return false;
+        }
+        emit UnlockEvent(argsBs.toAssetHash, argsBs.toAddress, args.amount);
+        return true;
+    }
+
+    function getBalanceFor(address fromAssetHash) public view returns (uint256) {
+        if (fromAssetHash == address(0)) {
+            return address(this).balance;
+        } else {
+            return IERC20(fromAssetHash).balanceOf(address(this));
+        }
+    }
+
+    function _transferToContract(address fromAssetHash, uint256 amount) internal returns (bool) {
+        if (fromAssetHash == address(0)) {
+            return true; // Ether already transferred if msg.value == amount
+        } else {
+            IERC20(fromAssetHash).safeTransferFrom(_msgSender(), address(this), amount);
+            return true;
+        }
+    }
+
+    function _transferFromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        if (toAssetHash == address(0)) {
+            (bool success,) = toAddress.call.value(amount)(new bytes(0));
+            return success;
+        } else {
+            IERC20(toAssetHash).safeTransfer(toAddress, amount);
+            return true;
+        }
+    }
+
+    function _transferERC20ToContract(address fromAssetHash, address fromAddress, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20(fromAssetHash).safeTransferFrom(fromAddress, toAddress, amount);
+        return true;
+    }
+
+    function _transferERC20FromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20(toAssetHash).safeTransfer(toAddress, amount);
+        return true;
+    }
+
+    function _serializeTxArgs(TxArgs memory args) internal pure returns (bytes memory) {
+        return abi.encodePacked(ZeroCopySink.WriteVarBytes(args.toAssetHash), ZeroCopySink.WriteVarBytes(args.toAddress), ZeroCopySink.WriteUint255(args.amount));
+    }
+
+    function _deserializeTxArgs(bytes memory valueBs) internal pure returns (TxArgs memory) {
+        uint offset = 0;
+        bytes memory toAssetHash;
+        bytes memory toAddress;
+        uint256 amount;
+        (toAssetHash, offset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        (toAddress, offset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        (amount, offset) = ZeroCopySource.NextUint255(valueBs, offset);
+        return TxArgs({toAssetHash: toAssetHash, toAddress: toAddress, amount: amount});
+    }
+
+    function addressEq(bytes memory a, bytes memory b) internal pure returns (bool) {
+        if (a.length != b.length) {
+            return false;
+        }
+        for (uint256 i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+```
+
+**Explanation of Key Functions:**
+
+1. **setManagerProxy**: Sets the address of the manager proxy contract that controls the cross-chain interactions.
+2. **bindProxyHash**: Binds a proxy hash to a specific chain ID, allowing transactions to be routed correctly.
+3. **bindAssetHash**: Binds an asset hash to a specific chain ID, specifying how tokens from the current chain will be identified on the target chain.
+4. **lock**: Locks a specified amount of tokens and sends a cross-chain request to unlock them on the target chain.
+5. **unlock**: Unlocks the tokens after receiving a cross-chain request, transferring them to the specified address.
+6. **getBalanceFor**: Returns the balance of a specific asset held by the contract.
+7. **_transferToContract & _transferFromContract**: Handle the transfer of tokens (both Ether and ERC20) to and from the contract.
+8. **_serializeTxArgs & _deserializeTxArgs**: Serialize and deserialize transaction arguments for cross-chain communication.
+9. **addressEq**: Checks equality between two byte arrays representing addresses.
+
+This contract is designed to work seamlessly with the EthCrossChainManager and EthCrossChainManagerProxy interfaces, ensuring secure and efficient cross-chain token transfers.

@@ -1,0 +1,131 @@
+Certainly! Below is a detailed implementation of the `HEXToken` contract based on the provided context and contract description. The implementation includes the necessary state variables and logic for each function.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    // State variables
+    struct Stake {
+        uint256 amount;
+        uint256 startDate;
+        uint256 duration; // in days
+        uint40 id;
+    }
+
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+    mapping(address => Stake[]) private _stakes;
+    uint40 private _stakeIdCounter;
+
+    // Events
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Staked(address indexed staker, uint256 amount, uint256 duration, uint256 startDate, uint40 stakeId);
+    event Unstaked(address indexed staker, uint256 amount, uint40 stakeId);
+
+    // Constants
+    uint256 private constant SECONDS_IN_A_DAY = 86400;
+
+    // Function to get the current day
+    function currentDay() external view returns (uint256) {
+        return block.timestamp / SECONDS_IN_A_DAY;
+    }
+
+    // Function to start a stake
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "Amount must be greater than zero");
+        require(newStakedDays > 0, "Duration must be greater than zero");
+        require(_balances[msg.sender] >= newStakedHearts, "Insufficient balance");
+
+        // Deduct from the user's balance
+        _balances[msg.sender] -= newStakedHearts;
+
+        // Create a new stake
+        uint256 startDate = block.timestamp;
+        uint40 stakeId = ++_stakeIdCounter;
+        _stakes[msg.sender].push(Stake({
+            amount: newStakedHearts,
+            startDate: startDate,
+            duration: newStakedDays,
+            id: stakeId
+        }));
+
+        emit Staked(msg.sender, newStakedHearts, newStakedDays, startDate, stakeId);
+    }
+
+    // Function to approve a spender
+    function approve(address spender, uint256 amount) external returns (bool) {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+
+    // Function to transfer HEX tokens
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        _transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    // Function to end a stake
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < _stakes[msg.sender].length, "Invalid stake index");
+        Stake storage stake = _stakes[msg.sender][stakeIndex];
+        require(stake.id == stakeIdParam, "Stake ID mismatch");
+        require(currentDay() - (stake.startDate / SECONDS_IN_A_DAY) >= stake.duration, "Stake duration has not expired");
+
+        // Add the staked amount back to the user's balance
+        _balances[msg.sender] += stake.amount;
+
+        // Remove the stake from the array
+        if (_stakes[msg.sender].length > 1) {
+            _stakes[msg.sender][stakeIndex] = _stakes[msg.sender][_stakes[msg.sender].length - 1];
+        }
+        _stakes[msg.sender].pop();
+
+        emit Unstaked(msg.sender, stake.amount, stake.id);
+    }
+
+    // Function to get the number of stakes for an address
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return _stakes[stakerAddr].length;
+    }
+
+    // Internal function to approve a spender
+    function _approve(address owner, address spender, uint256 amount) internal virtual {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    // Internal function to transfer tokens
+    function _transfer(address sender, address recipient, uint256 amount) internal virtual {
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+
+        require(_balances[sender] >= amount, "ERC20: transfer amount exceeds balance");
+
+        _balances[sender] -= amount;
+        _balances[recipient] += amount;
+        emit Transfer(sender, recipient, amount);
+    }
+}
+```
+
+### Explanation:
+- **State Variables**: 
+  - `_balances`: Tracks the balance of each address.
+  - `_allowances`: Tracks the allowances for spending between addresses.
+  - `_stakes`: Stores the stakes for each address.
+  - `_stakeIdCounter`: A counter for generating unique stake IDs.
+
+- **Functions**:
+  - `currentDay()`: Computes the current day based on the block timestamp.
+  - `stakeStart()`: Allows users to stake tokens, deducting them from their balance and recording the stake.
+  - `approve()`: Allows users to set an allowance for another address to spend their tokens.
+  - `transfer()`: Transfers tokens from one address to another, checking for sufficient balance.
+  - `stakeEnd()`: Ends a stake if its duration has expired, returning the staked tokens to the user.
+  - `stakeCount()`: Returns the number of stakes for a given address.
+
+- **Events**: Emitted for various actions such as transfers, approvals, staking, and unstaking to provide transparency and facilitate tracking.

@@ -1,0 +1,157 @@
+# ClaimContract Implementation
+
+```solidity
+/**
+ * @notice This contract allows users to claim tokens from a new version of a token (V2) by migrating from the old version (V1) or through other specified migration types.
+ * @dev The contract uses Merkle proofs for verification and supports different migration types such as unclaimed V1, holder, and staker. It also includes a deadline for V1 unclaimed migrations.
+ */
+contract ClaimContract {
+    using SafeMath for uint256;
+
+    enum MigrationType { V1_UNCLAIMED, HOLDER, STAKER }
+
+    address public constant FLASH_TOKEN_V1 = 0xB4467E8D621105312a914F1D42f10770C0Ffe3c8;
+    address public constant FLASH_TOKEN_V2 = 0x20398aD62bb2D930646d45a6D4292baa0b860C1f;
+    bytes32 public constant MERKLE_ROOT = 0x56dc616cf485d230be34e774839fc4b1b11b0ab99b92d594f7f16f4065f7e814;
+    uint256 public constant V1_UNCLAIMED_DEADLINE = 1617235140;
+
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    event Claimed(uint256 index, address sender, uint256 amount);
+
+    /**
+     * @notice Checks if a specific index has already been claimed.
+     * @param index The index to check.
+     * @return A boolean indicating whether the index has been claimed.
+     * @dev Uses a bit map to track claimed indices.
+     */
+    function isClaimed(uint256 index) public view returns (bool) {
+        uint256 claimedWordIndex = index / 256;
+        uint256 claimedBitIndex = index % 256;
+        uint256 claimedWord = claimedBitMap[claimedWordIndex];
+        uint256 mask = (1 << claimedBitIndex);
+        return claimedWord & mask == mask;
+    }
+
+    /**
+     * @notice Marks a specific index as claimed.
+     * @param index The index to mark as claimed.
+     * @dev Updates the bit map to reflect that the index has been claimed.
+     */
+    function _setClaimed(uint256 index) private {
+        uint256 claimedWordIndex = index / 256;
+        uint256 claimedBitIndex = index % 256;
+        claimedBitMap[claimedWordIndex] = claimedBitMap[claimedWordIndex] | (1 << claimedBitIndex);
+    }
+
+    /**
+     * @notice Calculates the migratable amount from V1 to V2 and transfers it.
+     * @param _user The user's address.
+     * @param _balance The balance to migrate.
+     * @return flashV2Mint The amount of V2 tokens to mint.
+     * @dev Transfers the V1 tokens from the user to this contract and calculates the amount to mint in V2.
+     */
+    function _getMigratableAmountAndTransferV1(address _user, uint256 _balance) private returns (uint256 flashV2Mint) {
+        // Transfer V1 tokens from user to this contract
+        IFlashToken(FLASH_TOKEN_V1).transferFrom(_user, address(this), _balance);
+        
+        // Calculate the amount to mint in V2 (1:1 ratio)
+        flashV2Mint = _balance;
+        
+        return flashV2Mint;
+    }
+
+    /**
+     * @dev Claims migrated tokens from FlashV2, with merkle proof verification.
+     * @param index Index of the claim in the merkle tree
+     * @param balance Amount of tokens to claim
+     * @param bonusAmount Bonus tokens included in the claim
+     * @param expiry Expiry timestamp for staker claims
+     * @param expireAfter Timestamp when staker claim starts expiring
+     * @param migrationType Type of migration (V1 unclaimed/holder/staker)
+     * @param merkleProof Proof for merkle verification
+     * @dev Requirements:
+     *   - Claim must not be already claimed
+     *   - Merkle proof must be valid
+     *   - V1 unclaimed claims must be within deadline
+     *   - Staker claims may incur burn based on time remaining
+     * @dev Behavior:
+     *   - Calculates final claim amount based on migration type
+     *   - Mints tokens (including bonus) to user
+     *   - Marks claim as completed
+     * @dev Emits Claimed event with claim details
+     */
+    function claim(
+        uint256 index,
+        uint256 balance,
+        uint256 bonusAmount,
+        uint256 expiry,
+        uint256 expireAfter,
+        MigrationType migrationType,
+        bytes32[] calldata merkleProof
+    ) external {
+        require(!isClaimed(index), "ClaimContract: Already claimed");
+
+        // Generate the node by encoding the claim data
+        bytes32 node = keccak256(abi.encodePacked(index, msg.sender, balance, bonusAmount, expiry, expireAfter, uint256(migrationType)));
+        
+        // Verify the merkle proof
+        require(MerkleProof.verify(merkleProof, MERKLE_ROOT, node), "ClaimContract: Invalid proof");
+
+        // Check deadline for V1_UNCLAIMED type
+        if (migrationType == MigrationType.V1_UNCLAIMED) {
+            require(block.timestamp <= V1_UNCLAIMED_DEADLINE, "ClaimContract: V1 unclaimed deadline passed");
+        }
+
+        uint256 amountToMint = balance;
+        
+        // For HOLDER type, simply use the balance amount
+        if (migrationType == MigrationType.HOLDER) {
+            // No additional logic needed, use balance as is
+        }
+        // For V1_UNCLAIMED type, use the balance as is
+        else if (migrationType == MigrationType.V1_UNCLAIMED) {
+            // No additional logic needed, use balance as is
+        }
+        // For STAKER type, check expiry and adjust amount if needed
+        else if (migrationType == MigrationType.STAKER) {
+            if (block.timestamp > expireAfter && block.timestamp < expiry) {
+                // Calculate how much to burn based on time remaining
+                uint256 timeRemaining = expiry.sub(block.timestamp);
+                uint256 totalExpiryPeriod = expiry.sub(expireAfter);
+                amountToMint = balance.mul(timeRemaining).div(totalExpiryPeriod);
+            } else if (block.timestamp >= expiry) {
+                // If past expiry, nothing to claim
+                amountToMint = 0;
+            }
+        }
+
+        // Add bonus amount to the claim
+        uint256 totalToMint = amountToMint.add(bonusAmount);
+
+        // Only mint if there is something to mint
+        if (totalToMint > 0) {
+            // Mint tokens to the user
+            IFlashToken(FLASH_TOKEN_V2).mint(msg.sender, totalToMint);
+        }
+
+        // Mark as claimed
+        _setClaimed(index);
+
+        // Emit event
+        emit Claimed(index, msg.sender, totalToMint);
+    }
+}
+```
+
+This implementation provides a complete `ClaimContract` that follows the requirements specified in the documentation. The contract:
+
+1. Uses a bitmap to efficiently track claimed indices
+2. Verifies merkle proofs for claim validation
+3. Handles different migration types with specific logic for each
+4. Enforces a deadline for V1 unclaimed migrations
+5. Calculates appropriate token amounts for staker claims based on expiry periods
+6. Mints the appropriate amount of V2 tokens (including any bonus) to the user
+7. Properly marks claims as completed and emits events
+
+The contract is fully compatible with the provided interfaces and follows the security patterns established in the context code.

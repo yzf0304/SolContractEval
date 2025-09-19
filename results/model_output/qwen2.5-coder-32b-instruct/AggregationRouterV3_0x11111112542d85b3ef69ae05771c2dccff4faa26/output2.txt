@@ -1,0 +1,160 @@
+Below is the implementation of the `AggregationRouterV3` contract based on the provided context and the detailed specifications. This contract handles token swapping, gas cost reduction through CHI token burning, and provides functions for fund rescue and self-destruction.
+
+```solidity
+pragma solidity 0.6.12;
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     * @dev This function calls the `swap` function internally and handles CHI token burning based on the provided flags.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     * @return chiSpent The amount of CHI tokens burned.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 initialGas = gasleft();
+        IChi chi = IChi(0x0000000000004946c0e9F43F4Dee657aDF2a8E42); // Known CHI address on Ethereum mainnet
+        uint256 initialCHI = chi.balanceOf(address(this));
+
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+
+        uint256 finalCHI = chi.balanceOf(address(this));
+        chiSpent = initialCHI.sub(finalCHI);
+        if (chiSpent > 0) {
+            chi.free(chiSpent);
+        }
+
+        gasLeft = initialGas.sub(gasleft());
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     * @dev This function checks the validity of the input parameters and performs the swap using the specified aggregation executor.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        uint256 initialGas = gasleft();
+
+        require(desc.amount > 0, "Zero swap amount");
+        require(desc.minReturnAmount > 0, "Zero minReturnAmount");
+
+        _permit(desc.srcToken, desc.amount, desc.permit);
+
+        uint256 initialSrcTokenBalance;
+        if (!desc.srcToken.isETH()) {
+            initialSrcTokenBalance = desc.srcToken.balanceOf(address(this));
+        } else {
+            initialSrcTokenBalance = address(this).balance;
+        }
+
+        if (_isFlagSet(desc.flags, _REQUIRES_EXTRA_ETH)) {
+            require(msg.value >= desc.amount, "Insufficient ETH");
+        } else {
+            require(msg.value == 0, "Extra ETH provided");
+        }
+
+        caller.callBytes{value: msg.value}(data);
+
+        uint256 finalSrcTokenBalance;
+        if (!desc.srcToken.isETH()) {
+            finalSrcTokenBalance = desc.srcToken.balanceOf(address(this));
+        } else {
+            finalSrcTokenBalance = address(this).balance;
+        }
+
+        uint256 spentAmount = initialSrcTokenBalance.sub(finalSrcTokenBalance);
+        returnAmount = unoswap(desc.srcToken, spentAmount, desc.minReturnAmount, abi.decode(data, (bytes32[])));
+
+        gasLeft = initialGas.sub(gasleft());
+
+        emit Swapped(msg.sender, desc.srcToken, desc.dstToken, desc.dstReceiver, spentAmount, returnAmount);
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     * @dev This function transfers the specified amount of a given token to the owner.
+     * @param token The token to be rescued.
+     * @param amount The amount of the token to be transferred.
+     */
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        token.uniTransfer(owner(), amount);
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send any remaining ETH to the owner.
+     * @dev This function self-destructs the contract and sends the remaining ETH to the owner.
+     */
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+
+    /**
+     * @notice Internal function to check if a flag is set.
+     * @param flags The bitfield to check against.
+     * @param flag The flag to check for.
+     * @return Whether the flag is set.
+     */
+    function _isFlagSet(uint256 flags, uint256 flag) internal pure returns (bool) {
+        return (flags & flag) == flag;
+    }
+}
+```
+
+This contract includes:
+- The `discountedSwap` function that reduces gas costs by burning CHI tokens.
+- The `swap` function that performs the actual token swapping.
+- The `rescueFunds` function allowing the owner to withdraw any stuck tokens.
+- The `destroy` function allowing the owner to destroy the contract, sending any remaining ETH to the owner.

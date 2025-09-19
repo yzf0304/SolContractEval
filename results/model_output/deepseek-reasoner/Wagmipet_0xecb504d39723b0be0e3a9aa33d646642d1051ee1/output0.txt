@@ -1,0 +1,181 @@
+Here is the complete implementation of the Wagmipet contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+contract Wagmipet {
+    address _owner;
+    
+    event CaretakerLoved(address indexed caretaker, uint256 indexed amount);
+    
+    uint256 lastFeedBlock;
+    uint256 lastCleanBlock;
+    uint256 lastPlayBlock;
+    uint256 lastSleepBlock;
+    
+    uint8 internal hunger;
+    uint8 internal uncleanliness;
+    uint8 internal boredom;
+    uint8 internal sleepiness;
+    
+    mapping (address => uint256) public love;
+    
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "Not owner");
+        _;
+    }
+    
+    constructor() {
+        _owner = msg.sender;
+        lastFeedBlock = block.number;
+        lastCleanBlock = block.number;
+        lastPlayBlock = block.number;
+        lastSleepBlock = block.number;
+    }
+    
+    function addLove(address caretaker, uint256 amount) internal {
+        love[caretaker] += amount;
+        emit CaretakerLoved(caretaker, amount);
+    }
+    
+    function feed() public {
+        _updateStats();
+        require(getAlive(), "Not alive");
+        require(boredom <= 50, "Too bored");
+        require(uncleanliness <= 50, "Too dirty");
+        
+        lastFeedBlock = block.number;
+        hunger = 0;
+        
+        boredom = _capStat(boredom + 10);
+        uncleanliness = _capStat(uncleanliness + 3);
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function clean() public {
+        _updateStats();
+        require(getAlive(), "Not alive");
+        require(uncleanliness > 0, "Already clean");
+        
+        lastCleanBlock = block.number;
+        uncleanliness = 0;
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function play() public {
+        _updateStats();
+        require(getAlive(), "Not alive");
+        require(hunger <= 50, "Too hungry");
+        require(sleepiness <= 50, "Too sleepy");
+        require(uncleanliness <= 50, "Too dirty");
+        
+        lastPlayBlock = block.number;
+        boredom = 0;
+        
+        hunger = _capStat(hunger + 10);
+        sleepiness = _capStat(sleepiness + 10);
+        uncleanliness = _capStat(uncleanliness + 5);
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function sleep() public {
+        _updateStats();
+        require(getAlive(), "Not alive");
+        require(uncleanliness < 80, "Too dirty");
+        require(sleepiness > 0, "Not sleepy");
+        
+        lastSleepBlock = block.number;
+        sleepiness = 0;
+        uncleanliness = _capStat(uncleanliness + 5);
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function getStatus() public view returns (string memory) {
+        (uint256 ch, uint256 cu, uint256 cb, uint256 cs) = _currentStats();
+        
+        if (ch > 100 || cu > 100 || cb > 100 || cs > 100) {
+            return "no longer with us";
+        }
+        
+        if (ch <= 50 && cu <= 50 && cb <= 50 && cs <= 50) {
+            string[4] memory statuses = ["gm", "im feeling great", "all good", "i love u"];
+            return statuses[block.number % 4];
+        }
+        
+        string memory status;
+        uint8 maxVal;
+        
+        if (cs > 50 && cs >= maxVal) { status = "im sleepy"; maxVal = uint8(cs); }
+        if (cb > 50 && cb >= maxVal) { status = "im bored"; maxVal = uint8(cb); }
+        if (cu > 50 && cu >= maxVal) { status = "im dirty"; maxVal = uint8(cu); }
+        if (ch > 50 && ch >= maxVal) { status = "im hungry"; maxVal = uint8(ch); }
+        
+        return status;
+    }
+    
+    function getAlive() public view returns (bool) {
+        (uint256 ch, uint256 cu, uint256 cb, uint256 cs) = _currentStats();
+        return ch <= 100 && cu <= 100 && cb <= 100 && cs <= 100;
+    }
+    
+    function getHunger() public view returns (uint256) {
+        return _capStat(hunger + (block.number - lastFeedBlock));
+    }
+    
+    function getUncleanliness() public view returns (uint256) {
+        return _capStat(uncleanliness + (block.number - lastCleanBlock));
+    }
+    
+    function getBoredom() public view returns (uint256) {
+        return _capStat(boredom + (block.number - lastPlayBlock));
+    }
+    
+    function getSleepiness() public view returns (uint256) {
+        return _capStat(sleepiness + (block.number - lastSleepBlock));
+    }
+
+    function _updateStats() internal {
+        hunger = uint8(_capStat(hunger + (block.number - lastFeedBlock)));
+        uncleanliness = uint8(_capStat(uncleanliness + (block.number - lastCleanBlock)));
+        boredom = uint8(_capStat(boredom + (block.number - lastPlayBlock)));
+        sleepiness = uint8(_capStat(sleepiness + (block.number - lastSleepBlock)));
+        
+        lastFeedBlock = block.number;
+        lastCleanBlock = block.number;
+        lastPlayBlock = block.number;
+        lastSleepBlock = block.number;
+    }
+    
+    function _currentStats() internal view returns (
+        uint256 currentHunger,
+        uint256 currentUncleanliness,
+        uint256 currentBoredom,
+        uint256 currentSleepiness
+    ) {
+        currentHunger = _capStat(hunger + (block.number - lastFeedBlock));
+        currentUncleanliness = _capStat(uncleanliness + (block.number - lastCleanBlock));
+        currentBoredom = _capStat(boredom + (block.number - lastPlayBlock));
+        currentSleepiness = _capStat(sleepiness + (block.number - lastSleepBlock));
+    }
+    
+    function _capStat(uint256 value) internal pure returns (uint256) {
+        return value > 100 ? 100 : value;
+    }
+}
+```
+
+This implementation:
+1. Maintains pet stats that deteriorate with blocks passed since last interaction
+2. Uses a unified stat update system that caps values at 100
+3. Implements all required care functions with proper stat modifications
+4. Includes view functions that calculate current stats dynamically
+5. Follows the exact status priority system described
+6. Uses block numbers for time tracking and stat calculations
+7. Maintains ERC20-style "love" tracking for caretakers
+
+The contract strictly adheres to the requirements while using efficient stat management and proper overflow protection.

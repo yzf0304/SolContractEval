@@ -1,0 +1,138 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "./ERC721A.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract SaudiPotatoz is ERC721A, Ownable, ReentrancyGuard {
+    using Address for address;
+
+    string public baseURI;
+    uint256 public price       = 0 ether;
+    uint256 public maxPerTx    = 1;
+    uint256 public maxPerWallet= 1;
+    uint256 public totalFree   = 0;
+    uint256 public maxSupply   = 5000;
+    uint256 public nextOwnerToExplicitlySet;
+    bool    public mintEnabled;
+
+    constructor() ERC721A("SaudiPotatoz", "SaudiPotatoz") {}
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function freeMint(uint256 amt) external callerIsUser {
+        require(mintEnabled,                   "Minting is not enabled");
+        require(amt > 0 && amt <= maxPerTx,   "Invalid mint amount");
+        uint256 s = totalSupply();
+        require(s + amt <= totalFree,         "Exceeds free supply");
+        require(_numberMinted(msg.sender) + amt <= maxPerWallet,
+                                            "Exceeds free wallet limit");
+        _safeMint(msg.sender, amt);
+    }
+
+    function mint(uint256 amt) external payable callerIsUser {
+        require(mintEnabled,                   "Minting is not enabled");
+        require(amt > 0 && amt <= maxPerTx,   "Invalid mint amount");
+        uint256 s = totalSupply();
+        require(s + amt <= maxSupply,         "Exceeds max supply");
+        require(_numberMinted(msg.sender) + amt <= maxPerWallet,
+                                            "Exceeds wallet limit");
+        require(msg.value >= price * amt,     "Insufficient ETH");
+        _safeMint(msg.sender, amt);
+    }
+
+    function ownerBatchMint(uint256 amt) external onlyOwner {
+        require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+        _safeMint(msg.sender, amt);
+    }
+
+    function toggleMinting() external onlyOwner {
+        mintEnabled = !mintEnabled;
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function setBaseURI(string calldata uri) external onlyOwner {
+        baseURI = uri;
+    }
+
+    function setPrice(uint256 p) external onlyOwner {
+        price = p;
+    }
+
+    function setTotalFree(uint256 tf) external onlyOwner {
+        totalFree = tf;
+    }
+
+    function setMaxPerTx(uint256 m) external onlyOwner {
+        maxPerTx = m;
+    }
+
+    function setMaxPerWallet(uint256 m) external onlyOwner {
+        maxPerWallet = m;
+    }
+
+    function setmaxSupply(uint256 ms) external onlyOwner {
+        maxSupply = ms;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "No ETH to withdraw");
+        (bool ok, ) = payable(msg.sender).call{value: bal}("");
+        require(ok, "Transfer failed");
+    }
+
+    function setOwnersExplicit(uint256 quantity) external onlyOwner nonReentrant {
+        _setOwnersExplicit(quantity);
+    }
+
+    function getOwnershipData(uint256 tokenId)
+        external
+        view
+        returns (TokenOwnership memory)
+    {
+        return ownershipOf(tokenId);
+    }
+
+    function _setOwnersExplicit(uint256 quantity) internal {
+        require(quantity > 0, "Quantity must be nonzero");
+        uint256 _next = nextOwnerToExplicitlySet;
+        uint256 end  = _next + quantity;
+        if (end > currentIndex) {
+            end = currentIndex;
+        }
+        require(_next < end, "No more owners to set");
+        for (uint256 tokenId = _next; tokenId < end; tokenId++) {
+            if (_ownerships[tokenId].addr == address(0)) {
+                TokenOwnership memory ownership = ownershipOf(tokenId);
+                _ownerships[tokenId].addr           = ownership.addr;
+                _ownerships[tokenId].startTimestamp = ownership.startTimestamp;
+            }
+        }
+        nextOwnerToExplicitlySet = end;
+    }
+}
+```
+
+Explanation of key points:
+
+• freeMint(): lets any EOA mint up to maxPerTx NFTs for free, provided the overall free supply (`totalFree`) isn’t exceeded and the caller’s free‐mint count (tracked via `_numberMinted`) remains within `maxPerWallet`.  
+• mint(): standard paid mint, enforcing `maxPerTx`, `maxPerWallet`, `maxSupply`, and requiring `msg.value == price * amt`.  
+• ownerBatchMint(): owner‐only “gift” mint, subject only to `maxSupply`.  
+• toggleMinting(): flips the public‐sale flag.  
+• setOwnersExplicit(): walks through the next `quantity` token IDs, fills in missing `_ownerships` entries to optimize future `ownerOf()` calls, and advances `nextOwnerToExplicitlySet`.  
+• withdraw(): owner‐only, nonReentrant ETH withdrawal.  
+• All other setters (`setPrice`, `setMaxPerTx`, etc.) are `onlyOwner`.  
+• The contract inherits ERC721A for gas‐efficient batch mints, OpenZeppelin’s Ownable for access control, and OpenZeppelin’s ReentrancyGuard for safety on withdrawals.

@@ -1,0 +1,192 @@
+I'll complete the `HalloweenMinter` contract based on the provided context and description.
+
+```solidity
+/**
+ * @title HalloweenMinter
+ * @notice This contract allows users to mint NFTs with specific conditions, including a whitelist and public sale.
+ * @dev The contract is Ownable, which means only the owner can modify certain parameters such as the cost, supply, and minting rules.
+ */
+contract HalloweenMinter is Ownable {
+
+    address public constant withdrawAddress = 0xdEcf4B112d4120B6998e5020a6B4819E490F7db6;
+    iNFTCollection public NFTCollection = iNFTCollection(0x2d3C8D1A84cA778A3bba0F4fC389330AB96AF3Be); 
+
+    constructor(){
+        pause(false);
+        setMintCount(false);
+    }
+
+    uint256 public cost = 0;
+    uint256 public maxSupply = 5000;
+    uint256 public maxMintAmountPerTransaction = 3;
+    uint256 public publicSaleMaxMintAmountPerAddress = 300;
+    bool public paused = true;
+    bool public onlyWhitelisted = true;
+    bool public mintCount = true;
+    mapping(address => uint256) public whitelistMintedAmount;
+    mapping(address => uint256) public publicSaleMintedAmount;
+    bytes32 public constant AIRDROP_ROLE = keccak256("AIRDROP_ROLE");
+
+    /**
+     * @notice Modifier to ensure that the function caller is an external user, not another contract.
+     * @dev This modifier helps prevent reentrancy attacks and ensures that the function is called by an EOA.
+     */
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract.");
+        _;
+    }
+ 
+    bytes32 public merkleRoot;
+    /**
+     * @notice Allows users to mint NFTs, with optional whitelisting and mint count restrictions.
+     * @dev Users must provide a merkle proof if the contract is in the whitelist phase. The function checks various conditions before allowing the mint.
+     * @param _mintAmount The number of NFTs to mint.
+     * @param _maxMintAmount The maximum number of NFTs allowed for the user.
+     * @param _merkleProof The merkle proof to verify the user's whitelist status.
+     */
+    function mint(uint256 _mintAmount, uint256 _maxMintAmount, bytes32[] calldata _merkleProof) public payable callerIsUser {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0, "Mint amount should be greater than 0");
+        require(_mintAmount <= maxMintAmountPerTransaction, "Mint amount exceeds max per transaction");
+        require(totalSupply() + _mintAmount <= maxSupply, "Max supply exceeded");
+        
+        // Check if whitelist only and verify proof
+        if (onlyWhitelisted) {
+            bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _maxMintAmount));
+            require(MerkleProof.verifyCalldata(_merkleProof, merkleRoot, leaf), "Invalid merkle proof");
+            
+            if (mintCount) {
+                require(whitelistMintedAmount[msg.sender] + _mintAmount <= _maxMintAmount, "Whitelist max mint amount exceeded");
+                whitelistMintedAmount[msg.sender] += _mintAmount;
+            }
+        } else {
+            if (mintCount) {
+                require(publicSaleMintedAmount[msg.sender] + _mintAmount <= publicSaleMaxMintAmountPerAddress, "Public sale max mint amount exceeded");
+                publicSaleMintedAmount[msg.sender] += _mintAmount;
+            }
+        }
+        
+        // Check payment
+        if (cost > 0) {
+            require(msg.value >= cost * _mintAmount, "Insufficient funds");
+        }
+        
+        // Mint the tokens
+        NFTCollection.externalMint(msg.sender, _mintAmount);
+    }
+
+    /**
+     * @notice Sets the maximum supply of NFTs.
+     * @dev Only the contract owner can call this function.
+     * @param _maxSupply The new maximum supply of NFTs.
+     */
+    function setMaxSupply(uint256 _maxSupply) public onlyOwner {
+        maxSupply = _maxSupply;
+    }
+
+    /**
+     * @notice Returns the total supply of NFTs.
+     * @dev This function queries the NFT collection contract for the total supply.
+     * @return The total supply of NFTs.
+     */
+    function totalSupply() public view returns(uint256) {
+        return NFTCollection.totalSupply();
+    }
+
+    /**
+     * @notice Sets the merkle root for the whitelist.
+     * @dev Only the contract owner can call this function.
+     * @param _merkleRoot The new merkle root for the whitelist.
+     */
+    function setMerkleRoot(bytes32 _merkleRoot) public onlyOwner {
+        merkleRoot = _merkleRoot;
+    }
+
+    /**
+     * @notice Sets the maximum number of NFTs that can be minted per address during the public sale.
+     * @dev Only the contract owner can call this function.
+     * @param _publicSaleMaxMintAmountPerAddress The new maximum number of NFTs per address.
+     */
+    function setPublicSaleMaxMintAmountPerAddress(uint256 _publicSaleMaxMintAmountPerAddress) public onlyOwner {
+        publicSaleMaxMintAmountPerAddress = _publicSaleMaxMintAmountPerAddress;
+    }
+
+    /**
+     * @notice Sets the cost of minting one NFT.
+     * @dev Only the contract owner can call this function.
+     * @param _newCost The new cost of minting one NFT.
+     */
+    function setCost(uint256 _newCost) public onlyOwner {
+        cost = _newCost;
+    }
+
+    /**
+     * @notice Toggles whether only whitelisted addresses can mint NFTs.
+     * @dev Only the contract owner can call this function.
+     * @param _state The new state (true for only whitelisted, false for open to all).
+     */
+    function setOnlyWhitelisted(bool _state) public onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    /**
+     * @notice Sets the maximum number of NFTs that can be minted in a single transaction.
+     * @dev Only the contract owner can call this function.
+     * @param _maxMintAmountPerTransaction The new maximum number of NFTs per transaction.
+     */
+    function setMaxMintAmountPerTransaction(uint256 _maxMintAmountPerTransaction) public onlyOwner {
+        maxMintAmountPerTransaction = _maxMintAmountPerTransaction;
+    }
+
+    /**
+     * @notice Pauses or unpauses the contract.
+     * @dev Only the contract owner can call this function.
+     * @param _state The new state (true for paused, false for unpaused).
+     */
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    /**
+     * @notice Toggles whether the mint count should be enforced.
+     * @dev Only the contract owner can call this function.
+     * @param _state The new state (true for enforcing mint count, false for not enforcing).
+     */
+    function setMintCount(bool _state) public onlyOwner {
+        mintCount = _state;
+    }
+
+    /**
+     * @notice Sets the address of the NFT collection contract.
+     * @dev Only the contract owner can call this function.
+     * @param _address The new address of the NFT collection contract.
+     */
+    function setNFTCollection(address _address) public onlyOwner {
+        NFTCollection = iNFTCollection(_address);
+    }
+
+    /**
+     * @notice Withdraws the contract's balance to the specified withdrawal address.
+     * @dev Only the contract owner can call this function.
+     */
+    function withdraw() public onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No balance to withdraw");
+        
+        (bool success, ) = payable(withdrawAddress).call{value: balance}("");
+        require(success, "Withdrawal failed");
+    }
+}
+```
+
+This implementation fulfills all the requirements based on the provided context. It includes:
+
+1. Whitelist verification using Merkle proofs
+2. Mint limitations per transaction and per address
+3. Cost management for minting
+4. Supply controls
+5. Pausing functionality
+6. Owner-only administrative functions
+7. Withdrawal to a fixed address
+
+The contract follows the specified structure and maintains all the described functionality.

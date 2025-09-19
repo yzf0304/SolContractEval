@@ -1,0 +1,141 @@
+Here is the complete `DNCEQUITY` contract implemented according to the specified requirements:
+
+```solidity
+pragma solidity ^0.4.21;
+
+contract DNCAsset {
+    uint256 public totalSupply = 0;
+    event Transfer(address indexed from, address indexed to, uint value);
+}
+
+contract DNCReceivingContract {
+    function tokenFallback(address _from, uint _value, bytes _data);
+}
+
+library SafeMath {
+    function mul(uint a, uint b) internal pure returns (uint) {
+        uint c = a * b;
+        assert(a == 0 || c / a == b);
+        return c;
+    }
+    
+    function div(uint a, uint b) internal pure returns (uint) {
+        assert(b > 0);
+        uint c = a / b;
+        assert(a == b * c + a % b);
+        return c;
+    }
+    
+    function sub(uint a, uint b) internal pure returns (uint) {
+        assert(b <= a);
+        return a - b;
+    }
+    
+    function add(uint a, uint b) internal pure returns (uint) {
+        uint c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+contract ERC223BasicToken is DNCAsset {
+    using SafeMath for uint256;
+
+    mapping(address => uint256) balances;
+
+    function transfer(address _to, uint _value) public returns (bool success) {
+        uint codeLength;
+        bytes memory empty;
+
+        assembly {
+            codeLength := extcodesize(_to)
+        }
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        if(codeLength > 0) {
+            DNCReceivingContract receiver = DNCReceivingContract(_to);
+            receiver.tokenFallback(msg.sender, _value, empty);
+        }
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function balanceOf(address _owner) public view returns (uint balance) {
+        return balances[_owner];
+    }
+}
+
+contract DNCEQUITY is ERC223BasicToken {
+    address public admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping(address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    function DNCEQUITY() public {
+        admin = msg.sender;
+    }
+
+    modifier onlyadmin() {
+        require(msg.sender == admin);
+        _;
+    }
+
+    function changeAdmin(address _newAdminAddr) public onlyadmin {
+        require(_newAdminAddr != address(0));
+        admin = _newAdminAddr;
+    }
+
+    function createNewMintableUser(address newAddr) public onlyadmin {
+        require(newAddr != address(0));
+        require(balances[newAddr] == 0);
+        mintable[newAddr] = true;
+    }
+
+    function deleteMintable(address addr) public onlyadmin {
+        require(addr != address(0));
+        mintable[addr] = false;
+    }
+
+    function adminTransfer(address from, address to, uint256 value) public onlyadmin {
+        require(from != address(0) && to != address(0));
+        require(mintable[from]);
+        require(balances[from] >= value);
+
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        emit Transfer(from, to, value);
+    }
+
+    function mintNewDNC(address user, uint256 quantity) public onlyadmin {
+        require(user != address(0));
+        require(mintable[user]);
+
+        balances[user] = balances[user].add(quantity);
+        totalSupply = totalSupply.add(quantity);
+        emit Minted(user, quantity);
+    }
+
+    function burnDNC(address user, uint256 quantity) public onlyadmin {
+        require(user != address(0));
+        require(mintable[user]);
+        require(balances[user] >= quantity);
+
+        balances[user] = balances[user].sub(quantity);
+        totalSupply = totalSupply.sub(quantity);
+        emit Burned(user, quantity);
+    }
+}
+```
+
+### Explanation:
+- The contract uses the `SafeMath` library for safe arithmetic operations.
+- A new admin address can be assigned, and certain functions are restricted to the admin only using the `onlyadmin` modifier.
+- `createNewMintableUser` and `deleteMintable` functions allow the admin to manage which addresses are mintable.
+- `adminTransfer` allows the admin to transfer tokens from one user to another if the sender is mintable.
+- `mintNewDNC` and `burnDNC` functions allow the admin to mint or burn tokens from specified mintable users.
+- All functionalities adhere strictly to the requirements given.

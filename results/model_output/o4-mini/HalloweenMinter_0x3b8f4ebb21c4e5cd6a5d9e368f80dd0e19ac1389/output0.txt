@@ -1,0 +1,181 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface iNFTCollection {
+    function externalMint(address _address, uint256 _amount) external payable;
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address address_) external view returns (uint256);
+    function ownerOf(uint256 tokenId_) external view returns (address);
+    function tokensOfOwner(address _address) external view returns (uint256[] memory);
+}
+
+contract HalloweenMinter is Ownable {
+    using MerkleProof for bytes32[];
+
+    //––––––––––––––––––––––––––––––––––––––––––––––
+    // State
+    //––––––––––––––––––––––––––––––––––––––––––––––
+
+    // Where funds get withdrawn to
+    address public constant withdrawAddress = 0xdEcf4B112d4120B6998e5020a6B4819E490F7db6;
+
+    // The NFT collection we're minting on
+    iNFTCollection public NFTCollection = iNFTCollection(0x2d3C8D1A84cA778A3bba0F4fC389330AB96AF3Be);
+
+    // Mint parameters
+    uint256 public cost                       = 0;
+    uint256 public maxSupply                  = 5000;
+    uint256 public maxMintAmountPerTransaction= 3;
+    uint256 public publicSaleMaxMintAmountPerAddress = 300;
+
+    bool public paused            = true;
+    bool public onlyWhitelisted   = true;
+    bool public mintCount         = true;
+
+    // Whitelist + public sale tracking
+    mapping(address => uint256) public whitelistMintedAmount;
+    mapping(address => uint256) public publicSaleMintedAmount;
+
+    // Merkle root for whitelist
+    bytes32 public merkleRoot;
+
+    //––––––––––––––––––––––––––––––––––––––––––––––
+    // Modifiers
+    //––––––––––––––––––––––––––––––––––––––––––––––
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract.");
+        _;
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––
+    // Constructor
+    //––––––––––––––––––––––––––––––––––––––––––––––
+
+    constructor() {
+        // On deployment un-pause and set mintCount enforcement as desired
+        pause(false);
+        setMintCount(false);
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––
+    // Minting
+    //––––––––––––––––––––––––––––––––––––––––––––––
+
+    /**
+     * @notice Mint `_mintAmount` NFTs. Pays `cost` per token.
+     * @param _mintAmount Number of tokens to mint this call.
+     * @param _maxMintAmount Used in whitelist to verify your per‐address max.
+     * @param _merkleProof Proof that msg.sender + _maxMintAmount is in the whitelist.
+     */
+    function mint(
+        uint256 _mintAmount,
+        uint256 _maxMintAmount,
+        bytes32[] calldata _merkleProof
+    ) external payable callerIsUser {
+        require(!paused,                                  "The contract is paused!");
+        require(_mintAmount > 0 && 
+                _mintAmount <= maxMintAmountPerTransaction,
+                                                        "Invalid mint amount!");
+
+        uint256 currentSupply = NFTCollection.totalSupply();
+        require(currentSupply + _mintAmount <= maxSupply, "Max supply exceeded!");
+
+        // Whitelist phase
+        if (onlyWhitelisted) {
+            // Verify merkle proof
+            bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _maxMintAmount));
+            require(MerkleProof.verify(_merkleProof, merkleRoot, leaf),
+                    "Invalid Merkle Proof!");
+
+            if (mintCount) {
+                uint256 used = whitelistMintedAmount[msg.sender];
+                require(used + _mintAmount <= _maxMintAmount,
+                        "Whitelist max mint exceeded!");
+                whitelistMintedAmount[msg.sender] = used + _mintAmount;
+            }
+        } 
+        // Public sale phase
+        else {
+            if (mintCount) {
+                uint256 used = publicSaleMintedAmount[msg.sender];
+                require(used + _mintAmount <= publicSaleMaxMintAmountPerAddress,
+                        "Public sale max mint exceeded!");
+                publicSaleMintedAmount[msg.sender] = used + _mintAmount;
+            }
+        }
+
+        // Payment
+        require(msg.value >= cost * _mintAmount, "Insufficient funds!");
+
+        // Forward the call & ETH to the NFT contract
+        NFTCollection.externalMint{ value: msg.value }(msg.sender, _mintAmount);
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––
+    // Owner‐only Setters
+    //––––––––––––––––––––––––––––––––––––––––––––––
+
+    function setMaxSupply(uint256 _maxSupply) external onlyOwner {
+        require(_maxSupply >= NFTCollection.totalSupply(),
+                "Cannot set maxSupply below current supply");
+        maxSupply = _maxSupply;
+    }
+
+    function setMerkleRoot(bytes32 _merkleRoot) external onlyOwner {
+        merkleRoot = _merkleRoot;
+    }
+
+    function setPublicSaleMaxMintAmountPerAddress(uint256 _limit) external onlyOwner {
+        publicSaleMaxMintAmountPerAddress = _limit;
+    }
+
+    function setCost(uint256 _newCost) external onlyOwner {
+        cost = _newCost;
+    }
+
+    function setOnlyWhitelisted(bool _state) external onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    function setMaxMintAmountPerTransaction(uint256 _maxMint) external onlyOwner {
+        maxMintAmountPerTransaction = _maxMint;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function setMintCount(bool _state) public onlyOwner {
+        mintCount = _state;
+    }
+
+    function setNFTCollection(address _address) external onlyOwner {
+        require(_address != address(0), "Zero address not allowed");
+        NFTCollection = iNFTCollection(_address);
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––
+    // Owner Withdraw
+    //––––––––––––––––––––––––––––––––––––––––––––––
+
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "Nothing to withdraw");
+        (bool success, ) = withdrawAddress.call{ value: balance }("");
+        require(success, "Withdraw failed");
+    }
+
+    //––––––––––––––––––––––––––––––––––––––––––––––
+    // Views
+    //––––––––––––––––––––––––––––––––––––––––––––––
+
+    function totalSupply() external view returns (uint256) {
+        return NFTCollection.totalSupply();
+    }
+}
+```

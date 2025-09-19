@@ -1,0 +1,82 @@
+pragma solidity ^0.4.21;
+
+contract DNCEQUITY is ERC223BasicToken {
+    using SafeMath for uint256;
+
+    address public admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping(address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    function DNCEQUITY() public {
+        admin = msg.sender;
+    }
+
+    modifier onlyadmin {
+        require(msg.sender == admin);
+        _;
+    }
+
+    function changeAdmin(address _newAdminAddr) public onlyadmin {
+        require(_newAdminAddr != address(0));
+        admin = _newAdminAddr;
+    }
+
+    function createNewMintableUser(address newAddr) public onlyadmin {
+        require(newAddr != address(0));
+        require(!mintable[newAddr]);
+        require(balances[newAddr] == 0);
+        mintable[newAddr] = true;
+    }
+
+    function deleteMintable(address addr) public onlyadmin {
+        require(mintable[addr]);
+        mintable[addr] = false;
+    }
+
+    function adminTransfer(address from, address to, uint256 value) public onlyadmin {
+        require(from != address(0));
+        require(to != address(0));
+        require(mintable[from]);
+
+        uint codeLength;
+        bytes memory empty;
+        assembly { codeLength := extcodesize(to) }
+
+        balances[from] = balances[from].sub(value);
+        balances[to]   = balances[to].add(value);
+
+        if (codeLength > 0) {
+            DNCReceivingContract receiver = DNCReceivingContract(to);
+            receiver.tokenFallback(from, value, empty);
+        }
+
+        Transfer(from, to, value);
+    }
+
+    function mintNewDNC(address user, uint256 quantity) public onlyadmin {
+        require(user != address(0));
+        require(mintable[user]);
+
+        totalSupply = totalSupply.add(quantity);
+        balances[user] = balances[user].add(quantity);
+
+        Minted(user, quantity);
+        Transfer(address(0), user, quantity);
+    }
+
+    function burnDNC(address user, uint256 quantity) public onlyadmin {
+        require(user != address(0));
+        require(mintable[user]);
+
+        balances[user] = balances[user].sub(quantity);
+        totalSupply    = totalSupply.sub(quantity);
+
+        Burned(user, quantity);
+        Transfer(user, address(0), quantity);
+    }
+}

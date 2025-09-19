@@ -1,0 +1,226 @@
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity 0.8.7;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
+
+/**
+ * @title ogreswampwtf
+ * @notice This contract is an implementation of an NFT collection with minting, revealing, and administrative functionalities.
+ * @dev Inherits from OpenZeppelin's ERC721 and Ownable contracts to manage NFTs and ownership.
+ */
+contract ogreswampwtf is ERC721, Ownable {
+    using Counters for Counters.Counter;
+    using Strings for uint256;
+
+    Counters.Counter private _tokenSupply;
+
+    // Base URI for revealed NFTs
+    string public ogreURI;
+    // File extension for metadata (e.g. ".json")
+    string public ogreExtension = ".json";
+    // Placeholder URI before reveal
+    string public SwampUri;
+
+    // Minting parameters
+    uint256 public cost = 0 ether;
+    uint256 public maxSupply = 3333;
+    uint256 public freeMints = 3333;
+    uint256 public maxMintAmount = 3;
+
+    // Sale state
+    bool public paused = false;
+    bool public revealed = false;
+
+    // Whitelist tracking
+    mapping(address => bool) public whitelisted;
+    // Free-mint usage per wallet (max 20 free mints each)
+    mapping(address => uint256) private freeMintsWallet;
+
+    /**
+     * @param _name           Name of the NFT collection.
+     * @param _symbol         Token symbol.
+     * @param _initOgreURI    Initial base URI for the NFTs.
+     * @param _initSwampUri   Initial placeholder URI (unrevealed state).
+     */
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        string memory _initOgreURI,
+        string memory _initSwampUri
+    ) ERC721(_name, _symbol) {
+        setOgreURI(_initOgreURI);
+        setSwampURI(_initSwampUri);
+    }
+
+    /**
+     * @notice Returns the total number of tokens minted so far.
+     * @return The current total supply of tokens.
+     */
+    function totalSupply() public view returns (uint256) {
+        return _tokenSupply.current();
+    }
+
+    /**
+     * @notice Internal override to provide the revealed base URI.
+     */
+    function _ogreURI() internal view virtual override returns (string memory) {
+        return ogreURI;
+    }
+
+    /**
+     * @notice Mints new tokens, handling free mint phase (whitelist) and paid mint phase.
+     * @param _to           Recipient address.
+     * @param _mintAmount   Number of tokens to mint.
+     */
+    function mint(address _to, uint256 _mintAmount) public payable {
+        require(!paused, "Minting is paused");
+        require(_mintAmount > 0, "Mint amount must be > 0");
+        require(_mintAmount <= maxMintAmount, "Exceeds max mint amount");
+        uint256 supply = totalSupply();
+        require(supply + _mintAmount <= maxSupply, "Exceeds max supply");
+
+        // Free mint phase
+        if (supply < freeMints) {
+            require(whitelisted[msg.sender], "Not whitelisted for free mint");
+            require(
+                freeMintsWallet[msg.sender] + _mintAmount <= 20,
+                "Exceeds free mint wallet limit"
+            );
+            require(
+                supply + _mintAmount <= freeMints,
+                "Free mint supply exhausted"
+            );
+            // Track free mints used
+            freeMintsWallet[msg.sender] += _mintAmount;
+        } else {
+            // Paid mint phase
+            require(msg.value >= cost * _mintAmount, "Insufficient ETH sent");
+        }
+
+        // Mint the tokens
+        for (uint256 i = 0; i < _mintAmount; i++) {
+            _tokenSupply.increment();
+            uint256 tokenId = _tokenSupply.current();
+            _safeMint(_to, tokenId);
+        }
+    }
+
+    /**
+     * @notice Returns the metadata URI for a given token.
+     * @param tokenId   ID of the token.
+     * @return URI string.
+     */
+    function tokenURI(uint256 tokenId)
+        public
+        view
+        virtual
+        override
+        returns (string memory)
+    {
+        require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+        if (!revealed) {
+            return SwampUri;
+        }
+        return string(
+            abi.encodePacked(
+                ogreURI,
+                tokenId.toString(),
+                ogreExtension
+            )
+        );
+    }
+
+    /**
+     * @notice Reveal the collection.
+     */
+    function reveal() public onlyOwner {
+        revealed = true;
+    }
+
+    /**
+     * @notice Update mint cost.
+     * @param _newCost   New cost in wei.
+     */
+    function setCost(uint256 _newCost) public onlyOwner {
+        cost = _newCost;
+    }
+
+    /**
+     * @notice Update the maximum mint amount per transaction.
+     * @param _newmaxMintAmount   New limit.
+     */
+    function setmaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+        maxMintAmount = _newmaxMintAmount;
+    }
+
+    /**
+     * @notice Update the placeholder (unrevealed) URI.
+     * @param _SwampURI   New placeholder URI.
+     */
+    function setSwampURI(string memory _SwampURI) public onlyOwner {
+        SwampUri = _SwampURI;
+    }
+
+    /**
+     * @notice Update the revealed base URI.
+     * @param _newOgreURI   New base URI.
+     */
+    function setOgreURI(string memory _newOgreURI) public onlyOwner {
+        ogreURI = _newOgreURI;
+    }
+
+    /**
+     * @notice Update the metadata file extension.
+     * @param _newOgreExtension   New extension (e.g. ".json").
+     */
+    function setOgreExtension(string memory _newOgreExtension) public onlyOwner {
+        ogreExtension = _newOgreExtension;
+    }
+
+    /**
+     * @notice Pause or unpause minting.
+     * @param _state   True to pause, false to resume.
+     */
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    /**
+     * @notice Add an address to the whitelist.
+     * @param _user   Address to whitelist.
+     */
+    function whitelistUser(address _user) public onlyOwner {
+        whitelisted[_user] = true;
+    }
+
+    /**
+     * @notice Remove an address from the whitelist.
+     * @param _user   Address to remove.
+     */
+    function removeWhitelistUser(address _user) public onlyOwner {
+        whitelisted[_user] = false;
+    }
+
+    /**
+     * @notice Withdraw contract balance to the owner.
+     */
+    function withdraw() public payable onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No ETH to withdraw");
+        (bool success, ) = owner().call{value: balance}("");
+        require(success, "Transfer failed");
+    }
+}
+```
+
+Explanation of key points:
+
+- **Counters** track the minted supply and assign sequential token IDs.
+- **Free mint phase** applies until `totalSupply() < freeMints`; only whitelisted addresses can mint for free (max 20 per wallet).
+- **Paid mint phase** requires paying `cost * amount`.
+- **Reveal logic** switches from showing `SwampUri` to the real metadata URIs.
+- Administrative functions (`pause`, `setCost`, whitelist management, etc.) are protected by `onlyOwner`.

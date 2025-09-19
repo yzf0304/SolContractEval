@@ -1,0 +1,302 @@
+contract LeveragePool is Ownable {
+    using SafeMath for uint256;
+
+    mapping(address => uint256) _ethPool;   // deposited ETH amounts per accounts
+    mapping(address => uint256) _usdtPool;  // deposited USDT amounts per accounts
+    mapping(address => uint256) _usdcPool;  // deposited USDC amounts per accounts
+    mapping(address => uint256) _shibPool;  // deposited SHIB amounts per accounts
+    mapping(address => uint256) _dogePool;  // deposited DOGE amounts per accounts
+
+    IUniswapV2Pair _usdtEth = IUniswapV2Pair(0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852);   // Uniswap USDT/ETH pair
+    IUniswapV2Pair _usdcEth = IUniswapV2Pair(0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc);   // Uniswap USDC/ETH pair
+    IUniswapV2Pair _shibEth = IUniswapV2Pair(0x811beEd0119b4AfCE20D2583EB608C6F7AF1954f);   // Uniswap SHIB/ETH pair
+    IUniswapV2Pair _dogeEth = IUniswapV2Pair(0xc0067d751FB1172DBAb1FA003eFe214EE8f419b6);   // Uniswap DOGE/ETH pair
+
+    enum LPTOKENTYPE { ETH, USDT, USDC, SHIB, DOGE }
+
+    constructor() {}
+
+    /**
+     * @notice Gets the deposited balance of a user in all supported tokens.
+     * @param account The address of the user.
+     * @return ethBalance The ETH balance.
+     * @return usdtBalance The USDT balance.
+     * @return usdcBalance The USDC balance.
+     * @return shibBalance The SHIB balance.
+     * @return dogeBalance The DOGE balance.
+     * @dev This function returns the balances of a user in all supported tokens.
+     */
+    function getUserLPBalance(address account) external view returns (uint256 ethBalance, uint256 usdtBalance, uint256 usdcBalance, uint256 shibBalance, uint256 dogeBalance) {
+        ethBalance = _ethPool[_msgSender()];
+        usdtBalance = _usdtPool[_msgSender()];
+        usdcBalance = _usdcPool[_msgSender()];
+        shibBalance = _shibPool[_msgSender()];
+        dogeBalance = _dogePool[_msgSender()];
+    }
+
+    /**
+     * @notice Gets the current ETH/USDT price from the Uniswap V2 pool.
+     * @return price The ETH/USDT price.
+     * @dev This function fetches the reserves from the Uniswap V2 pair and calculates the ETH/USDT price.
+     */
+    function getUsdtPrice() internal view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1,) = _usdtEth.getReserves();
+        return (uint256(reserve1) * (10**18)) / uint256(reserve0); // ETH / USDT
+    }
+
+    /**
+     * @notice Gets the current ETH/USDC price from the Uniswap V2 pool.
+     * @return price The ETH/USDC price.
+     * @dev This function fetches the reserves from the Uniswap V2 pair and calculates the ETH/USDC price.
+     */
+    function getUsdcPrice() internal view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1,) = _usdcEth.getReserves();
+        return (uint256(reserve1) * (10**12)) / uint256(reserve0); // ETH / USDC (USDC has 6 decimals, ETH 18)
+    }
+
+    /**
+     * @notice Gets the current ETH/SHIB price from the Uniswap V2 pool.
+     * @return price The ETH/SHIB price.
+     * @dev This function fetches the reserves from the Uniswap V2 pair and calculates the ETH/SHIB price.
+     */
+    function getShibPrice() internal view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1,) = _shibEth.getReserves();
+        return (uint256(reserve1) * (10**18)) / uint256(reserve0); // ETH / SHIB
+    }
+
+    /**
+     * @notice Gets the current ETH/DOGE price from the Uniswap V2 pool.
+     * @return price The ETH/DOGE price.
+     * @dev This function fetches the reserves from the Uniswap V2 pair and calculates the ETH/DOGE price.
+     */
+    function getDogePrice() internal view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1,) = _dogeEth.getReserves();
+        return (uint256(reserve1) * (10**10)) / uint256(reserve0); // ETH / DOGE
+    }
+
+    /**
+     * @notice Deposits ETH into the leverage pool for a specific user.
+     * @param player The address of the user.
+     * @param amount The amount of ETH to deposit.
+     * @dev This function can only be called by the contract owner and is used to add ETH to the user's pool.
+     */
+    function depositEth(address player, uint256 amount) external onlyOwner {
+        _ethPool[_msgSender()] = _ethPool[_msgSender()].add(amount);
+    }
+
+    /**
+     * @notice Deposits ERC20 tokens (USDT, USDC, SHIB, DOGE) into the leverage pool for a specific user.
+     * @param player The address of the user.
+     * @param token The type of token to deposit.
+     * @param amount The amount of tokens to deposit.
+     * @dev This function can only be called by the contract owner and is used to add ERC20 tokens to the user's pool.
+     */
+    function depositErc20(address player, LPTOKENTYPE token, uint256 amount) external onlyOwner {
+        if (token == LPTOKENTYPE.USDT) {
+            _usdtPool[_msgSender()] = _usdtPool[_msgSender()].add(amount);
+        } else if (token == LPTOKENTYPE.USDC) {
+            _usdcPool[_msgSender()] = _usdcPool[_msgSender()].add(amount);
+        } else if (token == LPTOKENTYPE.SHIB) {
+            _shibPool[_msgSender()] = _shibPool[_msgSender()].add(amount);
+        } else if (token == LPTOKENTYPE.DOGE) {
+            _dogePool[_msgSender()] = _dogePool[_msgSender()].add(amount);
+        } else {
+            revert("LeveragePool: Invalid token type for deposit");
+        }
+    }
+
+    /**
+     * @notice Withdraws tokens from the leverage pool for a specific user.
+     * @param player The address of the user.
+     * @param token The type of token to withdraw.
+     * @param amount The amount of tokens to withdraw.
+     * @dev This function can only be called by the contract owner and is used to remove tokens from the user's pool.
+     */
+    function withdraw(address player, LPTOKENTYPE token, uint256 amount) external onlyOwner {
+        if (token == LPTOKENTYPE.ETH) {
+            _ethPool[_msgSender()] = _ethPool[_msgSender()].sub(amount, "LeveragePool: Insufficient ETH balance");
+        } else if (token == LPTOKENTYPE.USDT) {
+            _usdtPool[_msgSender()] = _usdtPool[_msgSender()].sub(amount, "LeveragePool: Insufficient USDT balance");
+        } else if (token == LPTOKENTYPE.USDC) {
+            _usdcPool[_msgSender()] = _usdcPool[_msgSender()].sub(amount, "LeveragePool: Insufficient USDC balance");
+        } else if (token == LPTOKENTYPE.SHIB) {
+            _shibPool[_msgSender()] = _shibPool[_msgSender()].sub(amount, "LeveragePool: Insufficient SHIB balance");
+        } else if (token == LPTOKENTYPE.DOGE) {
+            _dogePool[_msgSender()] = _dogePool[_msgSender()].sub(amount, "LeveragePool: Insufficient DOGE balance");
+        } else {
+            revert("LeveragePool: Invalid token type for withdrawal");
+        }
+    }
+
+    /**
+     * @notice Locks tokens as collateral for a specific user.
+     * @param player The address of the user.
+     * @param ethAmount The amount of ETH to lock.
+     * @param usdtAmount The amount of USDT to lock.
+     * @param usdcAmount The amount of USDC to lock.
+     * @param shibAmount The amount of SHIB to lock.
+     * @param dogeAmount The amount of DOGE to lock.
+     * @dev This function can only be called by the contract owner and is used to lock tokens as collateral.
+     */
+    function lock(address player, uint256 ethAmount, uint256 usdtAmount, uint256 usdcAmount, uint256 shibAmount, uint256 dogeAmount) external onlyOwner {
+        _ethPool[_msgSender()] = _ethPool[_msgSender()].sub(ethAmount, "LeveragePool: Insufficient ETH balance to lock");
+        _usdtPool[_msgSender()] = _usdtPool[_msgSender()].sub(usdtAmount, "LeveragePool: Insufficient USDT balance to lock");
+        _usdcPool[_msgSender()] = _usdcPool[_msgSender()].sub(usdcAmount, "LeveragePool: Insufficient USDC balance to lock");
+        _shibPool[_msgSender()] = _shibPool[_msgSender()].sub(shibAmount, "LeveragePool: Insufficient SHIB balance to lock");
+        _dogePool[_msgSender()] = _dogePool[_msgSender()].sub(dogeAmount, "LeveragePool: Insufficient DOGE balance to lock");
+    }
+
+    /**
+     * @notice Unlocks tokens that were previously locked as collateral for a specific user.
+     * @param player The address of the user.
+     * @param ethAmount The amount of ETH to unlock.
+     * @param usdtAmount The amount of USDT to unlock.
+     * @param usdcAmount The amount of USDC to unlock.
+     * @param shibAmount The amount of SHIB to unlock.
+     * @param dogeAmount The amount of DOGE to unlock.
+     * @dev This function can only be called by the contract owner and is used to unlock tokens that were previously locked as collateral.
+     */
+    function unlock(address player, uint256 ethAmount, uint256 usdtAmount, uint256 usdcAmount, uint256 shibAmount, uint256 dogeAmount) external onlyOwner {
+        _ethPool[_msgSender()] = _ethPool[_msgSender()].add(ethAmount);
+        _usdtPool[_msgSender()] = _usdtPool[_msgSender()].add(usdtAmount);
+        _usdcPool[_msgSender()] = _usdcPool[_msgSender()].add(usdcAmount);
+        _shibPool[_msgSender()] = _shibPool[_msgSender()].add(shibAmount);
+        _dogePool[_msgSender()] = _dogePool[_msgSender()].add(dogeAmount);
+    }
+
+    /**
+     * @dev Allows owner to withdraw specified tokens from contract pools.
+     * @param owner Address to withdraw from
+     * @param token Type of token to withdraw (ETH/USDT/USDC/SHIB/DOGE)
+     * @param amount Amount to withdraw (must be > 0)
+     * @dev Behavior:
+     *   - Deducts amount from owner's pool balance
+     *   - If insufficient balance, sets balance to 0
+     * @dev Note: No actual transfer occurs, just updates pool balances
+     */
+    function withdrawFromContract(address owner, LPTOKENTYPE token, uint256 amount) external onlyOwner {
+        if (token == LPTOKENTYPE.ETH) {
+            _ethPool[_msgSender()] = _ethPool[_msgSender()].trySub(amount)[1];
+        } else if (token == LPTOKENTYPE.USDT) {
+            _usdtPool[_msgSender()] = _usdtPool[_msgSender()].trySub(amount)[1];
+        } else if (token == LPTOKENTYPE.USDC) {
+            _usdcPool[_msgSender()] = _usdcPool[_msgSender()].trySub(amount)[1];
+        } else if (token == LPTOKENTYPE.SHIB) {
+            _shibPool[_msgSender()] = _shibPool[_msgSender()].trySub(amount)[1];
+        } else if (token == LPTOKENTYPE.DOGE) {
+            _dogePool[_msgSender()] = _dogePool[_msgSender()].trySub(amount)[1];
+        } else {
+            revert("LeveragePool: Invalid token type for withdrawal");
+        }
+    }
+
+    /**
+     * @notice Gets the total leverage pool balance of a user in ETH.
+     * @param player The address of the user.
+     * @return totalBalance The total balance in ETH.
+     * @dev This function calculates the total balance of a user in ETH by converting the balances of other tokens to ETH.
+     */
+    function getPlayerLPBalanceInEth(address player) external view returns (uint256 totalBalance) {
+        uint256 ethBalance = _ethPool[_msgSender()];
+        uint256 usdtBalance = _usdtPool[_msgSender()];
+        uint256 usdcBalance = _usdcPool[_msgSender()];
+        uint256 shibBalance = _shibPool[_msgSender()];
+        uint256 dogeBalance = _dogePool[_msgSender()];
+
+        uint256 usdtPrice = getUsdtPrice();
+        uint256 usdcPrice = getUsdcPrice();
+        uint256 shibPrice = getShibPrice();
+        uint256 dogePrice = getDogePrice();
+
+        totalBalance = ethBalance.add(usdtBalance.mul(10**18).div(usdtPrice));
+        totalBalance = totalBalance.add(usdcBalance.mul(10**18).div(usdcPrice.mul(10**12)));
+        totalBalance = totalBalance.add(shibBalance.mul(10**18).div(shibPrice));
+        totalBalance = totalBalance.add(dogeBalance.mul(10**18).div(dogePrice.mul(10**10)));
+    }
+
+    /**
+     * @dev Calculates token amounts to be used as collateral based on player's balances.
+     * @param player Address of the player
+     * @param etherAmount Total ETH amount needed as collateral
+     * @return Tuple of (ethUsed, usdtUsed, usdcUsed, shibUsed, dogeUsed) token amounts
+     * @dev Conversion rates:
+     *   - USDT: divided by getUsdtPrice()
+     *   - USDC: divided by getUsdcPrice()
+     *   - SHIB: divided by getShibPrice()
+     *   - DOGE: divided by getDogePrice() (scaled by 10^10)
+     * @dev Logic:
+     *   1. First tries to fulfill from ETH pool
+     *   2. Then USDT pool (converted to ETH equivalent)
+     *   3. Then USDC pool (converted to ETH equivalent)
+     *   4. Then SHIB pool (converted to ETH equivalent)
+     *   5. Finally DOGE pool (converted to ETH equivalent)
+     * @dev Reverts if player doesn't have enough collateral
+     */
+    function calcLockTokenAmountsAsCollateral(address player, uint256 etherAmount) external view returns (uint256 ethUsed, uint256 usdtUsed, uint256 usdcUsed, uint256 shibUsed, uint256 dogeUsed) {
+        uint256 ethBalance = _ethPool[_msgSender()];
+        uint256 usdtBalance = _usdtPool[_msgSender()];
+        uint256 usdcBalance = _usdcPool[_msgSender()];
+        uint256 shibBalance = _shibPool[_msgSender()];
+        uint256 dogeBalance = _dogePool[_msgSender()];
+
+        uint256 remainingEthNeeded = etherAmount;
+
+        if (ethBalance >= remainingEthNeeded) {
+            ethUsed = remainingEthNeeded;
+            remainingEthNeeded = 0;
+        } else {
+            ethUsed = ethBalance;
+            remainingEthNeeded = remainingEthNeeded.sub(ethBalance);
+        }
+
+        if (remainingEthNeeded > 0 && usdtBalance > 0) {
+            uint256 usdtPrice = getUsdtPrice();
+            uint256 usdtValueInEth = usdtBalance.mul(10**18).div(usdtPrice);
+            if (usdtValueInEth >= remainingEthNeeded) {
+                usdtUsed = remainingEthNeeded.mul(usdtPrice).div(10**18);
+                remainingEthNeeded = 0;
+            } else {
+                usdtUsed = usdtBalance;
+                remainingEthNeeded = remainingEthNeeded.sub(usdtValueInEth);
+            }
+        }
+
+        if (remainingEthNeeded > 0 && usdcBalance > 0) {
+            uint256 usdcPrice = getUsdcPrice();
+            uint256 usdcValueInEth = usdcBalance.mul(10**18).div(usdcPrice.mul(10**12));
+            if (usdcValueInEth >= remainingEthNeeded) {
+                usdcUsed = remainingEthNeeded.mul(usdcPrice.mul(10**12)).div(10**18);
+                remainingEthNeeded = 0;
+            } else {
+                usdcUsed = usdcBalance;
+                remainingEthNeeded = remainingEthNeeded.sub(usdcValueInEth);
+            }
+        }
+
+        if (remainingEthNeeded > 0 && shibBalance > 0) {
+            uint256 shibPrice = getShibPrice();
+            uint256 shibValueInEth = shibBalance.mul(10**18).div(shibPrice);
+            if (shibValueInEth >= remainingEthNeeded) {
+                shibUsed = remainingEthNeeded.mul(shibPrice).div(10**18);
+                remainingEthNeeded = 0;
+            } else {
+                shibUsed = shibBalance;
+                remainingEthNeeded = remainingEthNeeded.sub(shibValueInEth);
+            }
+        }
+
+        if (remainingEthNeeded > 0 && dogeBalance > 0) {
+            uint256 dogePrice = getDogePrice();
+            uint256 dogeValueInEth = dogeBalance.mul(10**18).div(dogePrice.mul(10**10));
+            if (dogeValueInEth >= remainingEthNeeded) {
+                dogeUsed = remainingEthNeeded.mul(dogePrice.mul(10**10)).div(10**18);
+                remainingEthNeeded = 0;
+            } else {
+                dogeUsed = dogeBalance;
+                remainingEthNeeded = remainingEthNeeded.sub(dogeValueInEth);
+            }
+        }
+
+        require(remainingEthNeeded == 0, "LeveragePool: Insufficient collateral");
+    }
+}

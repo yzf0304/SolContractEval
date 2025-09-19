@@ -1,0 +1,358 @@
+Below is a complete, self‐contained `DaiProxy` implementation in Solidity 0.5.12, strictly following the interfaces and requirements you provided. All internal math is done in RAY (10^27), and Maker pot/vat interactions (join/exit, drip) are handled according to the simplified interfaces.
+
+```solidity
+pragma solidity 0.5.12;
+
+// --- Provided interfaces ---
+
+contract ReserveLike {
+    function depositToken(address, string memory, bytes memory, uint) public;
+}
+
+contract WrappedDaiLike {
+    function setProxy(address) public;
+    function setReserve(address) public;
+    uint    public totalSupply;
+    function approve(address, uint) public returns (bool);
+    function mint(address, uint) public;
+    function burn(address, uint) public;
+}
+
+contract DaiLike {
+    function approve(address, uint) public returns (bool);
+    function transferFrom(address, address, uint) public returns (bool);
+}
+
+contract JoinLike {
+    DaiLike public dai;
+    VatLike public vat;
+    function join(address, uint) public;
+    function exit(address, uint) public;
+}
+
+contract PotLike {
+    mapping(address => uint) public pie;
+    uint    public chi;
+    VatLike public vat;
+    uint    public rho;
+    function drip() public returns (uint);
+    function join(uint) public;
+    function exit(uint) public;
+}
+
+contract VatLike {
+    mapping(address => uint) public dai;
+    function hope(address) public;
+    function move(address, address, uint) public;
+}
+
+// --- DaiProxy Implementation ---
+
+/**
+ * @title DaiProxy
+ * @notice A proxy contract for managing DAI and its wrapped versions, including deposit,
+ *         withdrawal, swap and migration functionalities.
+ */
+contract DaiProxy {
+    string public constant version = "0511";
+
+    // --- Owner ---
+    address public owner;
+    modifier onlyOwner {
+        require(msg.sender == owner, "only owner");
+        _;
+    }
+    event SetOwner(address owner);
+    function setOwner(address _owner) public onlyOwner {
+        require(_owner != address(0), "zero address");
+        owner = _owner;
+        emit SetOwner(_owner);
+    }
+
+    // --- States ---
+    enum State { Ready, Running, Killed }
+    State public state = State.Ready;
+    modifier notStarted {
+        require(state == State.Ready, "already started");
+        _;
+    }
+    modifier notPaused {
+        require(state == State.Running, "not running");
+        _;
+    }
+
+    // --- Math in RAY (1e27) ---
+    uint constant ONE = 10**27;
+    function add(uint a, uint b) private pure returns (uint) {
+        uint c = a + b;
+        require(c >= a, "add-overflow");
+        return c;
+    }
+    function sub(uint a, uint b) private pure returns (uint) {
+        require(b <= a, "sub-underflow");
+        return a - b;
+    }
+    function mul(uint a, uint b) private pure returns (uint) {
+        if (a == 0) return 0;
+        uint c = a * b;
+        require(c / a == b, "mul-overflow");
+        return c;
+    }
+    function div(uint a, uint b) private pure returns (uint) {
+        require(b > 0, "div-zero");
+        return a / b;
+    }
+    function ceil(uint a, uint b) private pure returns (uint) {
+        // ceil(a / b)
+        return div(add(a, b - 1), b);
+    }
+    function muldiv(uint a, uint b, uint c) private pure returns (uint) {
+        // a * b / c
+        return div(mul(a, b), c);
+    }
+
+    // --- External Contracts ---
+    DaiLike    public Dai;
+    JoinLike   public Join;
+    PotLike    public Pot;
+    VatLike    public Vat;
+    ReserveLike public Reserve;
+    WrappedDaiLike public EDai;
+    WrappedDaiLike public ODai;
+
+    // --- Constructor ---
+    constructor(
+        address dai,
+        address join,
+        address pot,
+        address vat,
+        address eDai,
+        address oDai
+    )
+        public
+    {
+        owner = msg.sender;
+
+        Dai  = DaiLike(dai);
+        Join = JoinLike(join);
+        Pot  = PotLike(pot);
+        Vat  = VatLike(vat);
+
+        EDai = WrappedDaiLike(eDai);
+        ODai = WrappedDaiLike(oDai);
+
+        // sanity checks
+        require(address(Join.dai()) == dai, "join/dai mismatch");
+        require(address(Join.vat()) == vat, "join/vat mismatch");
+        require(address(Pot.vat()) == vat, "pot/vat mismatch");
+
+        // approve vat adapters
+        Vat.hope(pot);
+        Vat.hope(join);
+
+        // approve unlimited DAI to join
+        require(Dai.approve(join, uint(-1)), "dai approve join");
+    }
+
+    // --- Reserve Setup ---
+    event SetReserve(address reserve);
+    function setReserve(address reserve) public onlyOwner {
+        require(reserve != address(0), "zero reserve");
+        Reserve = ReserveLike(reserve);
+
+        // configure wrapped tokens
+        EDai.setReserve(reserve);
+        ODai.setReserve(reserve);
+
+        // give reserve infinite allowance to pull eDai/oDai
+        require(EDai.approve(reserve, uint(-1)), "EDai.approve");
+        require(ODai.approve(reserve, uint(-1)), "ODai.approve");
+
+        emit SetReserve(reserve);
+    }
+
+    // --- Wrapped Token Callers ---
+    modifier onlyEDai {
+        require(msg.sender == address(EDai), "only eDai");
+        _;
+    }
+    modifier onlyODai {
+        require(msg.sender == address(ODai), "only oDai");
+        _;
+    }
+
+    // --- Maker Integration Helpers ---
+    /// @dev sync and return current chi
+    function chi() private returns (uint) {
+        Pot.drip();
+        return Pot.chi();
+    }
+
+    /// @dev pull DAI from msg.sender, join vat then pot
+    function joinDai(uint wad) private {
+        require(Dai.transferFrom(msg.sender, address(this), wad), "dai.transferFrom");
+        Join.join(address(this), wad);
+        // convert to pie = wad * RAY / chi
+        uint pie = muldiv(wad, ONE, chi());
+        Pot.join(pie);
+    }
+
+    /// @dev exit from pot and vat, send underlying to `to`
+    function exitDai(address to, uint wad) private {
+        // compute pie to exit
+        uint pie = ceil(mul(wad, ONE), chi());
+        Pot.exit(pie);
+        Join.exit(to, wad);
+    }
+
+    /// @dev mint oDai = principal only
+    function mintODai(address to, uint wad) private returns (uint) {
+        ODai.mint(to, wad);
+        return wad;
+    }
+
+    // --- Deposit to Reserve ---
+    function depositEDai(string memory toChain, uint wad, bytes memory to) public notPaused {
+        // user provides DAI
+        joinDai(wad);
+        // mint eDai shares
+        uint pie = muldiv(wad, ONE, chi());
+        EDai.mint(address(this), pie);
+        // deposit into reserve
+        Reserve.depositToken(address(EDai), toChain, to, pie);
+    }
+
+    function depositODai(string memory toChain, uint wad, bytes memory to) public notPaused {
+        // user provides DAI principal
+        joinDai(wad);
+        // mint oDai = principal
+        mintODai(address(this), wad);
+        // deposit into reserve
+        Reserve.depositToken(address(ODai), toChain, to, wad);
+    }
+
+    // --- Swap / Withdraw Internals ---
+    function swapFromEDai(address from, address to, uint wad) private {
+        // burn wrapped shares
+        uint pie = ceil(mul(wad, ONE), chi());
+        EDai.burn(from, pie);
+        // return underlying by exiting
+        exitDai(to, wad);
+    }
+    function swapFromODai(address from, address to, uint wad) private {
+        ODai.burn(from, wad);
+        exitDai(to, wad);
+    }
+
+    // --- Public Withdrawals (called by wrapped tokens) ---
+    function withdrawEDai(address to, uint wad) public onlyEDai notPaused {
+        swapFromEDai(msg.sender, to, wad);
+    }
+    function withdrawODai(address to, uint wad) public onlyODai notPaused {
+        swapFromODai(msg.sender, to, wad);
+    }
+
+    // --- Swaps for Users ---
+    function swapToEDai(uint wad) public notPaused {
+        joinDai(wad);
+        uint pie = muldiv(wad, ONE, chi());
+        EDai.mint(msg.sender, pie);
+    }
+    function swapToODai(uint wad) public notPaused {
+        joinDai(wad);
+        mintODai(msg.sender, wad);
+    }
+    function swapFromEDai(uint wad) public notPaused {
+        swapFromEDai(msg.sender, msg.sender, wad);
+    }
+    function swapFromODai(uint wad) public notPaused {
+        swapFromODai(msg.sender, msg.sender, wad);
+    }
+
+    // --- Migration to New Proxy ---
+    DaiProxy public NewProxy;
+    event SetNewProxy(address proxy);
+    event StartProxy(address prev);
+    event KillProxy(address next, bool migrated);
+
+    modifier onlyNewProxy {
+        require(msg.sender == address(NewProxy), "only new proxy");
+        _;
+    }
+
+    function setNewProxy(address proxy) public onlyOwner {
+        require(proxy != address(0), "zero new proxy");
+        NewProxy = DaiProxy(proxy);
+        emit SetNewProxy(proxy);
+    }
+
+    /// @notice kill without migrating: exit all DAI out to `to`
+    function killProxy(address to) public notPaused onlyOwner {
+        state = State.Killed;
+        // exit all pot shares
+        uint pie = Pot.pie(address(this));
+        Pot.exit(pie);
+        // flush underlying
+        uint wad = Vat.dai(address(this));
+        Join.exit(to, wad);
+        emit KillProxy(address(NewProxy), false);
+    }
+
+    /// @notice migrate internal balances into NewProxy
+    function migrateProxy() public notPaused onlyNewProxy {
+        state = State.Killed;
+        // exit pot
+        uint pie = Pot.pie(address(this));
+        Pot.exit(pie);
+        // move vat.dai credit into NewProxy
+        uint wad = Vat.dai(address(this));
+        Vat.move(address(this), address(NewProxy), wad);
+        // reconfigure EDai/ODai proxy targets
+        EDai.setProxy(address(NewProxy));
+        ODai.setProxy(address(NewProxy));
+        emit KillProxy(address(NewProxy), true);
+    }
+
+    /// @notice start accepting deposits/swaps
+    function startProxy(address oldProxy) public notStarted onlyOwner {
+        state = State.Running;
+        // if oldProxy had internal vat.dai, move it over
+        if (oldProxy != address(0)) {
+            uint wad = Vat.dai(oldProxy);
+            Vat.move(oldProxy, address(this), wad);
+        }
+        emit StartProxy(oldProxy);
+    }
+}
+```
+
+Explanation of key parts:
+
+1. **State Management**  
+   - `Ready` → `Running` via `startProxy`  
+   - `Running` → normal operations  
+   - `Running` → `Killed` via `killProxy` or `migrateProxy`  
+
+2. **Maker Integration**  
+   - `joinDai` pulls ERC-20 DAI from the user, deposits it into the Vat via `Join.join`, then into the Pot via `Pot.join`.  
+   - `exitDai` computes the needed Pot shares, calls `Pot.exit`, then `Join.exit` to return underlying DAI.  
+   - The internal `chi()` function always calls `Pot.drip()` before reading the up-to-date accumulator.  
+
+3. **Wrapped Tokens**  
+   - **eDai** is interest-bearing: its supply is denominated in Pot-shares (`pie`).  
+   - **oDai** is principal-only: its supply directly equals DAI-norm.  
+   - Both supply/mint/burn through the `WrappedDaiLike` interface.  
+
+4. **Reserve Deposits**  
+   - You first convert user DAI into the matching wrapped‐token, then invoke `Reserve.depositToken(tokenAddr, toChain, to, amount)`.  
+
+5. **Swaps & Withdrawals**  
+   - *To* wrapped tokens: `swapToEDai` / `swapToODai`  
+   - *From* wrapped tokens: `swapFromEDai` / `swapFromODai` (public overloads for users, private for Reserve callbacks)  
+
+6. **Migration**  
+   - `setNewProxy` announces the next proxy.  
+   - `migrateProxy` (called *by* the new proxy) drains Pot shares, moves Vat credits, and re-points the eDai/oDai wrappers.  
+   - `killProxy` (owner action) drains everything to an EOA when no migration is desired.  
+
+All function signatures, state‐changes, and events mirror your specification exactly.

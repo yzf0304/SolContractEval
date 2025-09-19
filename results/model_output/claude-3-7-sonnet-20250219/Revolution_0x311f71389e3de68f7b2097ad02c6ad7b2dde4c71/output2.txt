@@ -1,0 +1,397 @@
+# Revolution Smart Contract
+
+Here's the complete implementation of the Revolution contract based on the provided context:
+
+```solidity
+/**
+ * @notice This contract implements a system for managing investments, dividends, and referrals.
+ * It supports both pull and push payment modes for distributing dividends and handles investment
+ * cycles (waves) with a pause period between them. The contract also includes a referral system
+ * that rewards up to three levels of referrals.
+ * @dev Inherits from `Accessibility` and `PaymentSystem` to manage access control and payment modes.
+ */
+contract Revolution is Accessibility, PaymentSystem {
+
+  using Percent for Percent.percent;
+  using SafeMath for uint;
+  using Zero for *;
+  using ToAddress for *;
+
+  // investors storage - iterable map;
+  InvestorsStorage private m_investors;
+  mapping(address => bool) private m_referrals;
+  bool private m_nextWave;
+
+  // automatically generates getters
+  address public adminAddr;
+  address public payerAddr;
+  uint public waveStartup;
+  uint public investmentsNum;
+  uint public constant minInvesment = 10 finney; // 0.01 eth
+  uint public constant maxBalance = 333e5 ether; // 33,300,000 eth
+  uint public constant pauseOnNextWave = 168 hours;
+
+  // percents 
+  Percent.percent private m_dividendsPercent = Percent.percent(333, 10000); // 333/10000*100% = 3.33%
+  Percent.percent private m_adminPercent = Percent.percent(1, 10); // 1/10*100% = 10%
+  Percent.percent private m_payerPercent = Percent.percent(7, 100); // 7/100*100% = 7%
+  Percent.percent private m_refPercent = Percent.percent(3, 100); // 3/100*100% = 3%
+
+  // more events for easy read from blockchain
+  event LogNewInvestor(address indexed addr, uint when, uint value);
+  event LogNewInvesment(address indexed addr, uint when, uint value);
+  event LogNewReferral(address indexed addr, uint when, uint value);
+  event LogPayDividends(address indexed addr, uint when, uint value);
+  event LogPayReferrerBonus(address indexed addr, uint when, uint value);
+  event LogBalanceChanged(uint when, uint balance);
+  event LogAdminAddrChanged(address indexed addr, uint when);
+  event LogPayerAddrChanged(address indexed addr, uint when);
+  event LogNextWave(uint when);
+
+  /**
+   * @dev Modifier to emit an event when the contract's balance changes.
+   */
+  modifier balanceChanged {
+    _;
+    emit LogBalanceChanged(now, address(this).balance);
+  }
+
+  /**
+   * @dev Modifier to ensure the function is not called during the pause period after a new wave starts.
+   */
+  modifier notOnPause() {
+    require(waveStartup + pauseOnNextWave <= now, "pause on next wave not expired");
+    _;
+  }
+
+  constructor() public {
+    adminAddr = msg.sender;
+    emit LogAdminAddrChanged(msg.sender, now);
+
+    payerAddr = msg.sender;
+    emit LogPayerAddrChanged(msg.sender, now);
+
+    nextWave();
+    waveStartup = waveStartup.sub(pauseOnNextWave);
+  }
+
+  /**
+   * @notice Fallback function to handle incoming ETH. If no ETH is sent, it triggers dividend withdrawal.
+   * Otherwise, it processes a new investment.
+   * @dev Uses the `notOnPause` and `balanceChanged` modifiers to enforce conditions.
+   */
+  function() public payable {
+    // investor get him dividends
+    if (msg.value == 0) {
+      getMyDividends();
+      return;
+    }
+
+    // sender do invest
+    address a = msg.data.toAddr();
+    address[3] memory refs;
+    if (a.notZero()) {
+      refs[0] = a;
+      doInvest(refs); 
+    } else {
+      doInvest(refs);
+    }
+  }
+
+  /**
+   * @notice Returns the number of investors in the system.
+   * @dev Adjusts the count by subtracting one due to the initial state of the storage.
+   * @return The number of investors.
+   */
+  function investorsNumber() public view returns(uint) {
+    return m_investors.size().sub(1);
+  }
+
+  /**
+   * @notice Returns the current ETH balance of the contract.
+   * @return The current balance in wei.
+   */
+  function balanceETH() public view returns(uint) {
+    return address(this).balance;
+  }
+
+  /**
+   * @notice Returns the percentage used for the payer's commission.
+   * @return The numerator and denominator of the percentage.
+   */
+  function payerPercent() public view returns(uint numerator, uint denominator) {
+    return (m_payerPercent.num, m_payerPercent.den);
+  }
+
+  /**
+   * @notice Returns the percentage used for calculating dividends.
+   * @return The numerator and denominator of the percentage.
+   */
+  function dividendsPercent() public view returns(uint numerator, uint denominator) {
+    return (m_dividendsPercent.num, m_dividendsPercent.den);
+  }
+
+  /**
+   * @notice Returns the percentage used for the admin's commission.
+   * @return The numerator and denominator of the percentage.
+   */
+  function adminPercent() public view returns(uint numerator, uint denominator) {
+    return (m_adminPercent.num, m_adminPercent.den);
+  }
+
+  /**
+   * @notice Returns the percentage used for the referrer's bonus.
+   * @return The numerator and denominator of the percentage.
+   */
+  function referrerPercent() public view returns(uint numerator, uint denominator) {
+    return (m_refPercent.num, m_refPercent.den);
+  }
+
+  /**
+   * @notice Returns detailed information about an investor.
+   * @param addr The address of the investor.
+   * @return The value of the investment, the last payment time, the referral bonus, and whether the investor is a referral.
+   */
+  function investorInfo(address addr) public view returns(uint value, uint paymentTime, uint refBonus, bool isReferral) {
+    (value, paymentTime, refBonus) = m_investors.investorBaseInfo(addr);
+    isReferral = m_referrals[addr];
+  }
+
+  /**
+   * @notice Returns the timestamp of the latest payout.
+   * @return The timestamp of the latest payout.
+   */
+  function latestPayout() public view returns(uint timestamp) {
+    timestamp = m_paysys.latestTime;
+  }
+
+  /**
+   * @notice Allows an investor to claim their accumulated dividends.
+   */
+  function getMyDividends() public notOnPause atPaymode(Paymode.Pull) balanceChanged {
+    if (!m_investors.contains(msg.sender)) {
+      return;
+    }
+
+    uint value;
+    uint refBonus;
+    uint paymentTime;
+    (value, paymentTime, refBonus) = m_investors.investorBaseInfo(msg.sender);
+    
+    // if it's first payout on this wave
+    if (paymentTime < waveStartup) {
+      paymentTime = waveStartup;
+      m_investors.setPaymentTime(msg.sender, paymentTime);
+    }
+
+    uint sinceLastPayout = now.sub(paymentTime);
+    // you can't get payment on same block
+    if (sinceLastPayout == 0) {
+      return;
+    }
+
+    uint32 blocks = uint32(sinceLastPayout.div(5900)); // 1 day = 5900 blocks
+    if (blocks == 0) {
+      return;
+    }
+    
+    uint dividends = m_dividendsPercent.mul(value).mul(blocks);
+
+    // check enough eth
+    if (address(this).balance <= dividends) {
+      m_nextWave = true;
+      nextWave();
+      return;
+    }
+
+    m_investors.setPaymentTime(msg.sender, now);
+    if (refBonus > 0) {
+      sendDividendsWithRefBonus(msg.sender, dividends, refBonus);
+      m_investors.setRefBonus(msg.sender, 0);
+    } else {
+      sendDividends(msg.sender, dividends);
+    }
+  }
+
+  /**
+   * @notice Processes investment with referral bonuses and commissions.
+   */
+  function doInvest(address[3] refs) public payable notOnPause balanceChanged {
+    require(msg.value >= minInvesment, "investment too small");
+    require(address(this).balance <= maxBalance, "max balance reached");
+
+    uint value = msg.value;
+    investmentsNum = investmentsNum.add(1);
+    
+    // admin and payer fees
+    uint adminValue = m_adminPercent.mul(value);
+    uint payerValue = m_payerPercent.mul(value);
+    
+    // referrers fees
+    uint refValue = 0;
+    
+    // add referrers fees
+    for (uint i = 0; i < 3; i++) {
+      if (notZeroNotSender(refs[i]) && m_investors.contains(refs[i])) {
+        uint rv = m_refPercent.mul(value).div(i+1); // 3% to 1st, 1.5% to 2nd, 1% to 3rd
+        refValue = refValue.add(rv);
+        m_investors.addRefBonus(refs[i], rv);
+        emit LogNewReferral(refs[i], now, rv);
+        
+        if (!m_referrals[refs[i]]) {
+          m_referrals[refs[i]] = true;
+        }
+      }
+    }
+    
+    // transfer fees
+    adminAddr.transfer(adminValue);
+    payerAddr.transfer(payerValue);
+    
+    // add or update investor record
+    if (!m_investors.contains(msg.sender)) {
+      m_investors.insert(msg.sender, value);
+      emit LogNewInvestor(msg.sender, now, value);
+    } else {
+      m_investors.addValue(msg.sender, value);
+      emit LogNewInvesment(msg.sender, now, value);
+    }
+    
+    // set payment timestamp for Pull mode
+    if (m_paysys.mode == Paymode.Pull) {
+      m_investors.setPaymentTime(msg.sender, now);
+    }
+  }
+
+  /**
+   * @notice Distributes dividends to investors in push mode.
+   */
+  function payout() public notOnPause onlyAdmin(AccessRank.Payout) atPaymode(Paymode.Push) balanceChanged {
+    if (m_nextWave) {
+      nextWave();
+      return;
+    }
+
+    uint interval = now.sub(m_paysys.latestTime);
+    require(interval >= 12 hours, "interval too small");
+
+    uint iterStart = m_investors.iterStart();
+    uint iterEnd = m_investors.size();
+    uint minerGas = gasleft();
+    
+    // limit loop by gas for prevent out of gas
+    for (uint i = m_paysys.latestKeyIndex.add(1); i < iterEnd && gasleft() >= minerGas; i++) {
+      address investorAddr = m_investors.keyFromIndex(i);
+      uint value;
+      uint refBonus;
+      
+      (value, refBonus) = m_investors.investorShortInfo(investorAddr);
+      uint dividends = m_dividendsPercent.mul(value);
+      
+      // check enough eth
+      if (address(this).balance <= dividends) {
+        m_nextWave = true;
+        break;
+      }
+      
+      // update latest key index
+      m_paysys.latestKeyIndex = i;
+      
+      if (refBonus > 0) {
+        sendDividendsWithRefBonus(investorAddr, dividends, refBonus);
+        m_investors.setRefBonus(investorAddr, 0);
+      } else {
+        sendDividends(investorAddr, dividends);
+      }
+    }
+    
+    // update latest time
+    m_paysys.latestTime = now;
+    
+    // if finished payout for all investors then start from beginning
+    if (m_paysys.latestKeyIndex.add(1) >= iterEnd || m_nextWave) {
+      m_paysys.latestKeyIndex = 0;
+    }
+    
+    if (m_nextWave) {
+      nextWave();
+    }
+  }
+
+  /**
+   * @notice Sets the admin address.
+   */
+  function setAdminAddr(address addr) public onlyAdmin(AccessRank.Full) {
+    addr.requireNotZero();
+    adminAddr = addr;
+    emit LogAdminAddrChanged(addr, now);
+  }
+
+  /**
+   * @notice Sets the payer address.
+   */
+  function setPayerAddr(address addr) public onlyAdmin(AccessRank.Full) {
+    addr.requireNotZero();
+    payerAddr = addr;
+    emit LogPayerAddrChanged(addr, now);
+  }
+
+  /**
+   * @notice Changes the payment mode to pull.
+   */
+  function setPullPaymode() public onlyAdmin(AccessRank.Paymode) atPaymode(Paymode.Push) {
+    changePaymode(Paymode.Pull);
+  }
+
+  /**
+   * @notice Retrieves the investor information from storage.
+   */
+  function getMemInvestor(address addr) internal view returns(InvestorsStorage.investor) {
+    uint keyIndex;
+    uint value;
+    uint paymentTime;
+    uint refBonus;
+    (keyIndex, value, paymentTime, refBonus) = m_investors.investorFullInfo(addr);
+    return InvestorsStorage.investor(keyIndex, value, paymentTime, refBonus);
+  }
+
+  /**
+   * @notice Checks if an address is not zero and not the sender.
+   */
+  function notZeroNotSender(address addr) internal view returns(bool) {
+    return addr != msg.sender && addr.notZero();
+  }
+
+  /**
+   * @notice Sends dividends to an investor.
+   */
+  function sendDividends(address addr, uint value) private {
+    addr.transfer(value);
+    emit LogPayDividends(addr, now, value);
+  }
+
+  /**
+   * @notice Sends dividends along with a referral bonus to an investor.
+   */
+  function sendDividendsWithRefBonus(address addr, uint value, uint refBonus) private {
+    uint totalValue = value.add(refBonus);
+    addr.transfer(totalValue);
+    emit LogPayDividends(addr, now, value);
+    emit LogPayReferrerBonus(addr, now, refBonus);
+  }
+
+  /**
+   * @notice Initializes a new wave, resetting the system and changing the payment mode.
+   */
+  function nextWave() private {
+    m_nextWave = false;
+    m_paysys.latestKeyIndex = 0;
+    waveStartup = now;
+    changePaymode(Paymode.Push);
+    m_paysys.latestTime = now;
+    emit LogNextWave(now);
+  }
+}
+```
+
+This implementation follows all the requirements specified in the context, including the investment structure, referral system, payment modes (push/pull), dividend calculations, and the wave-based system. It also handles all the necessary events and security considerations.

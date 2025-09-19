@@ -1,0 +1,263 @@
+Here is the completed code for the DaiProxy contract:
+
+```solidity
+pragma solidity 0.5.12;
+
+contract DaiProxy {
+    string public constant version = "0511";
+
+    address public owner;
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    event SetOwner(address owner);
+
+    function setOwner(address _owner) public onlyOwner {
+        owner = _owner;
+        emit SetOwner(_owner);
+    }
+
+    enum State { Ready, Running, Killed }
+    State public state = State.Ready;
+
+    modifier notStarted {
+        require(state == State.Ready);
+        _;
+    }
+
+    modifier notPaused {
+        require(state == State.Running);
+        _;
+    }
+
+    uint constant ONE = 10 ** 27;
+
+    function add(uint a, uint b) private pure returns (uint) {
+        uint c = a + b;
+        require(c >= a, "overflow");
+        return c;
+    }
+
+    function sub(uint a, uint b) private pure returns (uint) {
+        require(b <= a, "underflow");
+        return a - b;
+    }
+
+    function mul(uint a, uint b) private pure returns (uint) {
+        if (a == 0) return 0;
+        uint c = a * b;
+        require(c / a == b, "overflow");
+        return c;
+    }
+
+    function div(uint a, uint b) private pure returns (uint) {
+        require(b != 0, "div by zero");
+        return a / b;
+    }
+
+    function ceil(uint a, uint b) private pure returns (uint) {
+        require(b != 0, "div by zero");
+        if (a == 0) return 0;
+        return (a - 1) / b + 1;
+    }
+
+    function muldiv(uint a, uint b, uint c) private pure returns (uint) {
+        require(c != 0, "div by zero");
+        uint d = a * b;
+        require(d / a == b, "overflow");
+        return d / c;
+    }
+
+    DaiLike public Dai;
+    JoinLike public Join;
+    PotLike public Pot;
+    VatLike public Vat;
+
+    ReserveLike public Reserve;
+
+    WrappedDaiLike public EDai;
+    WrappedDaiLike public ODai;
+
+    event SetReserve(address reserve);
+
+    constructor(address dai, address join, address pot, address vat, address eDai, address oDai) public {
+        owner = msg.sender;
+
+        Dai = DaiLike(dai);
+        Join = JoinLike(join);
+        Pot = PotLike(pot);
+        Vat = VatLike(vat);
+
+        EDai = WrappedDaiLike(eDai);
+        ODai = WrappedDaiLike(oDai);
+
+        require(address(Join.dai()) == dai);
+        require(address(Join.vat()) == vat);
+        require(address(Pot.vat()) == vat);
+
+        Vat.hope(pot);
+        Vat.hope(join);
+
+        require(Dai.approve(join, uint(-1)));
+    }
+
+    function setReserve(address reserve) public onlyOwner {
+        Reserve = ReserveLike(reserve);
+        EDai.setReserve(reserve);
+        ODai.setReserve(reserve);
+        emit SetReserve(reserve);
+    }
+
+    modifier onlyEDai {
+        require(msg.sender == address(EDai));
+        _;
+    }
+
+    modifier onlyODai {
+        require(msg.sender == address(ODai));
+        _;
+    }
+
+    function chi() private returns (uint) {
+        Pot.drip();
+        return Pot.chi();
+    }
+
+    function joinDai(uint dai) private {
+        Join.join(address(this), dai);
+        uint _chi = chi();
+        uint pie = muldiv(dai, ONE, _chi);
+        Pot.join(pie);
+    }
+
+    function exitDai(address to, uint dai) private {
+        uint _chi = chi();
+        uint pie = muldiv(dai, ONE, _chi);
+        Pot.exit(pie);
+        Join.exit(to, dai);
+    }
+
+    function mintODai(address to, uint dai) private returns (uint) {
+        joinDai(dai);
+        uint _chi = chi();
+        uint wad = muldiv(dai, ONE, _chi);
+        ODai.mint(to, wad);
+        return wad;
+    }
+
+    function depositEDai(string memory toChain, uint dai, bytes memory to) public notPaused {
+        require(Dai.transferFrom(msg.sender, address(this), dai), "Dai transfer failed");
+        joinDai(dai);
+        EDai.mint(address(this), dai);
+        Reserve.depositToken(address(EDai), toChain, to, dai);
+    }
+
+    function depositODai(string memory toChain, uint dai, bytes memory to) public notPaused {
+        uint wad = mintODai(address(this), dai);
+        Reserve.depositToken(address(ODai), toChain, to, wad);
+    }
+
+    function swapFromEDai(address from, address to, uint dai) private {
+        EDai.burn(from, dai);
+        exitDai(to, dai);
+    }
+
+    function swapFromODai(address from, address to, uint wad) private {
+        ODai.burn(from, wad);
+        uint _chi = chi();
+        uint dai = muldiv(wad, _chi, ONE);
+        exitDai(to, dai);
+    }
+
+    function withdrawEDai(address to, uint dai) public onlyEDai notPaused {
+        swapFromEDai(msg.sender, to, dai);
+    }
+
+    function withdrawODai(address to, uint wad) public onlyODai notPaused {
+        swapFromODai(msg.sender, to, wad);
+    }
+
+    function swapToEDai(uint dai) public notPaused {
+        require(Dai.transferFrom(msg.sender, address(this), dai), "Dai transfer failed");
+        joinDai(dai);
+        EDai.mint(msg.sender, dai);
+    }
+
+    function swapToODai(uint dai) public notPaused {
+        require(Dai.transferFrom(msg.sender, address(this), dai), "Dai transfer failed");
+        mintODai(msg.sender, dai);
+    }
+
+    function swapFromEDai(uint dai) public notPaused {
+        EDai.burn(msg.sender, dai);
+        exitDai(msg.sender, dai);
+    }
+
+    function swapFromODai(uint wad) public notPaused {
+        ODai.burn(msg.sender, wad);
+        uint _chi = chi();
+        uint dai = muldiv(wad, _chi, ONE);
+        exitDai(msg.sender, dai);
+    }
+
+    DaiProxy public NewProxy;
+
+    event SetNewProxy(address proxy);
+    event StartProxy(address prev);
+    event KillProxy(address next, bool mig);
+
+    modifier onlyNewProxy {
+        require(msg.sender == address(NewProxy));
+        _;
+    }
+
+    function setNewProxy(address proxy) public onlyOwner {
+        NewProxy = DaiProxy(proxy);
+        emit SetNewProxy(proxy);
+    }
+
+    function killProxy(address to) public notPaused onlyOwner {
+        state = State.Killed;
+        uint pie = Pot.pie(address(this));
+        Pot.exit(pie);
+        uint vatDai = Vat.dai(address(this));
+        Join.exit(to, vatDai);
+        emit KillProxy(address(0), false);
+    }
+
+    function migrateProxy() public notPaused onlyNewProxy {
+        state = State.Killed;
+        uint pie = Pot.pie(address(this));
+        Pot.exit(pie);
+        uint vatDai = Vat.dai(address(this));
+        Join.exit(address(NewProxy), vatDai);
+        NewProxy.startProxy(address(this));
+        emit KillProxy(address(NewProxy), true);
+    }
+
+    function startProxy(address oldProxy) public notStarted onlyOwner {
+        state = State.Running;
+        if (oldProxy != address(0)) {
+            uint dai = Dai.balanceOf(oldProxy);
+            require(Dai.transferFrom(oldProxy, address(this), dai), "transfer failed");
+            joinDai(dai);
+        }
+        emit StartProxy(oldProxy);
+    }
+}
+```
+
+This implementation includes all required functions with proper access control, state management, and integration with the MakerDAO components. Key features include:
+
+1. Safe math operations with overflow/underflow checks
+2. Proper integration with DAI Join/Pot mechanics
+3. Wrapped token (eDAI/oDAI) minting/burning logic
+4. Cross-chain reserve deposits
+5. Migration functionality between proxy versions
+6. State management (Ready/Running/Killed)
+7. Comprehensive error handling and require statements
+
+The code follows Solidity 0.5.12 syntax and best practices while adhering strictly to the provided specifications and interface requirements.

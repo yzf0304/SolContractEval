@@ -1,0 +1,149 @@
+To complete the smart contract OMNIDOORS according to the provided context and description, you can use the following code:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract OMNIDOORS is Ownable, ERC721 {
+    address public _owner;
+    string private baseURI;
+    uint256 nextTokenId = 5900;
+    uint256 MAX_NETWORK_MINT = 9300;
+
+    uint256 gasForDestinationLzReceive = 350000;
+
+    /**
+     * @notice Initializes the contract with the provided base URI and LayerZero endpoint.
+     * @dev Mints 330 tokens to the contract owner upon deployment.
+     * @param baseURI_ The base URI for the NFTs.
+     * @param _layerZeroEndpoint The LayerZero endpoint address.
+     */
+    constructor(string memory baseURI_, address _layerZeroEndpoint)
+        ERC721("Omni Doors", "odoors")
+    {
+        _owner = msg.sender;
+        baseURI = baseURI_;
+        for (uint256 i = 0; i < 330; i++) {
+            _safeMint(_owner, ++nextTokenId);
+        }
+    }
+
+    /**
+     * @notice Allows users to mint up to one NFT per transaction.
+     * @dev Checks if the number of tokens to mint does not exceed the maximum allowed per transaction and the total supply limit.
+     * @param numTokens The number of tokens to mint (must be 1).
+     */
+    function mint(uint8 numTokens) external payable {
+        require(numTokens == 1, "Can only mint one token at a time");
+        require(totalSupply() + numTokens <= MAX_NETWORK_MINT, "Exceeds maximum network mint limit");
+        _safeMint(msg.sender, ++nextTokenId);
+    }
+
+    /**
+     * @dev Transfers an NFT to another chain via LayerZero.
+     * Requirements
+     * - Caller must be the NFT owner
+     * - Destination chain must be available in trustedRemoteLookup
+     * Process
+     * 1. Verifies ownership and chain availability
+     * 2. Burns the NFT on source chain
+     * 3. Prepares payload with sender and token ID
+     * 4. Sets adapter parameters for gas requirements
+     * 5. Estimates message fees (refundable excess)
+     * 6. Sends cross-chain message with payment
+     * @param _chainId Destination chain ID
+     * @param tokenId ID of the NFT to transfer
+     * @notice Emits Transfer event when burning the NFT
+     * @dev
+     * - Uses LayerZero endpoint for cross-chain messaging
+     * - msg.value covers message delivery fees
+     * - Refunds unused gas sent with msg.value
+     * - Requires trustedRemoteLookup[_chainId] to be set
+     */
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        require(ownerOf(tokenId) == msg.sender, "Caller must be the NFT owner");
+        require(bytes(trustedRemoteLookup[_chainId]).length > 0, "Destination chain not available");
+        
+        _burn(msg.sender, tokenId);
+        
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+        bytes memory adapterParams = abi.encode(gasForDestinationLzReceive);
+        
+        (uint256 nativeFee, uint256 zroFee) = endpoint.estimateFees(_chainId, address(this), payload, true, adapterParams);
+        
+        require(msg.value >= nativeFee, "Insufficient payment for message delivery");
+        
+        endpoint.send{value: msg.value}( _chainId, trustedRemoteLookup[_chainId], payload, msg.sender, msg.sender, adapterParams);
+        
+        if (msg.value > nativeFee) {
+            payable(msg.sender).transfer(msg.value - nativeFee);
+        }
+    }
+
+    /**
+     * @notice Allows the contract owner to set the base URI for the NFTs.
+     * @dev Only the contract owner can call this function.
+     * @param URI The new base URI.
+     */
+    function setBaseURI(string memory URI) external onlyOwner {
+        baseURI = URI;
+    }
+
+    /**
+     * @notice Allows anyone to donate ETH to the contract.
+     * @dev This function is payable and can receive ETH.
+     */
+    function donate() external payable {}
+
+    /**
+     * @notice Allows the contract owner to withdraw a specified amount of ETH from the contract.
+     * @dev Only the contract owner can call this function.
+     * @param amt The amount of ETH to withdraw.
+     */
+    function withdraw(uint256 amt) external onlyOwner {
+        require(address(this).balance >= amt, "Insufficient balance");
+        payable(msg.sender).transfer(amt);
+    }
+
+    /**
+     * @notice Allows the contract owner to set the gas for the destination LayerZero receive function.
+     * @dev Only the contract owner can call this function.
+     * @param newVal The new gas value.
+     */
+    function setGasForDestinationLzReceive(uint256 newVal) external onlyOwner {
+        gasForDestinationLzReceive = newVal;
+    }
+
+    /**
+     * @notice Internal function to handle LayerZero messages.
+     * @dev Decodes the payload and mints the NFT on the destination chain.
+     * @param _srcChainId The source chain ID.
+     * @param _srcAddress The source address.
+     * @param _nonce The nonce of the message.
+     * @param _payload The encoded payload.
+     */
+    function _LzReceive(
+        uint16 _srcChainId,
+        bytes memory _srcAddress,
+        uint64 _nonce,
+        bytes memory _payload
+    ) internal override {
+        (address sender, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        _safeMint(sender, tokenId);
+    }
+
+    /**
+     * @notice Returns the base URI for the NFTs.
+     * @dev Overrides the _baseURI function from ERC721.
+     * @return The base URI.
+     */
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+}
+```
+
+This code completes the OMNIDOORS smart contract as per the provided context and description. It includes functionalities for minting NFTs, transferring NFTs across chains using LayerZero, setting base URI, donating and withdrawing funds, and setting gas for LayerZero receive function.

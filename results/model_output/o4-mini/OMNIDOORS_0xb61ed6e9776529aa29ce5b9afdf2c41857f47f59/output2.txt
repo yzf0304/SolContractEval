@@ -1,0 +1,167 @@
+```
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+import "./Ownable.sol";
+import "./ERC721.sol";
+import "./NonblockingReceiver.sol";
+import "./ILayerZeroEndpoint.sol";
+
+contract OMNIDOORS is Ownable, ERC721, NonblockingReceiver {
+    // user‐defined owner (for initial minting)
+    address public _owner;
+
+    // base URI for token metadata
+    string private baseURI;
+
+    // next token ID to be issued
+    uint256 private nextTokenId = 5900;
+
+    // maximum token ID that may be minted on this chain
+    uint256 private constant MAX_NETWORK_MINT = 9300;
+
+    // gas to forward to destination lzReceive
+    uint256 public gasForDestinationLzReceive = 350000;
+
+    /**
+     * @param baseURI_           initial base URI for token metadata
+     * @param _layerZeroEndpoint LayerZero endpoint to send/receive messages
+     */
+    constructor(string memory baseURI_, address _layerZeroEndpoint)
+        ERC721("Omni Doors", "odoors")
+    {
+        // set up ownership for ERC721 and NonblockingReceiver
+        _owner = msg.sender;
+        // configure LayerZero endpoint
+        endpoint = ILayerZeroEndpoint(_layerZeroEndpoint);
+        // set base URI
+        baseURI = baseURI_;
+        // mint initial 330 tokens to owner
+        for (uint256 i = 0; i < 330; i++) {
+            _safeMint(_owner, ++nextTokenId);
+        }
+    }
+
+    /**
+     * @notice Mint exactly one new token to the caller
+     * @param numTokens must be 1
+     */
+    function mint(uint8 numTokens) external payable {
+        require(numTokens == 1, "Can only mint 1 per tx");
+        // enforce global supply cap
+        require(
+            nextTokenId + numTokens <= MAX_NETWORK_MINT,
+            "Exceeds max supply"
+        );
+        // mint
+        nextTokenId++;
+        _safeMint(msg.sender, nextTokenId);
+    }
+
+    /**
+     * @notice Burn a token on this chain and send a message to mint it on another chain
+     * @param _chainId  destination chain ID
+     * @param tokenId   token to traverse
+     */
+    function traverseChains(uint16 _chainId, uint256 tokenId)
+        public
+        payable
+    {
+        // ownership check
+        require(ownerOf(tokenId) == msg.sender, "Not token owner");
+        // target chain must be trusted
+        bytes memory remote = trustedRemoteLookup[_chainId];
+        require(remote.length > 0, "Destination chain not set");
+
+        // burn locally
+        _burn(tokenId);
+
+        // prepare payload (recipient + tokenId)
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        // adapter parameters: version = 1, gas forward
+        bytes memory adapterParams = abi.encodePacked(
+            uint16(1),
+            gasForDestinationLzReceive
+        );
+
+        // calculate fees
+        (uint256 messageFee, ) = endpoint.estimateFees(
+            _chainId,
+            address(this),
+            payload,
+            false,
+            adapterParams
+        );
+        require(msg.value >= messageFee, "Insufficient msg.value");
+
+        // send cross‐chain
+        _lzSend(
+            _chainId,
+            payload,
+            payable(msg.sender),
+            address(0),
+            adapterParams
+        );
+    }
+
+    /**
+     * @notice Change the base URI for all tokens
+     * @param URI new base URI
+     */
+    function setBaseURI(string memory URI) external onlyOwner {
+        baseURI = URI;
+    }
+
+    /**
+     * @notice Donate ETH to this contract
+     */
+    function donate() external payable {
+        // Intentionally left blank so contract can receive ETH
+    }
+
+    /**
+     * @notice Withdraw collected ETH
+     * @param amt amount to withdraw in wei
+     */
+    function withdraw(uint256 amt) external onlyOwner {
+        require(address(this).balance >= amt, "Insufficient balance");
+        payable(msg.sender).transfer(amt);
+    }
+
+    /**
+     * @notice Adjust gas to forward to destination lzReceive
+     * @param newVal new gas amount
+     */
+    function setGasForDestinationLzReceive(uint256 newVal)
+        external
+        onlyOwner
+    {
+        gasForDestinationLzReceive = newVal;
+    }
+
+    /**
+     * @dev internal handler for inbound LayerZero messages
+     */
+    function _LzReceive(
+        uint16, /* _srcChainId */
+        bytes memory, /* _srcAddress */
+        uint64, /* _nonce */
+        bytes memory _payload
+    ) internal override {
+        // decode and mint
+        (address toAddr, uint256 tkId) = abi.decode(
+            _payload,
+            (address, uint256)
+        );
+        _safeMint(toAddr, tkId);
+    }
+
+    /**
+     * @dev returns base URI for ERC721
+     */
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+}
+```

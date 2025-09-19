@@ -1,0 +1,101 @@
+```solidity
+/**
+ * @title DNCEQUITY
+ * @notice This contract implements a basic token following the ERC223 standard with additional functionalities like minting, burning, and admin-controlled transfers.
+ * @dev The contract includes an admin role for managing mintable users, transferring tokens, and minting/burning tokens. The decimals are fixed at 18.
+ */
+contract DNCEQUITY is ERC223BasicToken {
+    using SafeMath for uint256;
+
+    address admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping (address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    /**
+     * @notice Initializes the contract and sets the admin to the contract deployer.
+     * @dev The admin is set to the address that deploys the contract.
+     */
+    function DNCEQUITY() {
+        admin = msg.sender;
+    }
+
+    /**
+     * @notice Modifier to restrict access to only the admin.
+     * @dev Ensures that the function can only be called by the admin.
+     */
+    modifier onlyadmin { if (msg.sender == admin) _; }
+
+    /**
+     * @notice Allows the current admin to change the admin to a new address.
+     * @dev Only the current admin can call this function.
+     * @param _newAdminAddr The address of the new admin.
+     */
+    function changeAdmin(address _newAdminAddr) onlyadmin {
+        admin = _newAdminAddr;
+    }
+
+    /**
+     * @notice Allows the admin to create a new mintable user.
+     * @dev Only the admin can call this function. The user must not have any existing balance.
+     * @param newAddr The address of the new mintable user.
+     */
+    function createNewMintableUser(address newAddr) onlyadmin {
+        require(balances[newAddr] == 0);
+        mintable[newAddr] = true;
+    }
+
+    /**
+     * @notice Allows the admin to remove the mintable status from a user.
+     * @dev Only the admin can call this function.
+     * @param addr The address of the user to remove mintable status from.
+     */
+    function deleteMintable(address addr) onlyadmin {
+        mintable[addr] = false;
+    }
+
+    /**
+     * @notice Allows the admin to transfer tokens from one address to another.
+     * @dev Only the admin can call this function. The `from` address must be mintable.
+     * @param from The address to transfer tokens from.
+     * @param to The address to transfer tokens to.
+     * @param value The amount of tokens to transfer.
+     */
+    function adminTransfer(address from, address to, uint256 value) onlyadmin {
+        require(mintable[from]);
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        Transfer(from, to, value);
+    }
+
+    /**
+     * @notice Allows the admin to mint new tokens to a specified user.
+     * @dev Only the admin can call this function. The user must be mintable.
+     * @param user The address of the user to receive the new tokens.
+     * @param quantity The amount of tokens to mint.
+     */
+    function mintNewDNC(address user, uint256 quantity) onlyadmin {
+        require(mintable[user]);
+        balances[user] = balances[user].add(quantity);
+        totalSupply = totalSupply.add(quantity);
+        Minted(user, quantity);
+    }
+
+    /**
+     * @notice Allows the admin to burn tokens from a specified user.
+     * @dev Only the admin can call this function. The user must be mintable.
+     * @param user The address of the user to burn tokens from.
+     * @param quantity The amount of tokens to burn.
+     */
+    function burnDNC(address user, uint256 quantity) onlyadmin {
+        require(mintable[user]);
+        balances[user] = balances[user].sub(quantity);
+        totalSupply = totalSupply.sub(quantity);
+        Burned(user, quantity);
+    }
+}
+```

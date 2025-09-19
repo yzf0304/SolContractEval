@@ -1,0 +1,375 @@
+```solidity
+pragma solidity ^0.4.17;
+
+/**
+ * @title MatBase
+ * @dev This contract is a base for a token crowdsale, including functionalities like minting tokens,
+ *      managing the whitelist, and handling token purchases. It inherits from Ownable, MatToken, and MatBonus.
+ * @notice Manages the crowdsale process, including setting start and end times, managing funds, and minting tokens.
+ */
+contract MatBase is Ownable, MatToken, MatBonus {
+
+    using SafeMath for uint256;
+
+    /**
+     * @notice The start date of the crowdsale.
+     * @dev Set to 1508284800 (Wednesday, 18-Oct-17 00:00:00 UTC in RFC 2822).
+     */
+    uint256 public constant _START_DATE = 1508284800;
+
+    /**
+     * @notice The end date of the crowdsale.
+     * @dev Set to 1513641600 (Tuesday, 19-Dec-17 00:00:00 UTC in RFC 2822).
+     */
+    uint256 public constant _END_DATE = 1513641600;
+
+    /**
+     * @notice The price of tokens per ETH during the crowdsale.
+     * @dev Set to 100 MAT per ETH.
+     */
+    uint256 public constant CROWDSALE_PRICE = 100;
+
+    /**
+     * @notice The address where the crowdsale funds are collected.
+     * @dev Set to 0x6075a5A0620861cfeF593a51A01aF0fF179168C7.
+     */
+    address public constant ICO_ADDRESS = 0x6075a5A0620861cfeF593a51A01aF0fF179168C7;
+
+    /**
+     * @notice The wallet address for partners.
+     * @dev Set to 0x39467d5B39F1d24BC8479212CEd151ad469B0D7E.
+     */
+    address public constant PARTNERS_WALLET = 0x39467d5B39F1d24BC8479212CEd151ad469B0D7E;
+
+    /**
+     * @notice The wallet address for the team.
+     * @dev Set to 0xe1d32147b08b2a7808026D4A94707E321ccc7150.
+     */
+    address public constant TEAM_WALLET = 0xe1d32147b08b2a7808026D4A94707E321ccc7150;
+
+    /**
+     * @notice The start time of the crowdsale.
+     * @dev Can be set by the owner.
+     */
+    uint256 public startTime;
+
+    /**
+     * @notice The end time of the crowdsale.
+     * @dev Can be set by the owner.
+     */
+    uint256 public endTime;
+
+    /**
+     * @dev Sets the start time of the crowdsale.
+     * @param _startTime The new start time.
+     */
+    function setStartTime(uint256 _startTime) onlyOwner public {
+        startTime = _startTime;
+    }
+
+    /**
+     * @dev Sets the end time of the crowdsale.
+     * @param _endTime The new end time.
+     */
+    function setEndTime(uint256 _endTime) onlyOwner public {
+        endTime = _endTime;
+    }
+
+    /**
+     * @notice The wallet address where the funds are collected.
+     * @dev Set to the ICO_ADDRESS.
+     */
+    address public wallet;
+
+    /**
+     * @notice The wallet address for partners.
+     * @dev Set to the PARTNERS_WALLET.
+     */
+    address public p_wallet;
+
+    /**
+     * @notice The wallet address for the team.
+     * @dev Set to the TEAM_WALLET.
+     */
+    address public t_wallet;
+
+    /**
+     * @notice The total amount of raised money in wei.
+     * @dev Updated when tokens are purchased.
+     */
+    uint256 public totalCollected;
+
+    /**
+     * @notice The rate at which tokens are sold per wei.
+     * @dev Set to the CROWDSALE_PRICE.
+     */
+    uint256 public rate;
+
+    /**
+     * @notice Checks if the crowdsale has ended.
+     * @dev Returns true if the current time is greater than the end time.
+     * @return True if the crowdsale has ended, false otherwise.
+     */
+    function hasEnded() public constant returns (bool) {
+        return now > endTime;
+    }
+
+    /**
+     * @dev Event emitted when tokens are minted.
+     * @param purchaser The address of the purchaser.
+     * @param amount The amount of tokens minted.
+     */
+    event Mint(address indexed purchaser, uint256 amount);
+
+    /**
+     * @dev Event emitted when a bonus is given.
+     * @param purchaser The address of the purchaser.
+     * @param amount The amount of the bonus.
+     */
+    event Bonus(address indexed purchaser, uint256 amount);
+
+    /**
+     * @dev Mints new tokens and assigns them to an account.
+     * @param _to The address to receive the tokens.
+     * @param _tokens The number of tokens to mint.
+     * @return True if the minting was successful.
+     */
+    function mint(address _to, uint256 _tokens) internal returns (bool) {
+        require(_to != address(0));
+        require(totalSupply.add(_tokens) <= MAT_TOTAL_SUPPLY_LIMIT);
+
+        totalSupply = totalSupply.add(_tokens);
+        balances[_to] = balances[_to].add(_tokens);
+        Mint(_to, _tokens);
+        Transfer(address(0), _to, _tokens); // follow the ERC20 standard and emit a Transfer event when minting
+        return true;
+    }
+
+    /**
+     * @dev Forwards the funds to the collection wallet.
+     */
+    function forwardFunds() internal {
+        wallet.transfer(msg.value);
+        totalCollected = totalCollected.add(msg.value);
+    }
+
+    /**
+     * @notice Checks if the transaction can buy tokens.
+     * @dev Ensures the purchase is within the valid period and non-zero.
+     * @return True if the purchase is valid, false otherwise.
+     */
+    function validPurchase() internal constant returns (bool) {
+        bool withinPeriod = now >= startTime && now <= endTime;
+        bool nonZeroPurchase = msg.value != 0;
+        return withinPeriod && nonZeroPurchase;
+    }
+
+    /**
+     * @dev Event emitted when tokens are purchased.
+     * @param purchaser The address of the purchaser.
+     * @param beneficiary The address of the beneficiary.
+     * @param value The amount of wei paid for the purchase.
+     * @param amountTokens The amount of tokens purchased.
+     * @param referral The referral string.
+     */
+    event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amountTokens, string referral);
+
+    /**
+     * @dev Fallback function to buy tokens.
+     */
+    function () payable {
+        buyTokens(msg.sender);
+    }
+
+    /**
+     * @notice Buys tokens for the sender.
+     * @param beneficiary The address to receive the tokens.
+     */
+    function buyTokens(address beneficiary) public payable {
+        buyTokensReferral(beneficiary, "");
+    }
+
+    /**
+     * @notice Buys tokens with a referral code.
+     * @param beneficiary The address to receive the tokens.
+     * @param referral The referral code.
+     */
+    function buyTokensReferral(address beneficiary, string referral) public payable {
+        require(beneficiary != address(0));
+        require(validPurchase());
+
+        uint256 tokens = msg.value.mul(rate);
+        
+        if (isWhitelistOn){
+             if(!buyTokenWL(tokens)) revert();
+        } else {
+            if (!mint(beneficiary, tokens)) revert();
+        }
+
+        uint256 bonus = calcBonus(tokens);
+        if (bonus > 0) {
+            if (!mint(beneficiary, bonus)) revert();
+            Bonus(beneficiary, bonus);
+        }
+
+        forwardFunds();
+
+        TokenPurchase(
+            msg.sender,
+            beneficiary,
+            msg.value,
+            tokens.add(bonus),
+            referral
+        );
+    }
+
+    /**
+     * @notice Checks if the whitelist is enabled.
+     * @dev Used to determine if the whitelist is active.
+     */
+    bool public isWhitelistOn;
+
+    /**
+     * @notice The limit for the whitelist.
+     * @dev Updated when reservations are made.
+     */
+    uint256 public whiteListLimit;
+
+    /**
+     * @dev Enum for the whitelist status.
+     */
+    enum WLS {notlisted, listed, fulfilled}
+
+    /**
+     * @dev Struct for fund reservations.
+     * @param status The status of the reservation.
+     * @param reserved The amount reserved.
+     */
+    struct FundReservation {
+        WLS status;
+        uint256 reserved;
+    }
+
+    /**
+     * @dev Mapping of addresses to their fund reservations.
+     */
+    mapping (address => FundReservation) whitelist;
+
+    /**
+     * @dev Stops the whitelist reservation.
+     */
+    function stopWhitelistReservetion() onlyOwner public {
+        isWhitelistOn = false;
+    }
+
+    /**
+     * @dev Sets the whitelist status.
+     * @param _isWhitelistOn The new whitelist status.
+     */
+    function setWhiteListStatus(bool _isWhitelistOn) onlyOwner public {
+        isWhitelistOn = _isWhitelistOn;
+    }
+
+    /**
+     * @dev Handles token purchases for whitelisted users.
+     * @param tokens The number of tokens to purchase.
+     * @return True if the purchase was successful, false otherwise.
+     */
+    function buyTokenWL(uint256 tokens) internal returns (bool) {
+        require(whitelist[msg.sender].status == WLS.listed || whitelist[msg.sender].status == WLS.fulfilled);
+        require(whiteListLimit >= tokens);
+        
+        if(whitelist[msg.sender].status == WLS.listed){
+            if(tokens > whitelist[msg.sender].reserved) return false;
+            if (!mint(msg.sender, tokens)) return false;
+            whiteListLimit = whiteListLimit.sub(tokens);
+            whitelist[msg.sender] = FundReservation(WLS.fulfilled, 0);
+            
+        } else if (whitelist[msg.sender].status == WLS.fulfilled){
+              if (!mint(msg.sender, tokens)) return false;
+             whiteListLimit = whiteListLimit.sub(tokens);
+        }
+       
+        return true;
+    }
+
+    /**
+     * @dev Event emitted when a user is added to the whitelist.
+     * @param to The address of the user.
+     * @param reservation The amount reserved.
+     */
+    event White(address indexed to, uint256 reservation);
+
+    /**
+     * @dev Registers a user on the whitelist.
+     * @param wlmember The address of the user.
+     * @param reservation The amount reserved.
+     * @return True if the registration was successful.
+     */
+    function regWL(address wlmember, uint256 reservation) onlyOwner public returns (bool) {
+        require(whitelist[wlmember].status == WLS.notlisted);
+        require(MAT_TOTAL_SUPPLY_LIMIT >= reservation);
+        whitelist[wlmember] = FundReservation(WLS.listed, reservation);
+        White(wlmember, reservation);
+        return true;
+    }
+
+    /**
+     * @notice The address of the presale contract.
+     * @dev Set to 0x503FE694CE047eCB51952b79eCAB2A907Afe8ACd.
+     */
+    address public constant PRESALE_CONTRACT = 0x503FE694CE047eCB51952b79eCAB2A907Afe8ACd;
+
+    /**
+     * @dev Converts presale tokens to main sale tokens.
+     * @param _to The address of the token holder.
+     * @param _pretokens The amount of presale tokens.
+     * @param _tokens The amount of main sale tokens to mint.
+     * @return True if the conversion was successful.
+     */
+    function convert(address _to, uint256 _pretokens, uint256 _tokens) onlyOwner public returns (bool) {
+         //Implement the logic to handle the conversion,
+        //potentially interacting with the Presale contract.
+        //This logic depends on how presale tokens are stored and managed.
+        //For example, one could call a function on the Presale contract,
+        //or use some other mechanism to verify the presale tokens
+        
+        //Placeholder: Assume some check against PRESALE_CONTRACT
+        //and then mint tokens.
+        
+        require(_to != address(0));
+        require(_pretokens > 0);
+
+        // Example check (needs adjustment based on actual presale contract design):
+        // Assume PRESALE_CONTRACT has a function `claim(_to, _pretokens)` that handles
+        // the presale token burning/validation and returns true if successful.
+
+        //if (Presale(PRESALE_CONTRACT).claim(_to, _pretokens)) { 
+            if (mint(_to, _tokens)) {
+                return true;
+            } else {
+                return false;
+            }
+        //} else {
+        //    return false;
+        //}
+    }
+
+    /**
+     * @dev Initializes the contract with the necessary parameters.
+     */
+    function MatBase() {
+        startTime = _START_DATE;
+        endTime = _END_DATE;
+        wallet = ICO_ADDRESS;
+        rate = CROWDSALE_PRICE;
+        p_wallet = PARTNERS_WALLET;
+        t_wallet = TEAM_WALLET;
+        balances[p_wallet] = MAT_PARTNERS_SUPPLY_LIMIT;
+        balances[t_wallet] = MAT_TEAM_SUPPLY_LIMIT;
+        totalSupply = MAT_PARTNERS_SUPPLY_LIMIT + MAT_TEAM_SUPPLY_LIMIT;
+        whiteListLimit = MAT_TOTAL_SUPPLY_LIMIT;
+        isWhitelistOn = false;
+    }
+}
+```

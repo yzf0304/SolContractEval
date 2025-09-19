@@ -1,0 +1,187 @@
+Below is the completed `UniqlyPresale4` smart contract based strictly on the provided context and descriptions. The implementation adheres to compiler version `0.8.2` and does not introduce any unrelated or extraneous dependencies or features.
+
+```solidity
+// SPDX-License-Identifier: Unlicense
+pragma solidity ^0.8.2;
+
+import "./IERC20.sol";
+
+/**
+ * @title UniqlyPresale4
+ * @notice A smart contract for managing a presale of a token, allowing users to contribute ETH within certain limits and time frames.
+ * @dev The contract ensures that the presale is conducted within specified parameters and allows for the withdrawal of funds by users or the owner.
+ */
+contract UniqlyPresale4 {
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+
+    uint256 constant failSafeTime = 2 weeks;
+
+    address public owner;
+    address public newOwner;
+
+    bool public presaleEnded;
+    bool public presaleFailed;
+    bool public presaleStarted;
+
+    mapping(address => uint256) private balances;
+
+    /**
+     * @notice Initializes the presale contract with the given parameters.
+     * @param _presaleLimit The maximum amount of ETH to be collected in the presale.
+     * @param _minPerUser The minimum amount of ETH a user can contribute.
+     * @param _maxPerUser The maximum amount of ETH a user can contribute.
+     * @param _presaleEnd The Unix timestamp at which the presale ends.
+     * @param _owner The address of the contract owner.
+     */
+    constructor(
+        uint256 _presaleLimit,
+        uint256 _minPerUser,
+        uint256 _maxPerUser,
+        uint256 _presaleEnd,
+        address _owner
+    ) {
+        require(_owner != address(0), "Invalid owner");
+        require(_presaleEnd > block.timestamp, "Presale end must be in the future");
+
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    /**
+     * @notice Allows users to contribute ETH to the presale.
+     */
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 amount = msg.value + balances[msg.sender];
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+
+        balances[msg.sender] = amount;
+
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    /**
+     * @notice Starts the presale, allowing users to contribute.
+     */
+    function start() external {
+        require(msg.sender == owner, "Only owner can start");
+        require(!presaleStarted, "Presale already started");
+        presaleStarted = true;
+    }
+
+    /**
+     * @notice Returns the balance of a specific user.
+     */
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    /**
+     * @notice Returns the balance of the caller.
+     */
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    /**
+     * @notice Returns the total amount of ETH collected in the presale.
+     */
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    /**
+     * @notice Allows withdrawal of funds based on presale status.
+     */
+    function withdraw() external returns (bool) {
+        if (!presaleEnded && block.timestamp > presaleEnd + failSafeTime) {
+            presaleFailed = true;
+        }
+
+        if (presaleFailed) {
+            uint256 userBalance = balances[msg.sender];
+            require(userBalance > 0, "No funds to withdraw");
+            balances[msg.sender] = 0;
+            send(msg.sender, userBalance);
+            return true;
+        } else if (presaleEnded && msg.sender == owner) {
+            send(owner, address(this).balance);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @notice Sends ETH from the contract to a specified address.
+     */
+    function send(address user, uint256 amount) private {
+        (bool success, ) = user.call{value: amount}("");
+        require(success, "Transfer failed");
+    }
+
+    /**
+     * @notice Allows the owner to withdraw any ERC20 tokens accidentally sent to the contract.
+     */
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Only owner can withdraw tokens");
+        uint256 balance = token.balanceOf(address(this));
+        require(balance > 0, "No tokens to withdraw");
+        token.transfer(owner, balance);
+    }
+
+    /**
+     * @notice Allows the current owner to delegate ownership to a new address.
+     */
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Only current owner can delegate ownership");
+        require(_newOwner != address(0), "Invalid new owner");
+        newOwner = _newOwner;
+    }
+
+    /**
+     * @notice Allows the new owner to accept the ownership of the contract.
+     */
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Only delegated owner can accept");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+```
+
+### Key Features:
+1. **Presale Contribution Logic**:
+   - Users can contribute ETH via the `receive` function while adhering to `minPerUser` and `maxPerUser` constraints.
+
+2. **Presale Start/End Conditions**:
+   - The presale can only be started by the owner.
+   - Presale ends either when the `presaleLimit` is reached or `presaleEnd` passes.
+
+3. **Withdrawal Mechanisms**:
+   - Owner can withdraw funds upon successful presale.
+   - Users can withdraw their contributions if the presale fails.
+
+4. **Ownership Transfer**:
+   - Ownership transfer follows a two-step process (`giveOwnership` and `acceptOwnership`).
+
+5. **ERC20 Token Recovery**:
+   - Owner can recover accidentally sent ERC20 tokens using the `withdrawAnyERC20` function.
+
+6. **Safety and Security**:
+   - Fail-safe mechanism ensures presale status determination after `failSafeTime`.
+   - `send` function with `call` ensures secure ETH transfers.
+
+This implementation strictly follows the provided description and avoids introducing any additional functionality.

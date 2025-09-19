@@ -1,0 +1,173 @@
+```solidity
+pragma solidity 0.6.12;
+
+import "@openzeppelin/contracts/access/[email protected]";
+import "@openzeppelin/contracts/token/ERC20/[email protected]";
+import "@openzeppelin/contracts/math/[email protected]";
+import "@openzeppelin/contracts/token/ERC20/[email protected]";
+import "@openzeppelin/contracts/utils/[email protected]";
+import "./helpers/UniERC20.sol";
+import "./interfaces/IChi.sol";
+import "./interfaces/IAggregationExecutor.sol";
+import "./helpers/RevertReasonParser.sol";
+import "./helpers/Permitable.sol";
+import "./UnoswapRouter.sol";
+
+/**
+ * @notice AggregationRouterV3 is a smart contract that facilitates token swaps and aggregations.
+ * It allows users to swap tokens with specific conditions and flags, and also includes functionality for
+ * rescuing funds and destroying the contract.
+ * @dev This contract inherits from Ownable and UnoswapRouter. It uses SafeMath, SafeERC20, and UniERC20
+ * for safe arithmetic and token operations. The contract supports various flags to control the behavior of
+ * the swap operations.
+ */
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     * @dev This function calls the `swap` function internally and handles CHI token burning based on the provided flags.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     * @return chiSpent The amount of CHI tokens burned.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        // Assume CHI is at address(1) for simplicity.  A real implementation would need a proper address.
+        IChi chi = IChi(address(1));
+        uint256 initialGas = gasleft();
+        uint256 initialChiBalance = chi.balanceOf(address(this));
+
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+
+        chiSpent = initialChiBalance.sub(chi.balanceOf(address(this)));
+
+        return (returnAmount, gasLeft, initialGas.sub(gasLeft));
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     * @dev This function checks the validity of the input parameters and performs the swap using the specified aggregation executor.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        require(address(desc.srcToken) != address(0), "srcToken cannot be zero address");
+        require(address(desc.dstToken) != address(0), "dstToken cannot be zero address");
+        require(desc.amount > 0, "Amount must be greater than zero");
+        require(address(desc.srcReceiver) != address(0), "srcReceiver can not be zero address");
+        require(address(desc.dstReceiver) != address(0), "dstReceiver can not be zero address");
+
+        if (desc.permit.length > 0) {
+            _permit(desc.srcToken, desc.amount, desc.permit);
+        }
+
+        uint256 initialSrcBalance = desc.srcToken.uniBalanceOf(desc.srcReceiver);
+        uint256 initialDstBalance = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+
+        if (desc.flags & _REQUIRES_EXTRA_ETH != 0) {
+          require(msg.value > 0, "ETH required for swap");
+        }
+
+        if (!UniERC20.isETH(desc.srcToken)) {
+            desc.srcToken.safeTransferFrom(desc.srcReceiver, address(this), desc.amount);
+        } else {
+            require(msg.value >= desc.amount, "Insufficient ETH sent");
+            if (msg.value > desc.amount) {
+              // Refund extra ETH if any
+              payable(msg.sender).transfer(msg.value.sub(desc.amount));
+            }
+        }
+
+        caller.callBytes{value: msg.value}(data);
+
+        returnAmount = desc.dstToken.uniBalanceOf(desc.dstReceiver).sub(initialDstBalance);
+
+        if (returnAmount < desc.minReturnAmount) {
+            revert("Min return not reached");
+        }
+
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+
+        gasLeft = gasleft();
+        return (returnAmount, gasLeft);
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     * @dev This function transfers the specified amount of a given token to the owner.
+     * @param token The token to be rescued.
+     * @param amount The amount of the token to be transferred.
+     */
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        uint256 balance = token.uniBalanceOf(address(this));
+        require(amount <= balance, "Amount exceeds contract balance");
+        token.uniTransfer(payable(owner()), amount);
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send any remaining ETH to the owner.
+     * @dev This function self-destructs the contract and sends the remaining ETH to the owner.
+     */
+    function destroy() external onlyOwner {
+        address payable ownerAddress = payable(owner());
+        selfdestruct(ownerAddress);
+    }
+}
+```

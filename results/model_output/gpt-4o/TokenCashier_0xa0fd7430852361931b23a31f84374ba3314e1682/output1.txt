@@ -1,0 +1,170 @@
+Below is the completed `TokenCashier` smart contract based on the provided context and description:
+
+```solidity
+pragma solidity 0.5.12;
+
+/**
+ * @title Ownable
+ * @dev The Ownable contract has an owner address, and provides basic authorization control
+ * functions, this simplifies the implementation of "user permissions".
+ */
+contract Ownable {
+    address public owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Ownable: caller is not the owner");
+        _;
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+}
+
+/**
+ * @title Pausable
+ * @dev Base contract which allows children to implement an emergency stop mechanism.
+ */
+contract Pausable is Ownable {
+    event Pause();
+    event Unpause();
+
+    bool public paused = false;
+
+    modifier whenNotPaused() {
+        require(!paused, "Pausable: paused");
+        _;
+    }
+
+    modifier whenPaused() {
+        require(paused, "Pausable: not paused");
+        _;
+    }
+
+    function pause() onlyOwner whenNotPaused public {
+        paused = true;
+        emit Pause();
+    }
+
+    function unpause() onlyOwner whenPaused public {
+        paused = false;
+        emit Unpause();
+    }
+}
+
+interface ITokenList {
+    function isAllowed(address) external returns (bool);
+    function maxAmount(address) external returns (uint256);
+    function minAmount(address) external returns (uint256);
+}
+
+interface IWrappedCoin {
+    function deposit() external payable;
+}
+
+/**
+ * @notice A smart contract for managing token deposits and withdrawals, including fee collection and token whitelisting.
+ */
+contract TokenCashier is Pausable {
+    event Receipt(address indexed token, uint256 indexed id, address sender, address recipient, uint256 amount, uint256 fee);
+
+    ITokenList[] public tokenLists;
+    address[] public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    constructor(IWrappedCoin _wrappedCoin, ITokenList[] memory _tokenLists, address[] memory _tokenSafes) public {
+        require(_tokenLists.length == _tokenSafes.length, "# of token lists is not equal to # of safes");
+        wrappedCoin = _wrappedCoin;
+        tokenLists = _tokenLists;
+        tokenSafes = _tokenSafes;
+    }
+
+    function() external {
+        revert("TokenCashier: no direct ether transfer");
+    }
+
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    function depositTo(address _token, address _to, uint256 _amount) public whenNotPaused payable {
+        require(_to != address(0), "TokenCashier: to address is zero");
+
+        // Identify the token list and safe
+        bool isWhitelisted = false;
+        uint256 tokenListIndex = 0;
+        for (uint256 i = 0; i < tokenLists.length; i++) {
+            if (tokenLists[i].isAllowed(_token)) {
+                isWhitelisted = true;
+                tokenListIndex = i;
+                break;
+            }
+        }
+        require(isWhitelisted, "TokenCashier: token not allowed");
+
+        uint256 maxAmount = tokenLists[tokenListIndex].maxAmount(_token);
+        uint256 minAmount = tokenLists[tokenListIndex].minAmount(_token);
+        require(_amount <= maxAmount && _amount >= minAmount, "TokenCashier: amount out of bounds");
+
+        uint256 fee = depositFee;
+        uint256 netAmount = _amount - fee;
+
+        if (_token == address(0)) { // Native currency
+            require(msg.value == _amount, "TokenCashier: incorrect ETH amount");
+            wrappedCoin.deposit.value(netAmount)();
+        } else {
+            require(safeTransferFrom(_token, msg.sender, tokenSafes[tokenListIndex], netAmount), "TokenCashier: transfer failed");
+        }
+
+        counts[_token]++;
+        emit Receipt(_token, counts[_token], msg.sender, _to, netAmount, fee);
+    }
+
+    function deposit(address _token, uint256 _amount) public payable {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    function withdraw() external onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    function withdrawToken(address _token) public onlyOwner {
+        bytes memory payload = abi.encodeWithSelector(0x70a08231, address(this));
+        (bool success, bytes memory returnData) = _token.call(payload);
+        require(success && returnData.length > 0, "TokenCashier: balanceOf failed");
+
+        uint256 balance = abi.decode(returnData, (uint256));
+        if (balance > 0) {
+            require(safeTransfer(_token, owner, balance), "TokenCashier: transfer failed");
+        }
+    }
+
+    function safeTransferFrom(address _token, address _from, address _to, uint256 _amount) internal returns (bool) {
+        bytes memory payload = abi.encodeWithSelector(0x23b872dd, _from, _to, _amount);
+        (bool success, bytes memory returnData) = _token.call(payload);
+        return success && (returnData.length == 0 || abi.decode(returnData, (bool)));
+    }
+
+    function safeTransfer(address _token, address _to, uint256 _amount) internal returns (bool) {
+        bytes memory payload = abi.encodeWithSelector(0xa9059cbb, _to, _amount);
+        (bool success, bytes memory returnData) = _token.call(payload);
+        return success && (returnData.length == 0 || abi.decode(returnData, (bool)));
+    }
+}
+```
+
+This implementation meets the requirements by handling token deposits, applying fees, checking against whitelist and limits, and managing both ERC-20 tokens and native currency. The contract includes functions for safe transfer operations, ensuring compliance with the ERC-20 standard even for non-compliant tokens.

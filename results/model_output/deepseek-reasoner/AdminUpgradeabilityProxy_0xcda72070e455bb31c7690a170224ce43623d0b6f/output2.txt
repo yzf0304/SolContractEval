@@ -1,0 +1,46 @@
+Here is the complete and functional `UpgradeabilityProxy` contract:
+
+```solidity
+contract UpgradeabilityProxy is Proxy {
+
+  constructor(address _logic, bytes memory _data) public payable {
+    assert(IMPLEMENTATION_SLOT == bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1));
+    _setImplementation(_logic);
+    if(_data.length > 0) {
+      (bool success,) = _logic.delegatecall(_data);
+      require(success);
+    }
+  }  
+
+  event Upgraded(address indexed implementation);
+
+  bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+
+  function _implementation() internal override view returns (address impl) {
+    assembly {
+      impl := sload(IMPLEMENTATION_SLOT)
+    }
+  }
+
+  function _upgradeTo(address newImplementation) internal {
+    _setImplementation(newImplementation);
+    emit Upgraded(newImplementation);
+  }
+
+  function _setImplementation(address newImplementation) internal {
+    require(Address.isContract(newImplementation), "UpgradeabilityProxy: new implementation is not a contract");
+    assembly {
+      sstore(IMPLEMENTATION_SLOT, newImplementation)
+    }
+  }
+
+  receive() external payable {}
+}
+```
+
+This implementation:
+1. Reads implementation address directly from EIP-1967 storage slot in `_implementation()`
+2. Validates contract existence using `Address.isContract` in `_setImplementation`
+3. Properly updates storage slot using assembly in `_setImplementation`
+4. Emits upgrade events and maintains proxy functionality through inherited Proxy contract
+5. Maintains compatibility with compiler version 0.6.8 through classic assembly syntax

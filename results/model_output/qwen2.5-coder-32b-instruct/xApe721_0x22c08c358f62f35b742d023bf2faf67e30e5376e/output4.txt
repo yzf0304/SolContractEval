@@ -1,0 +1,169 @@
+Below is the completed `xApe721` contract with all the functionalities defined in the interface and contract description:
+
+```solidity
+/**
+ * @title xApe721
+ * @notice This contract is an ERC721 token contract that allows for minting, claiming, and managing a collection of 10,000 unique tokens.
+ * @dev The contract includes functionalities to claim tokens from an old contract, mint new tokens, and manage the minting process.
+ */
+contract xApe721 is Ownable, ERC721 {
+  using Strings for uint256;
+
+  uint256 public constant TOTAL_SUPPLY = 10_000;
+  uint256 public constant PRICE_PER_MINT = 0.05 ether;
+  uint256 public constant MAX_MINT_PER_TX = 20;
+  bool public mintActive;
+  uint256 public totalSupply;
+  uint256 internal nextMintableId = 10038;
+  string public baseURI;
+  IERC721 public oldContract = IERC721(0x090b1DE324fEA5f0A0B4226101Db645819102629);
+  address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+  constructor(
+    string memory name,
+    string memory symbol,
+    string memory _baseURI,
+    address _oldContract,
+    address[] memory recipients,
+    uint256[] memory tokens
+  ) payable ERC721(name, symbol) {
+    require(recipients.length == tokens.length, "Airdrop lengths");
+    baseURI = _baseURI;
+
+    if (_oldContract != address(0)) {
+      oldContract = IERC721(_oldContract);
+    }
+
+    uint256 length = tokens.length;
+
+    for (uint i; i < length; ++i) {
+      _mint(recipients[i], tokens[i]);
+      totalSupply++;
+    }
+  }
+
+  modifier onlyTeamWallet() {
+    require(msg.sender == teamWallet, "Not callable except by team wallet");
+    _;
+  }
+
+  function mint(uint16 amount) external payable {
+    require(mintActive, "Minting is not active");
+    require(msg.value >= amount * PRICE_PER_MINT, "Insufficient funds");
+    require(amount <= MAX_MINT_PER_TX, "Exceeds max mint per tx");
+    require(totalSupply + amount <= TOTAL_SUPPLY, "Exceeds total supply");
+
+    for (uint256 i; i < amount; ++i) {
+      _mint(msg.sender, nextMintableId++);
+      totalSupply++;
+    }
+  }
+
+  function claim(uint256 tokenId) external payable {
+    require(_ownsOldToken(msg.sender, tokenId), "Does not own token in old contract");
+    
+    _claimToken(tokenId);
+  }
+
+  function claimAll() external payable {
+    uint256[] memory phunkIds = oldContract.getPhunksBelongingToOwner(msg.sender);
+    for (uint256 i = 0; i < phunkIds.length; i++) {
+        _claimToken(phunkIds[i]);
+    }
+  }
+
+  function _ownsOldToken(address account, uint256 tokenId) internal view returns(bool) {
+    return oldContract.ownerOf(tokenId) == account;
+  }
+
+  function _getNextUnusedID() internal returns (uint256) {
+    while (ownerOf[nextMintableId] != address(0) || _ownsOldToken(address(this), nextMintableId)) {
+      nextMintableId++;
+    }
+    return nextMintableId;
+  }
+
+  function tokenURI(uint256 id) public view override returns (string memory) {
+    require(ownerOf[id] != address(0), "Token not exists");
+    return string(abi.encodePacked(baseURI, id.toString()));
+  }
+
+  function withdraw() external onlyTeamWallet() {
+    SafeTransferLib.safeTransferETH(teamWallet, address(this).balance);
+  }
+
+  function pauseMint() external onlyOwner {
+    mintActive = false;
+  }
+
+  function startMint() external onlyOwner {
+    mintActive = true;
+  }
+
+  function setBaseURI(string memory _baseURI) external onlyOwner {
+    baseURI = _baseURI;
+  }
+
+  function supportsInterface(bytes4 interfaceId)
+    public
+    pure
+    override
+    returns (bool)
+  {
+    return interfaceId == type(IERC721).interfaceId
+      || interfaceId == 0x01ffc9a7;
+  }
+
+  function onERC721Received(
+      address operator,
+      address from,
+      uint256 tokenId,
+      bytes calldata data
+  ) external returns (bytes4) {
+    return ERC721TokenReceiver.onERC721Received.selector;
+  }
+
+  function _claimToken(uint256 tokenId) internal {
+    require(!_ownsOldToken(address(this), tokenId), "Token already claimed");
+
+    // Ensure the token ID is within the range of possible claims
+    uint256 newId = _getNextUnusedID();
+    _mint(msg.sender, newId);
+    totalSupply++;
+
+    // Mark the old token ID as claimed
+    _safeTransferFrom(address(oldContract), address(this), tokenId);
+  }
+
+  function _safeTransferFrom(
+      address tokenContract,
+      address from,
+      uint256 id
+  ) internal {
+      (bool success, ) = tokenContract.call(
+          abi.encodeWithSelector(
+              IERC721.transferFrom.selector,
+              from,
+              address(this),
+              id
+          )
+      );
+
+      require(success, "Failed to transfer token");
+  }
+}
+```
+
+### Key Points Implemented:
+1. **Minting:** The `mint` function allows users to mint up to `MAX_MINT_PER_TX` tokens for `PRICE_PER_MINT` ether per token, provided minting is active and the total supply cap is not reached.
+2. **Claiming:** Users can claim tokens from the old contract by providing the old `tokenId`. The `claimAll` function allows users to claim all their tokens at once.
+3. **Token Ownership Check:** The `_ownsOldToken` function checks if a user owns a particular token in the old contract.
+4. **Next Unused Token ID:** The `_getNextUnusedID` function finds the next available token ID that hasn't been minted yet.
+5. **Token URI Generation:** The `tokenURI` function constructs the URI for a given token ID based on the `baseURI`.
+6. **Funds Withdrawal:** The `withdraw` function allows the team wallet to withdraw the contract's balance.
+7. **Mint Management:** The `pauseMint` and `startMint` functions allow the owner to pause and resume minting.
+8. **Base URI Update:** The `setBaseURI` function lets the owner update the `baseURI`.
+9. **Interface Support:** The `supportsInterface` function indicates support for the ERC721 interface.
+10. **Token Receiving:** The `onERC721Received` function handles receiving ERC721 tokens.
+
+This contract is designed to be efficient and compliant with the ERC721 standard, providing all necessary functionality for minting, claiming, and managing tokens.

@@ -1,0 +1,149 @@
+pragma solidity ^0.4.19;
+
+interface TokenRecipient { 
+    function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public; 
+}
+
+/**
+ * @notice A simple ERC20 token contract.
+ * @dev This contract implements the basic functionalities of an ERC20 token, including transfer, approve, and burn.
+ */
+contract TokenERC20 {
+
+    uint256 public totalSupply;
+
+    /**
+     * @notice A mapping to keep track of the balance of each address.
+     * @dev This mapping stores the amount of tokens held by each address.
+     */
+    mapping (address => uint256) public balanceOf;
+
+    /**
+     * @notice A mapping to keep track of the allowance for a specific spender.
+     * @dev This mapping stores the amount of tokens that a specific address is allowed to spend on behalf of another address.
+     */
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    /**
+     * @notice Event triggered when tokens are transferred from one address to another.
+     * @dev This event logs the sender, recipient, and the amount of tokens transferred.
+     * @param _from The address from which the tokens are sent.
+     * @param _to The address to which the tokens are sent.
+     * @param _value The amount of tokens transferred.
+     */
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+
+    /**
+     * @notice Event triggered when tokens are burned (destroyed).
+     * @dev This event logs the address that burned the tokens and the amount of tokens burned.
+     * @param _from The address that burned the tokens.
+     * @param _value The amount of tokens burned.
+     */
+    event Burn(address indexed _from, uint256 _value);
+
+    /**
+     * @dev Internal function to transfer tokens between two addresses.
+     * @param _from The address from which the tokens are sent.
+     * @param _to The address to which the tokens are sent.
+     * @param _value The amount of tokens to be transferred.
+     */
+    function _transfer(address _from, address _to, uint256 _value) internal {
+        require(_to != address(0));
+        require(balanceOf[_from] >= _value);
+        require(balanceOf[_to] + _value >= balanceOf[_to]);
+
+        // Save this for an assertion in the future
+        uint256 previousBalances = balanceOf[_from] + balanceOf[_to];
+
+        balanceOf[_from] -= _value;
+        balanceOf[_to] += _value;
+        emit Transfer(_from, _to, _value);
+
+        // Asserts are used to use static analysis to find bugs in your code. They should never fail
+        assert(balanceOf[_from] + balanceOf[_to] == previousBalances);
+    }
+
+    /**
+     * @notice Transfers tokens from the message sender to another address.
+     * @dev This function calls the internal `_transfer` function to perform the transfer.
+     * @param _to The address to which the tokens are sent.
+     * @param _value The amount of tokens to be transferred.
+     * @return success True if the transfer was successful.
+     */
+    function transfer(address _to, uint256 _value) public returns (bool success) {
+        _transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another, using the allowance mechanism.
+     * @dev This function ensures that the spender has enough allowance to transfer the specified amount of tokens.
+     * @param _from The address from which the tokens are sent.
+     * @param _to The address to which the tokens are sent.
+     * @param _value The amount of tokens to be transferred.
+     * @return success True if the transfer was successful.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_value <= allowance[_from][msg.sender]);
+        allowance[_from][msg.sender] -= _value;
+        _transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Approves a spender to transfer a specified amount of tokens on behalf of the message sender.
+     * @dev This function sets the allowance for the specified spender.
+     * @param _spender The address that will be allowed to spend the tokens.
+     * @param _value The amount of tokens that the spender is allowed to spend.
+     * @return success True if the approval was successful.
+     */
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowance[msg.sender][_spender] = _value;
+        return true;
+    }
+
+    /**
+     * @notice Approves a spender to transfer a specified amount of tokens and calls a callback function on the spender.
+     * @dev This function sets the allowance and then calls a callback function on the spender with additional data.
+     * @param _spender The address that will be allowed to spend the tokens.
+     * @param _value The amount of tokens that the spender is allowed to spend.
+     * @param _extraData Additional data to be passed to the callback function.
+     * @return success True if the approval and callback were successful.
+     */
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        approve(_spender, _value);
+        TokenRecipient(_spender).receiveApproval(msg.sender, _value, this, _extraData);
+        return true;
+    }
+
+    /**
+     * @notice Burns (destroys) a specified amount of tokens from the message sender's balance.
+     * @dev This function reduces the total supply and the message sender's balance by the specified amount.
+     * @param _value The amount of tokens to be burned.
+     * @return success True if the burn was successful.
+     */
+    function burn(uint256 _value) public returns (bool success) {
+        require(balanceOf[msg.sender] >= _value);
+        balanceOf[msg.sender] -= _value;
+        totalSupply -= _value;
+        emit Burn(msg.sender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Burns (destroys) a specified amount of tokens from another address, using the allowance mechanism.
+     * @dev This function reduces the total supply and the specified address's balance by the specified amount, and also reduces the allowance.
+     * @param _from The address from which the tokens are burned.
+     * @param _value The amount of tokens to be burned.
+     * @return success True if the burn was successful.
+     */
+    function burnFrom(address _from, uint256 _value) public returns (bool success) {
+        require(balanceOf[_from] >= _value);
+        require(_value <= allowance[_from][msg.sender]);
+        balanceOf[_from] -= _value;
+        allowance[_from][msg.sender] -= _value;
+        totalSupply -= _value;
+        emit Burn(_from, _value);
+        return true;
+    }
+}

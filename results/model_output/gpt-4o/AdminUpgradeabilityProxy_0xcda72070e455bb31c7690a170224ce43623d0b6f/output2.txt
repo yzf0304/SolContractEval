@@ -1,0 +1,89 @@
+Below is the completed `UpgradeabilityProxy` smart contract according to the provided context and description:
+
+```solidity
+pragma solidity ^0.6.8;
+
+import "./Address.sol";  // Assuming the Address library is available as per the provided context.
+
+abstract contract Proxy {
+    fallback () payable external {
+        _fallback();
+    }
+
+    receive () payable external {
+        _fallback();
+    }
+
+    function _implementation() internal virtual view returns (address);
+
+    function _delegate(address implementation) internal {
+        assembly {
+            calldatacopy(0, 0, calldatasize())
+            let result := delegatecall(gas(), implementation, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            switch result
+            case 0 { revert(0, returndatasize()) }
+            default { return(0, returndatasize()) }
+        }
+    }
+
+    function _willFallback() internal virtual {
+    }
+
+    function _fallback() internal {
+        _willFallback();
+        _delegate(_implementation());
+    }
+}
+
+contract UpgradeabilityProxy is Proxy {
+
+    event Upgraded(address indexed implementation);
+
+    bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+
+    constructor(address _logic, bytes memory _data) public payable {
+        assert(IMPLEMENTATION_SLOT == bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1));
+        _setImplementation(_logic);
+        if(_data.length > 0) {
+            (bool success, ) = _logic.delegatecall(_data);
+            require(success);
+        }
+    }
+
+    function _implementation() internal override view returns (address impl) {
+        bytes32 slot = IMPLEMENTATION_SLOT;
+        assembly {
+            impl := sload(slot)
+        }
+    }
+
+    function _upgradeTo(address newImplementation) internal {
+        _setImplementation(newImplementation);
+        emit Upgraded(newImplementation);
+    }
+
+    function _setImplementation(address newImplementation) internal {
+        require(Address.isContract(newImplementation), "UpgradeabilityProxy: new implementation is not a contract");
+        bytes32 slot = IMPLEMENTATION_SLOT;
+        assembly {
+            sstore(slot, newImplementation)
+        }
+    }
+
+    receive() external payable {}
+}
+```
+
+### Explanation:
+1. **Constructor**: Sets the initial implementation address using `_setImplementation` and optionally calls an initialization function on the new implementation via `delegatecall`.
+
+2. **Implementation Slot**: Utilizes the EIP-1967 standard for locating the implementation storage slot. The slot is calculated as `keccak256('eip1967.proxy.implementation') - 1`.
+
+3. **_implementation()**: Reads the current implementation address from the defined storage slot using inline assembly.
+
+4. **_upgradeTo()**: Updates the implementation to a new address and emits the `Upgraded` event.
+
+5. **_setImplementation()**: Verifies the new implementation is a contract using the `Address` library and stores it in the slot.
+
+6. **Events and Validations**: Ensures upgrade actions are logged and that the implementation address points to a valid contract.

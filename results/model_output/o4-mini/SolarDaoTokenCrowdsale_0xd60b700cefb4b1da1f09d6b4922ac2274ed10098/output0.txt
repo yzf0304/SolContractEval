@@ -1,0 +1,180 @@
+```solidity
+pragma solidity ^0.4.16;
+
+contract SolarDaoToken is SafeMath, ERC20, Ownable {
+
+    string public name = "Solar DAO Token";
+    string public symbol = "SDAO";
+    uint   public decimals = 4;
+
+    /// @notice The address of the crowdsale agent that can mint new tokens and enable transfers
+    address public crowdsaleAgent;
+
+    /// @notice Flag that indicates whether tokens are transferable
+    bool public released = false;
+
+    /// @dev Balances for each account
+    mapping(address => uint) balances;
+
+    /// @dev Owner => (spender => amount)
+    mapping(address => mapping(address => uint)) allowed;
+
+    /// @dev Prevent token transfers until the crowdsale is over
+    modifier canTransfer() {
+        if (!released) {
+            require(msg.sender == crowdsaleAgent);
+        }
+        _;
+    }
+
+    /// @dev Ensure we are in the correct release state
+    modifier inReleaseState(bool _released) {
+        require(_released == released);
+        _;
+    }
+
+    /// @dev Only the crowdsale agent can call
+    modifier onlyCrowdsaleAgent() {
+        require(msg.sender == crowdsaleAgent);
+        _;
+    }
+
+    /// @dev Protect against short address attack
+    modifier onlyPayloadSize(uint size) {
+        require(msg.data.length >= size + 4);
+        _;
+    }
+
+    /// @dev Minting only allowed before release
+    modifier canMint() {
+        require(!released);
+        _;
+    }
+
+    /// @dev Constructor
+    function SolarDaoToken() {
+        owner = msg.sender;
+    }
+
+    /// @dev Disallow direct ETH transfers
+    function() payable {
+        revert();
+    }
+
+    /// @notice Mint new tokens, assign to receiver
+    /// @param receiver The address that will receive the minted tokens
+    /// @param amount   The quantity of tokens to mint
+    function mint(address receiver, uint amount)
+        onlyCrowdsaleAgent
+        canMint
+        public
+    {
+        totalSupply = safeAdd(totalSupply, amount);
+        balances[receiver] = safeAdd(balances[receiver], amount);
+        Transfer(address(0), receiver, amount);
+    }
+
+    /// @notice Set the crowdsale agent. Callable only by owner before release.
+    /// @param _crowdsaleAgent The crowdsale agent address
+    function setCrowdsaleAgent(address _crowdsaleAgent)
+        onlyOwner
+        inReleaseState(false)
+        public
+    {
+        require(_crowdsaleAgent != address(0));
+        crowdsaleAgent = _crowdsaleAgent;
+    }
+
+    /// @notice Enable token transfers. Callable only by crowdsale agent
+    function releaseTokenTransfer()
+        onlyCrowdsaleAgent
+        public
+    {
+        released = true;
+    }
+
+    /// @notice Transfer token to a specified address
+    /// @param _to    The address to transfer to
+    /// @param _value The amount to be transferred
+    /// @return True on success
+    function transfer(address _to, uint _value)
+        onlyPayloadSize(2 * 32)
+        canTransfer
+        public
+        returns (bool success)
+    {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _value);
+
+        balances[msg.sender] = safeSub(balances[msg.sender], _value);
+        balances[_to]        = safeAdd(balances[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /// @notice Transfer tokens from one address to another
+    /// @param _from  The address which you want to send tokens from
+    /// @param _to    The address which you want to transfer to
+    /// @param _value The amount of tokens to be transferred
+    /// @return True on success
+    function transferFrom(address _from, address _to, uint _value)
+        onlyPayloadSize(2 * 32)
+        canTransfer
+        public
+        returns (bool success)
+    {
+        require(_to != address(0));
+        require(balances[_from] >= _value);
+        require(allowed[_from][msg.sender] >= _value);
+
+        balances[_from]                = safeSub(balances[_from], _value);
+        balances[_to]                  = safeAdd(balances[_to], _value);
+        allowed[_from][msg.sender]     = safeSub(allowed[_from][msg.sender], _value);
+
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /// @notice Get the balance of an address
+    /// @param _owner The address to query
+    /// @return The balance of `_owner`
+    function balanceOf(address _owner)
+        public
+        constant
+        returns (uint balance)
+    {
+        return balances[_owner];
+    }
+
+    /// @notice Approve the passed address to spend the specified amount of tokens on behalf of msg.sender
+    /// @param _spender The address which will spend the funds
+    /// @param _value   The amount of tokens to be spent
+    /// @return True on success
+    function approve(address _spender, uint _value)
+        public
+        returns (bool success)
+    {
+        // To change the approve amount you first have to reduce the addresses`
+        // allowance to zero by calling `approve(_spender, 0)` if it is not
+        // already 0 to mitigate the race condition described here:
+        // https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
+        require((_value == 0) || (allowed[msg.sender][_spender] == 0));
+
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /// @notice Function to check the amount of tokens that an owner allowed to a spender
+    /// @param _owner   The address which owns the funds
+    /// @param _spender The address which will spend the funds
+    /// @return Remaining allowance for spender
+    function allowance(address _owner, address _spender)
+        public
+        constant
+        returns (uint remaining)
+    {
+        return allowed[_owner][_spender];
+    }
+}
+```

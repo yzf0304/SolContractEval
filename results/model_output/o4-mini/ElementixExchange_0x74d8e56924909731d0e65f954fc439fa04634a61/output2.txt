@@ -1,0 +1,105 @@
+pragma solidity ^0.8.4;
+
+import "dependencies/openzeppelin/contracts/access/Ownable.sol";
+
+/// @title ProxyRegistry
+/// @notice A registry for managing proxy contracts and their permissions.
+/// @dev This contract allows the owner to grant and revoke access to specific contracts,
+///      and users to register their own proxy contracts.
+contract ProxyRegistry is Ownable {
+
+    /// @notice Implementation contract for all delegated proxies. Must be set by the deployer/owner.
+    address public delegateProxyImplementation;
+
+    /// @notice Maps each user address to its deployed proxy.
+    mapping(address => OwnableDelegateProxy) public proxies;
+
+    /// @notice Timestamp at which `addr` was approved for authentication (start of delay).
+    mapping(address => uint256) public pending;
+
+    /// @notice Contracts that have completed the delay and are allowed to call authenticated proxies.
+    mapping(address => bool) public contracts;
+
+    /// @notice Delay period before an authentication can be finalized.
+    uint256 public DELAY_PERIOD = 7 days;
+
+    /// @notice Emitted when a user registers a new proxy.
+    event RegisterProxy(address indexed sender, address proxyAddr);
+
+    /// @notice Emitted when an authentication is granted or revoked.
+    /// @param addr The contract address whose authentication status changed.
+    /// @param opt  True if granted, false if revoked.
+    event AuthenticationOperation(address indexed addr, bool opt);
+
+    /// @notice Begins the grant-authentication process for a contract (starts the delay).
+    /// @dev Only callable by the owner.
+    /// @param addr The contract address to authenticate.
+    function startGrantAuthentication(address addr)
+        external
+        onlyOwner
+    {
+        pending[addr] = block.timestamp;
+    }
+
+    /// @notice Completes the grant-authentication process after `DELAY_PERIOD`.
+    /// @dev Only callable by the owner.
+    /// @param addr The contract address to authenticate.
+    function endGrantAuthentication(address addr)
+        external
+        onlyOwner
+    {
+        uint256 startTime = pending[addr];
+        require(startTime != 0, "ProxyRegistry: not pending");
+        require(block.timestamp >= startTime + DELAY_PERIOD, "ProxyRegistry: delay not passed");
+
+        // Mark as authenticated and clear the pending timestamp.
+        contracts[addr] = true;
+        pending[addr] = 0;
+
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /// @notice Revokes authentication for a contract immediately.
+    /// @dev Only callable by the owner.
+    /// @param addr The contract address to revoke.
+    function revokeAuthentication(address addr)
+        external
+        onlyOwner
+    {
+        contracts[addr] = false;
+        emit AuthenticationOperation(addr, false);
+    }
+
+    /// @notice Deploys and registers a new proxy for the caller.
+    /// @dev Each user may only register one proxy. The proxy is initialized
+    ///      to point at `delegateProxyImplementation` and to call
+    ///      `initialize(address,address)` on its logic contract, passing
+    ///      (user, thisRegistry).
+    /// @return proxy The freshly deployed delegate proxy.
+    function registerProxy()
+        external
+        returns (OwnableDelegateProxy proxy)
+    {
+        require(address(proxies[msg.sender]) == address(0), "ProxyRegistry: already registered");
+
+        // Prepare initialization calldata for the AuthenticatedProxy implementation.
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,address)",
+            msg.sender,
+            address(this)
+        );
+
+        // Deploy a new proxy owned by msg.sender, pointing at this registry, with the init call.
+        proxy = new OwnableDelegateProxy(
+            msg.sender,
+            address(this),
+            initData
+        );
+
+        // Store and emit.
+        proxies[msg.sender] = proxy;
+        emit RegisterProxy(msg.sender, address(proxy));
+
+        return proxy;
+    }
+}

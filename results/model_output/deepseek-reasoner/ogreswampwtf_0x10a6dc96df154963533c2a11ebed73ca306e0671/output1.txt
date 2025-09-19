@@ -1,0 +1,132 @@
+Here is the complete implementation of the `ogreswampwtf` contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+
+pragma solidity ^0.8.7;
+
+contract ogreswampwtf is ERC721, Ownable {
+  using Counters for Counters.Counter; 
+  using Strings for uint256;
+
+  Counters.Counter private _tokenSupply;
+  string public ogreURI;
+  string public ogreExtension = ".json"; 
+  uint256 public cost = 0 ether; 
+  uint256 public maxSupply = 3333; 
+  uint256 public freeMints = 3333; 
+  uint256 public maxMintAmount = 3; 
+  bool public paused = false;
+  bool public revealed = false;
+  string public SwampUri;
+  mapping(address => bool) public whitelisted;
+  mapping(address => uint256) private freeMintsWallet;
+
+  constructor(
+    string memory _name,
+    string memory _symbol,
+    string memory _initOgreURI,
+    string memory _initSwampUri
+  ) ERC721(_name, _symbol) {
+    setOgreURI(_initOgreURI);
+    setSwampURI(_initSwampUri);
+  }
+
+  function totalSupply() public view returns (uint256) {
+    return _tokenSupply.current();
+  }
+
+  function _ogreURI() internal view override returns (string memory) {
+    return ogreURI;
+  }
+
+  function mint(address _to, uint256 _mintAmount) public payable {
+    require(!paused, "Contract is paused");
+    require(_mintAmount > 0, "Mint amount must be positive");
+    require(_mintAmount <= maxMintAmount, "Exceeds max mint per transaction");
+    uint256 currentSupply = totalSupply();
+    require(currentSupply + _mintAmount <= maxSupply, "Exceeds max supply");
+
+    if (currentSupply + _mintAmount <= freeMints) {
+      require(whitelisted[msg.sender], "Not whitelisted");
+      require(freeMintsWallet[msg.sender] + _mintAmount <= 20, "Exceeds free mint limit");
+      require(msg.value == 0, "Ether sent for free mint");
+      freeMintsWallet[msg.sender] += _mintAmount;
+    } else {
+      require(msg.value >= cost * _mintAmount, "Insufficient funds");
+    }
+
+    for (uint256 i = 0; i < _mintAmount; i++) {
+      _tokenSupply.increment();
+      uint256 tokenId = _tokenSupply.current();
+      _safeMint(_to, tokenId);
+    }
+  }
+
+  function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+    require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+    
+    if (!revealed) {
+      return SwampUri;
+    }
+    
+    string memory base = _ogreURI();
+    return bytes(base).length > 0 
+      ? string(abi.encodePacked(base, tokenId.toString(), ogreExtension))
+      : "";
+  }
+
+  function reveal() public onlyOwner {
+    revealed = true;
+  }
+
+  function setCost(uint256 _newCost) public onlyOwner {
+    cost = _newCost;
+  }
+
+  function setmaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+    maxMintAmount = _newmaxMintAmount;
+  }
+
+  function setSwampURI(string memory _SwampURI) public onlyOwner {
+    SwampUri = _SwampURI;
+  }
+
+  function setOgreURI(string memory _newOgreURI) public onlyOwner {
+    ogreURI = _newOgreURI;
+  }
+
+  function setOgreExtension(string memory _newOgreExtension) public onlyOwner {
+    ogreExtension = _newOgreExtension;
+  }
+
+  function pause(bool _state) public onlyOwner {
+    paused = _state;
+  }
+
+  function whitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = true;
+  }
+
+  function removeWhitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = false;
+  }
+
+  function withdraw() public payable onlyOwner {
+    (bool success, ) = payable(owner()).call{value: address(this).balance}("");
+    require(success);
+  }
+}
+```
+
+This implementation includes:
+
+1. Complete ERC721 functionality with supply tracking
+2. Whitelist system with per-wallet free mint limits
+3. Reveal mechanism for NFT metadata
+4. Flexible URI configuration
+5. Minting logic with free and paid phases
+6. Administrative functions for contract management
+7. Withdrawal functionality for collected funds
+
+The contract strictly follows the provided context and requirements while maintaining compatibility with OpenZeppelin contracts and Solidity 0.8.7. Key features include gas-efficient minting, secure ownership management, and flexible metadata handling.

@@ -1,0 +1,301 @@
+Below is the completed `BITOToken` contract implementing the ERC20 standard with additional features such as freezing accounts, emergency freeze, and burning tokens. The contract adheres to Solidity version 0.4.21 and includes all necessary methods as described in your specification:
+
+```solidity
+/**
+ * @title BITOToken
+ * @dev This contract implements the ERC20 token standard with additional features such as freezing accounts, emergency freeze, and burning tokens.
+ * @notice BITOToken is a custom ERC20 token with the symbol 'BITO' and name 'BITO Coin'. It includes functionalities for transferring, approving, and burning tokens, as well as owner-only functions to manage the contract.
+ */
+contract BITOToken is ERC20Interface {
+  using SafeMath for uint;
+
+  // State variables
+  string public symbol = 'BITO';
+  string public name = 'BITO Coin';
+  uint public decimals = 8;
+  address public owner;
+  uint public totalSupply = 210000000 * (10 **8);
+  bool public emergencyFreeze;
+  
+  // mappings
+  mapping (address => uint) balances;
+  mapping (address => mapping (address => uint) ) allowed;
+  mapping (address => bool) frozen;
+  
+
+  /**
+   * @dev Initializes the contract and assigns the total supply to the contract owner.
+   * @notice The constructor sets the contract owner and assigns the total supply of tokens to the owner.
+   */
+  function BITOToken () public {
+    owner = msg.sender;
+    balances[owner] = totalSupply;
+  }
+
+  // events
+  event OwnershipTransferred(address indexed _from, address indexed _to);
+  event Burn(address indexed from, uint256 amount);
+  event Freezed(address targetAddress, bool frozen);
+  event EmergencyFreezed(bool emergencyFreezeStatus);
+  
+
+
+  // Modifiers
+  /**
+   * @dev Modifier to ensure that only the contract owner can call the function.
+   * @notice Ensures that the function can only be called by the contract owner.
+   */
+  modifier onlyOwner {
+    require(msg.sender == owner);
+     _;
+  }
+
+  /**
+   * @dev Modifier to ensure that the account is not frozen.
+   * @notice Ensures that the function can only be called if the specified account is not frozen.
+   */
+  modifier unfreezed(address _account) { 
+    require(!frozen[_account]);
+    _;  
+  }
+  
+  /**
+   * @dev Modifier to ensure that the emergency freeze is not active.
+   * @notice Ensures that the function can only be called if the emergency freeze is not active.
+   */
+  modifier noEmergencyFreeze() { 
+    require(!emergencyFreeze);
+    _; 
+  }
+  
+
+
+  // functions
+
+  // ------------------------------------------------------------------------
+  // Transfer Token
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Transfers tokens from the sender's account to another account.
+   * @notice Transfers a specified amount of tokens from the sender's account to the recipient's account.
+   * @param _to The address of the recipient.
+   * @param _value The amount of tokens to transfer.
+   * @return A boolean indicating whether the transfer was successful.
+   */
+  function transfer(address _to, uint _value) unfreezed(_to) noEmergencyFreeze() public returns (bool success) {
+    require(_to != address(0));
+    balances[msg.sender] = balances[msg.sender].sub(_value);
+    balances[_to] = balances[_to].add(_value);
+    emit Transfer(msg.sender, _to, _value);
+    return true;
+  }
+
+  // ------------------------------------------------------------------------
+  // Approve others to spend on your behalf
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Approves a spender to withdraw a certain amount of tokens from the caller's account.
+   * @notice Allows a specified address to withdraw a certain amount of tokens from the caller's account.
+   * @param _spender The address of the spender.
+   * @param _value The amount of tokens to approve.
+   * @return A boolean indicating whether the approval was successful.
+   */
+  function approve(address _spender, uint _value) unfreezed(_spender) unfreezed(msg.sender) noEmergencyFreeze() public returns (bool success) {
+    require(_spender != address(0));
+    allowed[msg.sender][_spender] = _value;
+    emit Approval(msg.sender, _spender, _value);
+    return true;
+  }
+
+  // ------------------------------------------------------------------------
+  // Approve and call : If approve returns true, it calls receiveApproval method of contract
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Approves a spender to withdraw a certain amount of tokens and calls the `receiveApproval` method on the spender's contract.
+   * @notice Approves a specified address to withdraw a certain amount of tokens and calls the `receiveApproval` method on the spender's contract.
+   * @param _spender The address of the spender.
+   * @param _value The amount of tokens to approve.
+   * @param _extraData Additional data to pass to the `receiveApproval` method.
+   * @return A boolean indicating whether the approval and call were successful.
+   */
+  function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+    tokenRecipient spender = tokenRecipient(_spender);
+    approve(_spender, _value);
+    spender.receiveApproval(msg.sender, _value, this, _extraData);
+    return true;
+  }
+
+  // ------------------------------------------------------------------------
+  // Transferred approved amount from other's account
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Transfers tokens from one account to another, using the allowance mechanism.
+   * @notice Transfers a specified amount of tokens from one account to another, using the allowance mechanism.
+   * @param _from The address of the token holder.
+   * @param _to The address of the recipient.
+   * @param _value The amount of tokens to transfer.
+   * @return A boolean indicating whether the transfer was successful.
+   */
+  function transferFrom(address _from, address _to, uint _value) unfreezed(_to) unfreezed(_from) noEmergencyFreeze() public returns (bool success) {
+    require(_to != address(0));
+    require(_value <= allowed[_from][msg.sender]);    
+    balances[_from] = balances[_from].sub(_value);
+    allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+    balances[_to] = balances[_to].add(_value);
+    emit Transfer(_from, _to, _value);
+    return true;
+  }
+
+  // ------------------------------------------------------------------------
+  // Burn (Destroy tokens)
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Burns (destroys) a specified amount of tokens from the caller's account.
+   * @notice Burns (destroys) a specified amount of tokens from the caller's account.
+   * @param _value The amount of tokens to burn.
+   * @return A boolean indicating whether the burn was successful.
+   */
+  function burn(uint256 _value) public returns (bool success) {
+    require(_value <= balances[msg.sender]);
+    balances[msg.sender] = balances[msg.sender].sub(_value); 
+    totalSupply = totalSupply.sub(_value);
+    emit Burn(msg.sender, _value);
+    return true;
+  }
+
+  // ------------------------------------------------------------------------
+  //               ONLYOWNER METHODS                             
+  // ------------------------------------------------------------------------
+
+
+  // ------------------------------------------------------------------------
+  // Transfer Ownership
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Transfers ownership of the contract to a new address.
+   * @notice Transfers ownership of the contract to a new address.
+   * @param _newOwner The address of the new owner.
+   */
+  function transferOwnership(address _newOwner) public onlyOwner {
+    require(_newOwner != address(0));
+    emit OwnershipTransferred(owner, _newOwner);
+    owner = _newOwner;
+  }
+
+  // ------------------------------------------------------------------------
+  // Freeze account - onlyOwner
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Freezes or unfreezes a specified account.
+   * @notice Freezes or unfreezes a specified account.
+   * @param _target The address of the account to freeze or unfreeze.
+   * @param _freeze A boolean indicating whether to freeze or unfreeze the account.
+   * @return A boolean indicating whether the operation was successful.
+   */
+  function freezeAccount (address _target, bool _freeze) public onlyOwner returns(bool res) {
+    frozen[_target] = _freeze;
+    emit Freezed(_target, _freeze);
+    return true;
+  }
+
+  // ------------------------------------------------------------------------
+  // Emerygency freeze - onlyOwner
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Activates or deactivates the emergency freeze for all accounts.
+   * @notice Activates or deactivates the emergency freeze for all accounts.
+   * @param _freeze A boolean indicating whether to activate or deactivate the emergency freeze.
+   * @return A boolean indicating whether the operation was successful.
+   */
+  function emergencyFreezeAllAccounts (bool _freeze) public onlyOwner returns(bool res) {
+    emergencyFreeze = _freeze;
+    emit EmergencyFreezed(_freeze);
+    return true;
+  }
+  
+
+  // ------------------------------------------------------------------------
+  //               CONSTANT METHODS
+  // ------------------------------------------------------------------------
+
+
+  // ------------------------------------------------------------------------
+  // Check Allowance : Constant
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Returns the remaining allowance of a spender for a token owner.
+   * @notice Returns the remaining allowance of a spender for a token owner.
+   * @param _tokenOwner The address of the token owner.
+   * @param _spender The address of the spender.
+   * @return The remaining allowance.
+   */
+  function allowance(address _tokenOwner, address _spender) public constant returns (uint remaining) {
+    return allowed[_tokenOwner][_spender];
+  }
+
+  // ------------------------------------------------------------------------
+  // Check Balance : Constant
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Returns the balance of a specified account.
+   * @notice Returns the balance of a specified account.
+   * @param _tokenOwner The address of the account.
+   * @return The balance of the account.
+   */
+  function balanceOf(address _tokenOwner) public constant returns (uint balance) {
+    return balances[_tokenOwner];
+  }
+
+  // ------------------------------------------------------------------------
+  // Total supply : Constant
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Returns the total supply of tokens.
+   * @notice Returns the total supply of tokens.
+   * @return The total supply of tokens.
+   */
+  function totalSupply() public constant returns (uint) {
+    return totalSupply;
+  }
+
+  // ------------------------------------------------------------------------
+  // Get Freeze Status : Constant
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Returns the freeze status of a specified account.
+   * @notice Returns the freeze status of a specified account.
+   * @param _targetAddress The address of the account.
+   * @return A boolean indicating whether the account is frozen.
+   */
+  function isFreezed(address _targetAddress) public constant returns (bool) {
+    return frozen[_targetAddress];
+  }
+
+  // ------------------------------------------------------------------------
+  // Prevents contract from accepting ETH
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Reverts any ETH sent to the contract.
+   * @notice Reverts any ETH sent to the contract.
+   */
+  function () public payable {
+    revert();
+  }
+
+  // ------------------------------------------------------------------------
+  // Owner can transfer out any accidentally sent ERC20 tokens
+  // ------------------------------------------------------------------------
+  /**
+   * @dev Transfers any accidentally sent ERC20 tokens to the owner.
+   * @notice Transfers any accidentally sent ERC20 tokens to the owner.
+   * @param _tokenAddress The address of the ERC20 token.
+   * @param _value The amount of tokens to transfer.
+   * @return A boolean indicating whether the transfer was successful.
+   */
+  function transferAnyERC20Token(address _tokenAddress, uint _value) public onlyOwner returns (bool success) {
+    return ERC20Interface(_tokenAddress).transfer(owner, _value);
+  }
+}
+```
+
+This contract includes all required functionality as per your specifications, handling token transfers, approvals, burns, account freezing, emergency freezes, and transferring accidentally sent tokens. It also ensures that certain operations are only possible by the contract owner and that no transactions occur during an emergency freeze.

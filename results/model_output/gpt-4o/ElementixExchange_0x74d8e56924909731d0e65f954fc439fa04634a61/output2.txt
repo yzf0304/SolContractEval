@@ -1,0 +1,125 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
+
+contract ProxyRegistry is Ownable {
+
+    /* DelegateProxy implementation contract. Must be initialized. */
+    address public delegateProxyImplementation;
+
+    /* Authenticated proxies by user. */
+    mapping(address => OwnableDelegateProxy) public proxies;
+
+    /* Contracts pending access. */
+    mapping(address => uint256) public pending;
+
+    /* Contracts allowed to call those proxies. */
+    mapping(address => bool) public contracts;
+
+    /* Delay period for adding an authenticated contract. */
+    uint256 public constant DELAY_PERIOD = 7 days;
+
+    // Events
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool opt);
+
+    /**
+     * @notice Start the process to enable access for a specified contract. Subject to a delay period.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function startGrantAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        require(addr != address(0), "ProxyRegistry: Address cannot be zero");
+        require(!contracts[addr], "ProxyRegistry: Contract already authenticated");
+        pending[addr] = block.timestamp + DELAY_PERIOD;
+    }
+
+    /**
+     * @notice End the process to enable access for a specified contract after the delay period has passed.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address to which to grant permissions
+     */
+    function endGrantAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        require(pending[addr] != 0, "ProxyRegistry: No pending request for this address");
+        require(block.timestamp >= pending[addr], "ProxyRegistry: Delay period has not passed");
+        pending[addr] = 0; // Clear pending timestamp
+        contracts[addr] = true; // Grant authentication
+        emit AuthenticationOperation(addr, true);
+    }
+
+    /**
+     * @notice Revoke access for a specified contract. Can be done instantly.
+     * @dev Only the owner of the ProxyRegistry can call this function.
+     * @param addr Address of which to revoke permissions
+     */
+    function revokeAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        require(contracts[addr], "ProxyRegistry: Contract not authenticated");
+        contracts[addr] = false; // Revoke authentication
+        emit AuthenticationOperation(addr, false);
+    }
+
+    /**
+     * @notice Register a proxy contract with this registry.
+     * @dev Must be called by the user for whom the proxy is being created. Creates a new AuthenticatedProxy.
+     * @return proxy New AuthenticatedProxy contract
+     */
+    function registerProxy()
+        public
+        returns (OwnableDelegateProxy proxy)
+    {
+        require(proxies[msg.sender] == OwnableDelegateProxy(address(0)), "ProxyRegistry: Proxy already exists");
+        proxy = new OwnableDelegateProxy(msg.sender, delegateProxyImplementation, abi.encodeWithSignature("initialize(address)", msg.sender));
+        proxies[msg.sender] = proxy;
+        emit RegisterProxy(msg.sender, address(proxy));
+    }
+}
+
+/**
+ * @title OwnableDelegateProxy
+ * @dev A delegate proxy that supports ownership and initialization.
+ */
+contract OwnableDelegateProxy is Ownable {
+    address public implementation;
+
+    constructor(address owner, address _implementation, bytes memory _data) {
+        _owner = owner; // Initialize owner directly from constructor
+        implementation = _implementation;
+
+        // Perform delegatecall to the implementation contract with initialization data
+        (bool success, ) = _implementation.delegatecall(_data);
+        require(success, "OwnableDelegateProxy: Initialization failed");
+    }
+
+    fallback() external payable {
+        _fallback();
+    }
+
+    receive() external payable {
+        _fallback();
+    }
+
+    function _fallback() internal {
+        require(implementation != address(0), "OwnableDelegateProxy: Implementation not set");
+
+        // Forward all calls to the implementation contract
+        assembly {
+            let target := sload(implementation.slot)
+            calldatacopy(0, 0, calldatasize())
+            let result := delegatecall(gas(), target, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            switch result
+            case 0 { revert(0, returndatasize()) }
+            default { return(0, returndatasize()) }
+        }
+    }
+}
+```

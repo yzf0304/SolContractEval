@@ -1,0 +1,116 @@
+Here's the complete implementation of the ScammerGold contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.6;
+
+contract ScammerGold is Context, Ownable, ERC20 {
+    address public slootContractAddress = 0xb12F78434AE7D12Ae548c51A5cb734Ecc4536594;
+    IERC721Enumerable public slootContract;
+
+    uint256 public scammerGoldPerTokenId = 10000 * (10**decimals());
+    uint256 public tokenIdStart = 1;
+    uint256 public tokenIdEnd = 8000;
+    uint256 public season = 0;
+
+    mapping(uint256 => mapping(uint256 => bool)) public seasonClaimedByTokenId;
+
+    constructor() Ownable() ERC20("Scammer Gold", "SGLD") {
+        transferOwnership(0x0000000000000000000000000000000000000000);
+        slootContract = IERC721Enumerable(slootContractAddress);
+    }
+
+    function claimById(uint256 tokenId) external {
+        require(tokenId >= tokenIdStart && tokenId <= tokenIdEnd, "Invalid token ID");
+        address tokenOwner = slootContract.ownerOf(tokenId);
+        require(tokenOwner == _msgSender(), "Not token owner");
+        _claim(tokenId, tokenOwner);
+    }
+
+    function claimAllForOwner() external {
+        uint256 balance = slootContract.balanceOf(_msgSender());
+        require(balance > 0, "No tokens owned");
+        for (uint256 i = 0; i < balance; i++) {
+            uint256 tokenId = slootContract.tokenOfOwnerByIndex(_msgSender(), i);
+            if (tokenId >= tokenIdStart && tokenId <= tokenIdEnd) {
+                _claim(tokenId, _msgSender());
+            }
+        }
+    }
+
+    function claimRangeForOwner(uint256 ownerIndexStart, uint256 ownerIndexEnd) external {
+        uint256 balance = slootContract.balanceOf(_msgSender());
+        require(ownerIndexStart <= ownerIndexEnd, "Invalid range");
+        require(ownerIndexEnd < balance, "Range exceeds balance");
+        
+        for (uint256 i = ownerIndexStart; i <= ownerIndexEnd; i++) {
+            uint256 tokenId = slootContract.tokenOfOwnerByIndex(_msgSender(), i);
+            if (tokenId >= tokenIdStart && tokenId <= tokenIdEnd) {
+                _claim(tokenId, _msgSender());
+            }
+        }
+    }
+
+    function _claim(uint256 tokenId, address tokenOwner) internal {
+        require(!seasonClaimedByTokenId[season][tokenId], "Already claimed");
+        seasonClaimedByTokenId[season][tokenId] = true;
+        _mint(tokenOwner, scammerGoldPerTokenId);
+    }
+
+    function daoMint(uint256 amountDisplayValue) external onlyOwner {
+        uint256 amount = amountDisplayValue * (10**decimals());
+        _mint(owner(), amount);
+    }
+
+    function daoSetLootContractAddress(address slootContractAddress_) external onlyOwner {
+        slootContractAddress = slootContractAddress_;
+        slootContract = IERC721Enumerable(slootContractAddress_);
+    }
+
+    function daoSetTokenIdRange(uint256 tokenIdStart_, uint256 tokenIdEnd_) external onlyOwner {
+        tokenIdStart = tokenIdStart_;
+        tokenIdEnd = tokenIdEnd_;
+    }
+
+    function daoSetSeason(uint256 season_) public onlyOwner {
+        season = season_;
+    }
+
+    function daoSetScammerGoldPerTokenId(uint256 scammerGoldDisplayValue) public onlyOwner {
+        scammerGoldPerTokenId = scammerGoldDisplayValue * (10**decimals());
+    }
+
+    function daoSetSeasonAndScammerGoldPerTokenID(
+        uint256 season_,
+        uint256 scammerGoldDisplayValue
+    ) external onlyOwner {
+        daoSetSeason(season_);
+        daoSetScammerGoldPerTokenId(scammerGoldDisplayValue);
+    }
+
+    receive() external payable {}
+}
+
+interface IERC721 {
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function balanceOf(address owner) external view returns (uint256);
+}
+
+interface IERC721Enumerable is IERC721 {
+    function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256);
+    function totalSupply() external view returns (uint256);
+    function tokenByIndex(uint256 index) external view returns (uint256);
+}
+```
+
+Key features implemented:
+1. Core claiming functionality through individual and batch methods
+2. Season-based claiming system with tracking
+3. DAO-controlled parameters and minting
+4. ERC20 standard compliance with proper access control
+5. Safe arithmetic operations using Solidity 0.8.6's built-in overflow checks
+6. Proper access control modifiers for DAO functions
+7. Conversion between display values and raw token amounts
+8. Range validation for token IDs and owner indexes
+
+The contract maintains compatibility with the ERC721Enumerable interface while implementing all specified requirements for Scammer Gold distribution based on sLoot ownership.

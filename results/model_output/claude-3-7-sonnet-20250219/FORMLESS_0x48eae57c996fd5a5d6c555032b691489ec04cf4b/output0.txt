@@ -1,0 +1,278 @@
+I'll complete the FORMLESS contract according to the provided context and description. Here's the fully implemented contract:
+
+```solidity
+/**
+ * @title FORMLESS NFT Contract
+ * @author [Your Name]
+ * @notice This contract allows for the creation, minting, and management of a collection of NFTs.
+ * @dev The contract uses ERC721A for efficient batch minting, ReentrancyGuard to prevent reentrancy attacks, and Ownable for access control.
+ */
+contract FORMLESS is Ownable, ERC721A, ReentrancyGuard {
+    using Strings for uint256;
+
+    /**
+     * @notice Maximum number of NFTs that can be minted in a single transaction.
+     * @dev This value can be updated by the contract owner.
+     */
+    uint256 public MAX_PER_Transtion = 1; // maximam amount that user can mint per transaction
+
+    /**
+     * @notice Maximum number of NFTs that can be minted by a single address.
+     * @dev This value can be updated by the contract owner.
+     */
+    uint256 public MAX_PER_Address = 1;
+
+    /**
+     * @notice Price for minting one NFT.
+     * @dev This value can be updated by the contract owner.
+     */
+    uint256 public PRICE = 0.069 ether;
+
+    /**
+     * @notice Total number of NFTs in the collection.
+     * @dev This value can be updated by the contract owner.
+     */
+    uint256 private TotalCollectionSize_ = 500; // total number of nfts
+
+    /**
+     * @notice Maximum number of NFTs that can be minted in a single batch.
+     * @dev This value is constant and cannot be changed.
+     */
+    uint256 private constant MaxMintPerBatch_ = 1; //max mint per trx
+
+    /**
+     * @notice Mapping to track whitelisted addresses for minting.
+     * @dev Only whitelisted addresses can mint during the whitelist sale.
+     */
+    mapping(address => bool) private whitelistedAddressesForMint;
+
+    /**
+     * @notice Base URI for the NFT metadata.
+     * @dev This value can be updated by the contract owner.
+     */
+    string private _baseTokenURI;
+
+    /**
+     * @notice Status of the sale: 0 - paused, 1 - whitelist sale, 2 - public sale.
+     * @dev This value can be updated by the contract owner.
+     */
+    uint public status = 0; //0 - sale pause, 1 - whitelist sale, 2 - public sale
+
+    /**
+     * @notice Constructor to initialize the contract with initial values.
+     * @dev Sets the base URI and initializes the ERC721A contract.
+     */
+    constructor() ERC721A("FORMLESS","FORMLESS", MaxMintPerBatch_, TotalCollectionSize_) {
+        _baseTokenURI= "https://gateway.pinata.cloud/ipfs/QmWT2u6UEeXJs5MWcSTQhHFyYC9wKevQNjXC4J3k67ymtQ/";
+    }
+
+    /**
+     * @notice Modifier to ensure the caller is not another contract.
+     * @dev Prevents other contracts from calling certain functions.
+     */
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    /**
+     * @notice Allows users to mint NFTs.
+     * @dev Different rules apply depending on the current sale status (whitelist or public).
+     * @param quantity The number of NFTs to mint.
+     */
+    function mint(uint256 quantity) external payable callerIsUser {
+        require(status > 0, "Sale is paused");
+        require(quantity > 0, "Quantity cannot be zero");
+        require(quantity <= MAX_PER_Transtion, "Exceeds max per transaction");
+        require(totalSupply() + quantity <= TotalCollectionSize_, "Exceeds collection size");
+        require(msg.value >= PRICE * quantity, "Insufficient payment");
+        
+        if (status == 1) {
+            require(whitelistedAddressesForMint[msg.sender], "Not whitelisted");
+        }
+        
+        require(_numberMinted(msg.sender) + quantity <= MAX_PER_Address, "Exceeds max per address");
+        
+        _safeMint(msg.sender, quantity);
+    }
+
+    /**
+     * @notice Returns the token URI for a given token ID.
+     * @dev Ensures the token exists before returning the URI.
+     * @param tokenId The ID of the token.
+     * @return The token URI.
+     */
+    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+        require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+        
+        string memory baseURI = _baseURI();
+        return bytes(baseURI).length > 0 ? string(abi.encodePacked(baseURI, tokenId.toString(), ".json")) : "";
+    }
+
+    /**
+     * @notice Checks if an address is whitelisted for minting.
+     * @dev Used to determine if an address can mint during the whitelist sale.
+     * @param _user The address to check.
+     * @return True if the address is whitelisted, false otherwise.
+     */
+    function isWhitelistedForMint(address _user) public view returns (bool) {
+        return whitelistedAddressesForMint[_user];
+    }
+
+    /**
+     * @notice Adds new addresses to the whitelist for minting.
+     * @dev Only the contract owner can call this function.
+     * @param _users Array of addresses to add to the whitelist.
+     */
+    function addNewWhitelistUserForMint(address[] calldata _users) public onlyOwner {
+        for (uint256 i = 0; i < _users.length; i++) {
+            whitelistedAddressesForMint[_users[i]] = true;
+        }
+    }
+
+    /**
+     * @notice Sets the base URI for the NFT metadata.
+     * @dev Only the contract owner can call this function.
+     * @param baseURI The new base URI.
+     */
+    function setBaseURI(string memory baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    /**
+     * @notice Returns the base URI for the NFT metadata.
+     * @dev Used internally to construct the full token URI.
+     * @return The base URI.
+     */
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    /**
+     * @notice Returns the number of NFTs minted by a specific address.
+     * @dev Used to enforce minting limits.
+     * @param owner The address to check.
+     * @return The number of NFTs minted by the address.
+     */
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    /**
+     * @notice Returns the ownership data for a given token ID.
+     * @dev Used to get detailed ownership information.
+     * @param tokenId The ID of the token.
+     * @return The ownership data.
+     */
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return ownershipOf(tokenId);
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw funds from the contract.
+     * @dev Uses nonReentrant to prevent reentrancy attacks.
+     */
+    function withdrawMoney() external onlyOwner nonReentrant {
+        (bool success, ) = msg.sender.call{value: address(this).balance}("");
+        require(success, "Transfer failed");
+    }
+
+    /**
+     * @notice Changes the maximum number of NFTs that can be minted by a single address.
+     * @dev Only the contract owner can call this function.
+     * @param q The new maximum number of NFTs.
+     */
+    function changeMAX_PER_Address(uint256 q) external onlyOwner {
+        MAX_PER_Address = q;
+    }
+
+    /**
+     * @notice Reserves a number of NFTs for a specific address.
+     * @dev Only the contract owner can call this function.
+     * @param _address The address to reserve NFTs for.
+     * @param quantity The number of NFTs to reserve.
+     */
+    function reserve(address _address, uint256 quantity) public onlyOwner {
+        require(totalSupply() + quantity <= TotalCollectionSize_, "Exceeds collection size");
+        _safeMint(_address, quantity);
+    }
+
+    /**
+     * @notice Changes the price for minting one NFT.
+     * @dev Only the contract owner can call this function.
+     * @param _newPrice The new price for minting one NFT.
+     */
+    function changeMintPrice(uint256 _newPrice) external onlyOwner {
+        PRICE = _newPrice;
+    }
+
+    /**
+     * @notice Changes the total size of the NFT collection.
+     * @dev Only the contract owner can call this function.
+     * @param _collectionSize The new total size of the collection.
+     */
+    function changeCollectionSize(uint256 _collectionSize) external onlyOwner {
+        require(_collectionSize >= totalSupply(), "New size must be >= current supply");
+        TotalCollectionSize_ = _collectionSize;
+    }
+
+    /**
+     * @notice Changes the maximum number of NFTs that can be minted in a single transaction.
+     * @dev Only the contract owner can call this function.
+     * @param q The new maximum number of NFTs.
+     */
+    function changeMAX_PER_Transtion(uint256 q) external onlyOwner {
+        MAX_PER_Transtion = q;
+    }
+
+    /**
+     * @notice Allows the contract owner to give away NFTs to a specific address.
+     * @dev Only the contract owner can call this function.
+     * @param a The address to give NFTs to.
+     * @param q The number of NFTs to give away.
+     */
+    function giveaway(address a, uint q) public onlyOwner {
+        require(totalSupply() + q <= TotalCollectionSize_, "Exceeds collection size");
+        _safeMint(a, q);
+    }
+
+    /**
+     * @notice Changes the status of the sale.
+     * @dev Only the contract owner can call this function.
+     * @param s The new status (0 - paused, 1 - whitelist sale, 2 - public sale).
+     */
+    function setStatus(uint256 s) external onlyOwner {
+        require(s <= 2, "Invalid status");
+        status = s;
+    }
+
+    /**
+     * @notice Returns the current status of the sale.
+     * @dev Used to check if the sale is paused, in whitelist mode, or open to the public.
+     * @return The current status.
+     */
+    function getStatus() public view returns (uint) {
+        return status;
+    }
+
+    /**
+     * @notice Returns the total size of the NFT collection.
+     * @dev Used to check the total number of NFTs in the collection.
+     * @return The total size of the collection.
+     */
+    function getcollectionSize() public view returns (uint) {
+        return TotalCollectionSize_;
+    }
+}
+```
+
+This implementation includes all the required functionality for the FORMLESS NFT contract:
+- Minting functionality with whitelist and public sale modes
+- Owner controls for changing collection parameters
+- Withdrawal functionality for contract funds
+- Proper access control and security measures
+- Token URI handling for metadata
+- Whitelist management
+- Collection size and price management
+
+The contract follows the ERC721A standard for gas-efficient batch minting and includes all the specified functions with appropriate implementations.

@@ -1,0 +1,133 @@
+pragma solidity 0.8.7;
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    // Immutable configuration
+    uint256 public immutable maxPerAddressDuringMint;
+    uint256 public immutable amountForDevs;
+    uint256 public immutable amountForSaleAndDev;
+    uint256 internal immutable collectionSize;
+    uint256 internal immutable maxBatchSize;
+
+    // Sale configuration
+    struct SaleConfig {
+        uint32 publicSaleStartTime;
+        uint64 publicPriceWei;
+    }
+    SaleConfig public saleConfig;
+
+    // Base URI for metadata
+    string private _baseTokenURI;
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    constructor() ERC721A("Okimi", "OKM") {
+        maxPerAddressDuringMint = 5;
+        maxBatchSize = 5;
+        // In this setup the total supply, sale allocation and dev allocation are equal.
+        collectionSize = amountForDevs = amountForSaleAndDev = 1500;
+        saleConfig.publicPriceWei = 5 ether / 1000;            // 0.005 ETH
+        saleConfig.publicSaleStartTime = uint32(block.timestamp);
+    }
+
+    // PUBLIC MINTING
+
+    function mint(uint256 quantity)
+        external
+        payable
+        callerIsUser
+    {
+        uint256 price = uint256(saleConfig.publicPriceWei) * quantity;
+        require(isSaleOn(saleConfig.publicPriceWei, saleConfig.publicSaleStartTime),
+                "Sale is not active");
+        require(quantity <= maxBatchSize, "Cannot mint this many at once");
+        require(_numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint,
+                "Exceeded max per address");
+        require(totalSupply() + quantity <= amountForSaleAndDev,
+                "Not enough remaining for public sale");
+        refundIfOver(price);
+        _safeMint(msg.sender, quantity);
+    }
+
+    // INTERNAL HELPERS
+
+    function refundIfOver(uint256 price) private {
+        require(msg.value >= price, "Insufficient payment");
+        if (msg.value > price) {
+            payable(msg.sender).transfer(msg.value - price);
+        }
+    }
+
+    function isSaleOn(uint256 _price, uint256 _startTime)
+        public
+        view
+        returns (bool)
+    {
+        return (_price != 0 && block.timestamp >= _startTime);
+    }
+
+    // OWNER-ONLY CONTROLS
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price)
+        external
+        onlyOwner
+    {
+        saleConfig.publicSaleStartTime = timestamp;
+        saleConfig.publicPriceWei = price;
+    }
+
+    function reserve(uint256 quantity) external onlyOwner {
+        require(totalSupply() + quantity <= amountForDevs,
+                "Not enough remaining for reserve");
+        // Mint in batches to stay within the maxBatchSize limit
+        uint256 remaining = quantity;
+        while (remaining > 0) {
+            uint256 toMint = remaining > maxBatchSize ? maxBatchSize : remaining;
+            _safeMint(msg.sender, toMint);
+            remaining -= toMint;
+        }
+    }
+
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No balance to withdraw");
+        (bool success, ) = msg.sender.call{value: balance}("");
+        require(success, "Transfer failed");
+    }
+
+    // VIEWS
+
+    function getPrice() public view returns (uint256) {
+        return uint256(saleConfig.publicPriceWei);
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId)
+        external
+        view
+        returns (TokenOwnership memory)
+    {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted() public view returns (uint256) {
+        return _totalMinted();
+    }
+
+    // Overrides _baseURI in ERC721A
+    function _baseURI() internal view override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    // Allow contract to receive ether
+    receive() external payable {}
+}

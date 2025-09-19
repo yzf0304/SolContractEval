@@ -1,0 +1,484 @@
+Here's the complete implementation of the DaiProxy contract based on the provided context:
+
+```solidity
+/**
+ * @title DaiProxy
+ * @notice A proxy contract for managing DAI and its wrapped versions, including deposit, withdrawal, and migration functionalities.
+ * @dev This contract handles the lifecycle of DAI and its wrapped versions (eDai and oDai) with various state transitions and mathematical operations.
+ */
+contract DaiProxy {
+    string public constant version = "0511";
+
+    // --- Owner ---
+    address public owner;
+
+    /**
+     * @notice Modifier to restrict function calls to the owner of the contract.
+     * @dev Ensures that only the owner can execute the function.
+     */
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    /**
+     * @notice Event emitted when the owner is set.
+     * @param owner The new owner's address.
+     */
+    event SetOwner(address owner);
+
+    /**
+     * @notice Sets a new owner for the contract.
+     * @param _owner The address of the new owner.
+     * @dev Only the current owner can set a new owner.
+     */
+    function setOwner(address _owner) public onlyOwner {
+        owner = _owner;
+        emit SetOwner(_owner);
+    }
+
+    // --- State ---
+    enum State { Ready, Running, Killed }
+
+    State public state = State.Ready;
+
+    /**
+     * @notice Modifier to ensure the function can only be called when the state is Ready.
+     * @dev Ensures that the function is not called after the contract has started.
+     */
+    modifier notStarted {
+        require(state == State.Ready);
+        _;
+    }
+
+    /**
+     * @notice Modifier to ensure the function can only be called when the state is Running.
+     * @dev Ensures that the function is not called when the contract is paused or killed.
+     */
+    modifier notPaused {
+        require(state == State.Running);
+        _;
+    }
+
+    // --- Math ---
+    uint constant ONE = 10 ** 27;
+
+    /**
+     * @notice Adds two unsigned integers, ensuring no overflow.
+     * @param a The first integer.
+     * @param b The second integer.
+     * @return The sum of the two integers.
+     * @dev Ensures that the sum does not overflow.
+     */
+    function add(uint a, uint b) private pure returns (uint) {
+        uint c = a + b;
+        require(c >= a, "DaiProxy/add-overflow");
+        return c;
+    }
+
+    /**
+     * @notice Subtracts one unsigned integer from another, ensuring no underflow.
+     * @param a The first integer.
+     * @param b The second integer.
+     * @return The difference between the two integers.
+     * @dev Ensures that the subtraction does not underflow.
+     */
+    function sub(uint a, uint b) private pure returns (uint) {
+        require(a >= b, "DaiProxy/sub-underflow");
+        return a - b;
+    }
+
+    /**
+     * @notice Multiplies two unsigned integers, ensuring no overflow.
+     * @param a The first integer.
+     * @param b The second integer.
+     * @return The product of the two integers.
+     * @dev Ensures that the multiplication does not overflow.
+     */
+    function mul(uint a, uint b) private pure returns (uint) {
+        if (a == 0) {
+            return 0;
+        }
+        uint c = a * b;
+        require(c / a == b, "DaiProxy/mul-overflow");
+        return c;
+    }
+
+    /**
+     * @notice Divides one unsigned integer by another, ensuring no division by zero.
+     * @param a The numerator.
+     * @param b The denominator.
+     * @return The quotient of the division.
+     * @dev Ensures that the denominator is not zero.
+     */
+    function div(uint a, uint b) private pure returns (uint) {
+        require(b > 0, "DaiProxy/div-by-zero");
+        return a / b;
+    }
+
+    /**
+     * @notice Calculates the ceiling of the division of two unsigned integers.
+     * @param a The numerator.
+     * @param b The denominator.
+     * @return The ceiling of the division.
+     * @dev Ensures that the denominator is not zero.
+     */
+    function ceil(uint a, uint b) private pure returns (uint) {
+        uint c = a / b;
+        if (a % b > 0) c = c + 1;
+        return c;
+    }
+
+    /**
+     * @notice Performs a multiplication followed by a division, ensuring no overflow or division by zero.
+     * @param a The first integer.
+     * @param b The second integer.
+     * @param c The divisor.
+     * @return The result of the multiplication and division.
+     * @dev Ensures that the divisor is not zero and the multiplication does not overflow.
+     */
+    function muldiv(uint a, uint b, uint c) private pure returns (uint) {
+        return div(mul(a, b), c);
+    }
+
+    // --- Contracts & Constructor ---
+    DaiLike public Dai;
+    JoinLike public Join;
+    PotLike public Pot;
+    VatLike public Vat;
+
+    ReserveLike public Reserve;
+
+    WrappedDaiLike public EDai;
+    WrappedDaiLike public ODai;
+
+    /**
+     * @notice Event emitted when the reserve is set.
+     * @param reserve The address of the new reserve.
+     */
+    event SetReserve(address reserve);
+
+    /**
+     * @notice Initializes the contract with the necessary addresses.
+     * @param dai The address of the DAI token.
+     * @param join The address of the Join contract.
+     * @param pot The address of the Pot contract.
+     * @param vat The address of the Vat contract.
+     * @param eDai The address of the eDai token.
+     * @param oDai The address of the oDai token.
+     * @dev Sets up the initial state and approvals for the contract.
+     */
+    constructor(address dai, address join, address pot, address vat, address eDai, address oDai) public {
+        owner = msg.sender;
+
+        Dai = DaiLike(dai);
+        Join = JoinLike(join);
+        Pot = PotLike(pot);
+        Vat = VatLike(vat);
+
+        EDai = WrappedDaiLike(eDai);
+        ODai = WrappedDaiLike(oDai);
+
+        require(address(Join.dai()) == dai);
+        require(address(Join.vat()) == vat);
+        require(address(Pot.vat()) == vat);
+
+        Vat.hope(pot);  // Pot.join
+        Vat.hope(join);  // Join.exit
+
+        require(Dai.approve(join, uint(-1)));  // Join.join -> dai.burn
+    }
+
+    /**
+     * @notice Sets the reserve contract.
+     * @param reserve The address of the new reserve.
+     * @dev Only the owner can set the reserve. Approves the reserve for eDai and oDai.
+     */
+    function setReserve(address reserve) public onlyOwner {
+        Reserve = ReserveLike(reserve);
+        EDai.setReserve(reserve);
+        ODai.setReserve(reserve);
+        require(EDai.approve(reserve, uint(-1)));
+        require(ODai.approve(reserve, uint(-1)));
+        emit SetReserve(reserve);
+    }
+
+    /**
+     * @notice Modifier to restrict function calls to the eDai contract.
+     * @dev Ensures that only the eDai contract can execute the function.
+     */
+    modifier onlyEDai {
+        require(msg.sender == address(EDai));
+        _;
+    }
+
+    /**
+     * @notice Modifier to restrict function calls to the oDai contract.
+     * @dev Ensures that only the oDai contract can execute the function.
+     */
+    modifier onlyODai {
+        require(msg.sender == address(ODai));
+        _;
+    }
+
+    // --- Integration ---
+    /**
+     * @notice Returns the current chi value from the Pot contract.
+     * @return The chi value.
+     * @dev Updates the chi value if necessary.
+     */
+    function chi() private returns (uint) {
+        uint _chi = Pot.chi();
+        if (now > Pot.rho()) {
+            _chi = Pot.drip();
+        }
+        return _chi;
+    }
+
+    /**
+     * @notice Joins DAI into the system.
+     * @param dai The amount of DAI to join.
+     * @dev Transfers DAI from the sender, joins it, and updates the Pot.
+     */
+    function joinDai(uint dai) private {
+        require(Dai.transferFrom(msg.sender, address(this), dai));
+        Join.join(address(this), dai);
+        Pot.join(dai * ONE / chi());
+    }
+
+    /**
+     * @notice Exits DAI from the system.
+     * @param to The address to send the DAI to.
+     * @param dai The amount of DAI to exit.
+     * @dev Exits DAI from the Pot and sends it to the specified address.
+     */
+    function exitDai(address to, uint dai) private {
+        Pot.exit(dai * ONE / chi());
+        Join.exit(to, dai);
+    }
+
+    /**
+     * @notice Mints oDai for a given amount of DAI.
+     * @param to The address to mint the oDai to.
+     * @param dai The amount of DAI to mint oDai for.
+     * @return The amount of oDai minted.
+     * @dev Joins DAI, calculates the oDai amount, and mints it.
+     */
+    function mintODai(address to, uint dai) private returns (uint) {
+        joinDai(dai);
+        uint _chi = chi();
+        uint wad = muldiv(dai, ONE, _chi);
+        ODai.mint(to, wad);
+        return wad;
+    }
+
+    /**
+     * @notice Deposits eDai to the reserve.
+     * @param toChain The destination chain.
+     * @param dai The amount of DAI to deposit.
+     * @param to The recipient address on the destination chain.
+     * @dev Joins DAI, mints eDai, and deposits it to the reserve.
+     */
+    function depositEDai(string memory toChain, uint dai, bytes memory to) public notPaused {
+        joinDai(dai);
+        EDai.mint(address(this), dai);
+        Reserve.depositToken(address(EDai), toChain, to, dai);
+    }
+
+    /**
+     * @notice Deposits oDai to the reserve.
+     * @param toChain The destination chain.
+     * @param dai The amount of DAI to deposit.
+     * @param to The recipient address on the destination chain.
+     * @dev Mints oDai, joins DAI, and deposits it to the reserve.
+     */
+    function depositODai(string memory toChain, uint dai, bytes memory to) public notPaused {
+        uint wad = mintODai(address(this), dai);
+        Reserve.depositToken(address(ODai), toChain, to, wad);
+    }
+
+    /**
+     * @notice Swaps eDai for DAI.
+     * @param from The address to burn eDai from.
+     * @param to The address to send DAI to.
+     * @param dai The amount of DAI to swap.
+     * @dev Burns eDai and exits DAI to the specified address.
+     */
+    function swapFromEDai(address from, address to, uint dai) private {
+        EDai.burn(from, dai);
+        exitDai(to, dai);
+    }
+
+    /**
+     * @notice Swaps oDai for DAI.
+     * @param from The address to burn oDai from.
+     * @param to The address to send DAI to.
+     * @param wad The amount of oDai to swap.
+     * @dev Burns oDai, calculates the DAI amount, and exits DAI to the specified address.
+     */
+    function swapFromODai(address from, address to, uint wad) private {
+        ODai.burn(from, wad);
+        uint _chi = chi();
+        uint dai = muldiv(wad, _chi, ONE);
+        exitDai(to, dai);
+    }
+
+    /**
+     * @notice Withdraws eDai from the reserve.
+     * @param to The address to send the DAI to.
+     * @param dai The amount of DAI to withdraw.
+     * @dev Swaps eDai for DAI and sends it to the specified address.
+     */
+    function withdrawEDai(address to, uint dai) public onlyEDai notPaused {
+        swapFromEDai(address(this), to, dai);
+    }
+
+    /**
+     * @notice Withdraws oDai from the reserve.
+     * @param to The address to send the DAI to.
+     * @param wad The amount of oDai to withdraw.
+     * @dev Swaps oDai for DAI and sends it to the specified address.
+     */
+    function withdrawODai(address to, uint wad) public onlyODai notPaused {
+        swapFromODai(address(this), to, wad);
+    }
+
+    /**
+     * @notice Swaps DAI for eDai.
+     * @param dai The amount of DAI to swap.
+     * @dev Joins DAI, mints eDai, and sends it to the sender.
+     */
+    function swapToEDai(uint dai) public notPaused {
+        joinDai(dai);
+        EDai.mint(msg.sender, dai);
+    }
+
+    /**
+     * @notice Swaps DAI for oDai.
+     * @param dai The amount of DAI to swap.
+     * @dev Mints oDai for the specified DAI amount.
+     */
+    function swapToODai(uint dai) public notPaused {
+        mintODai(msg.sender, dai);
+    }
+
+    /**
+     * @notice Swaps eDai for DAI.
+     * @param dai The amount of DAI to swap.
+     * @dev Swaps eDai for DAI and sends it to the sender.
+     */
+    function swapFromEDai(uint dai) public notPaused {
+        swapFromEDai(msg.sender, msg.sender, dai);
+    }
+
+    /**
+     * @notice Swaps oDai for DAI.
+     * @param wad The amount of oDai to swap.
+     * @dev Swaps oDai for DAI and sends it to the sender.
+     */
+    function swapFromODai(uint wad) public notPaused {
+        swapFromODai(msg.sender, msg.sender, wad);
+    }
+
+    // --- Migration ---
+    DaiProxy public NewProxy;
+
+    /**
+     * @notice Event emitted when a new proxy is set.
+     * @param proxy The address of the new proxy.
+     */
+    event SetNewProxy(address proxy);
+
+    /**
+     * @notice Event emitted when the proxy is started.
+     * @param prev The address of the previous proxy.
+     */
+    event StartProxy(address prev);
+
+    /**
+     * @notice Event emitted when the proxy is killed.
+     * @param next The address of the next proxy.
+     * @param mig Whether the migration was successful.
+     */
+    event KillProxy(address next, bool mig);
+
+    /**
+     * @notice Modifier to restrict function calls to the new proxy contract.
+     * @dev Ensures that only the new proxy can execute the function.
+     */
+    modifier onlyNewProxy {
+        require(msg.sender == address(NewProxy));
+        _;
+    }
+
+    /**
+     * @notice Sets a new proxy contract.
+     * @param proxy The address of the new proxy.
+     * @dev Only the owner can set a new proxy.
+     */
+    function setNewProxy(address proxy) public onlyOwner {
+        NewProxy = DaiProxy(proxy);
+        emit SetNewProxy(proxy);
+    }
+
+    /**
+     * @notice Kills the proxy and transfers remaining DAI to the specified address.
+     * @param to The address to transfer the remaining DAI to.
+     * @dev Only the owner can kill the proxy. Exits all DAI from the Pot and sends it to the specified address.
+     */
+    function killProxy(address to) public notPaused onlyOwner {
+        state = State.Killed;
+
+        bool mig = address(NewProxy) != address(0);
+        
+        uint pie = Pot.pie(address(this));
+        if (pie > 0) {
+            Pot.exit(pie);
+        }
+        
+        uint dai = Vat.dai(address(this));
+        if (dai > 0) {
+            Join.exit(to, dai / ONE);
+        }
+        
+        emit KillProxy(address(NewProxy), mig);
+    }
+
+    /**
+     * @notice Migrates the proxy to a new proxy.
+     * @dev Only the new proxy can migrate. Transfers DAI and sets the new proxy for eDai and oDai.
+     */
+    function migrateProxy() public notPaused onlyNewProxy {
+        uint pie = Pot.pie(address(this));
+        if (pie > 0) {
+            Pot.exit(pie);
+            Vat.move(address(this), address(NewProxy), Vat.dai(address(this)));
+            NewProxy.startProxy(address(this));
+        }
+        
+        EDai.setProxy(address(NewProxy));
+        ODai.setProxy(address(NewProxy));
+    }
+
+    /**
+     * @notice Starts the proxy, optionally migrating from an old proxy.
+     * @param oldProxy The address of the old proxy.
+     * @dev Only the owner can start the proxy. Joins any remaining DAI from the old proxy.
+     */
+    function startProxy(address oldProxy) public notStarted onlyOwner {
+        state = State.Running;
+        
+        uint dai = Vat.dai(address(this)) / ONE;
+        if (dai > 0) {
+            Pot.join(dai * ONE / chi());
+        }
+        
+        EDai.setProxy(address(this));
+        ODai.setProxy(address(this));
+        
+        emit StartProxy(oldProxy);
+    }
+}
+```
+
+This implementation includes all the required functions as specified in the contract description, maintaining the exact same function signatures and behavior while filling in the missing implementation details.

@@ -1,0 +1,148 @@
+pragma solidity ^0.4.11;
+
+/// @title Kubera Token Contract
+/// @notice ERC20 token with burn and ICO management
+contract SafeMath {
+    function safeMul(uint a, uint b) internal returns (uint) {
+        uint c = a * b;
+        Assert(a == 0 || c / a == b);
+        return c;
+    }
+    function safeSub(uint a, uint b) internal returns (uint) {
+        Assert(b <= a);
+        return a - b;
+    }
+    function safeAdd(uint a, uint b) internal returns (uint) {
+        uint c = a + b;
+        Assert(c >= a && c >= b);
+        return c;
+    }
+    function Assert(bool assertion) internal {
+        if (!assertion) {
+            revert();
+        }
+    }
+}
+
+contract Kubera is SafeMath {
+    string public standard = 'ERC20';
+    string public name     = 'Kubera token';
+    string public symbol   = 'KBR';
+    uint8  public decimals = 0;
+    uint256 public totalSupply;
+
+    address public owner;
+    uint    public tokensSoldToInvestors = 0;
+    uint    public maxGoalInICO         = 2100000000;
+    uint256 public startTime            = 1510325999; // Transfers allowed after this timestamp
+    bool    public burned;
+    bool    public hasICOStarted;
+
+    address public tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event TransferToReferral(address indexed referralAddress, uint256 value);
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+    event Burned(uint256 amount);
+
+    /// @dev Constructor: assign entire supply to owner
+    function Kubera() {
+        owner = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        balanceOf[owner] = 2205000000;
+        totalSupply      = 2205000000;
+    }
+
+    /// @notice Transfer tokens respecting ICO rules
+    function transfer(address _to, uint256 _value) returns (bool success) {
+        if (_to == address(0)) revert();
+
+        // ICO period (before transfers open)
+        if (now < startTime) {
+            // only owner may send tokens in ICO
+            if (msg.sender != owner) revert();
+
+            // cannot exceed ICO cap
+            if (tokensSoldToInvestors >= maxGoalInICO) revert();
+
+            uint256 available = safeSub(maxGoalInICO, tokensSoldToInvestors);
+            if (_value > available) {
+                _value = available;
+            }
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, _value);
+            hasICOStarted = true;
+        }
+
+        // check balance and do transfer
+        if (balanceOf[msg.sender] < _value) revert();
+        balanceOf[msg.sender] = safeSub(balanceOf[msg.sender], _value);
+        balanceOf[_to]        = safeAdd(balanceOf[_to], _value);
+
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /// @notice Approve spender to transfer your tokens
+    function approve(address _spender, uint256 _value) returns (bool success) {
+        if (_spender == address(0)) revert();
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /// @notice Transfer tokens on behalf of another address, with ICO rules
+    function transferFrom(address _from, address _to, uint256 _value) returns (bool success) {
+        if (_to == address(0)) revert();
+        // ICO period: only owner’s tokens may be distributed
+        if (now < startTime) {
+            if (_from != owner) revert();
+
+            if (tokensSoldToInvestors >= maxGoalInICO) revert();
+            uint256 available = safeSub(maxGoalInICO, tokensSoldToInvestors);
+            if (_value > available) {
+                _value = available;
+            }
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, _value);
+            hasICOStarted = true;
+        }
+
+        if (balanceOf[_from] < _value) revert();
+        if (allowance[_from][msg.sender] < _value) revert();
+
+        balanceOf[_from]            = safeSub(balanceOf[_from], _value);
+        balanceOf[_to]              = safeAdd(balanceOf[_to], _value);
+        allowance[_from][msg.sender] = safeSub(allowance[_from][msg.sender], _value);
+
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /// @notice After ICO ends, send reserved tokens to tokensHolder and burn unsold sale tokens
+    function burn() {
+        if (msg.sender != owner) revert();
+        if (now < startTime) revert();      // only after ICO
+        if (burned) revert();               // only once
+
+        burned = true;
+
+        // reserve = totalSupply - ICO cap
+        uint256 reserve = safeSub(totalSupply, maxGoalInICO);
+        // transfer reserve to tokensHolder
+        if (reserve > 0) {
+            if (balanceOf[owner] < reserve) revert();
+            balanceOf[owner]       = safeSub(balanceOf[owner], reserve);
+            balanceOf[tokensHolder] = safeAdd(balanceOf[tokensHolder], reserve);
+            Transfer(owner, tokensHolder, reserve);
+        }
+
+        // burn the rest from owner balance
+        uint256 unsold = balanceOf[owner];
+        if (unsold > 0) {
+            balanceOf[owner] = 0;
+            totalSupply      = safeSub(totalSupply, unsold);
+            Burned(unsold);
+        }
+    }
+}

@@ -1,0 +1,154 @@
+Certainly! Let's fill in the missing parts of the `PepeYogaClub` smart contract based on the provided specifications and logic requirements. Here is the complete and functional contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity 0.8.15;
+
+import "./ERC721A.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+/**
+ * @title PepeYogaClub
+ * @notice A smart contract for the PepeYogaClub NFT collection, implementing ERC721A and Ownable.
+ * @dev This contract allows users to mint NFTs, with various controls and configurations managed by the owner.
+ */
+contract PepeYogaClub is ERC721A, Ownable {
+
+    string public baseURI = "ipfs://QmTLWN9WPq5L9eS9EKcTn2rqUCzr9QK5sd8DYVkkL7yguL/";
+    string public contractURI = "ipfs://QmUvB8sKL4XFTxbMkL9FykiqLgrXeBV1mUkdzWMWhachvD";
+
+    uint256 public MAX_PER_WALLET = 11;
+    uint256 public constant MAX_SUPPLY = 2069;
+    uint256 public price = 0.0069 ether;
+
+    bool public paused = true;
+
+    /**
+     * @notice Initializes the contract with the name and symbol.
+     * @dev Sets the initial values for the contract's name and symbol.
+     */
+    constructor() ERC721A("PepeYogaClub", "PYC") {}
+
+    /**
+     * @notice Allows a user to mint a specified number of NFTs.
+     * @dev Ensures that the minting process adheres to the set constraints and conditions.
+     * @param _amount The number of NFTs to mint.
+     */
+    function mint(uint256 _amount) external payable {
+        require(!paused, "Minting paused");
+        require(_amount > 0 && _amount <= MAX_PER_WALLET, "Invalid mint amount");
+        require(totalSupply() + _amount <= MAX_SUPPLY, "Mint exceeds max supply");
+        require(msg.value >= price * _amount, "Insufficient funds");
+
+        _mint(msg.sender, _amount);
+    }
+
+    /**
+     * @notice Overrides the default starting token ID.
+     * @dev Returns the starting token ID for the collection.
+     * @return The starting token ID.
+     */
+    function _startTokenId() internal override view virtual returns (uint256) {
+        return 1;
+    }
+
+    /**
+     * @notice Returns the number of NFTs minted by a specific address.
+     * @dev Uses the internal `_numberMinted` function to get the count.
+     * @param _owner The address to check.
+     * @return The number of NFTs minted by the address.
+     */
+    function minted(address _owner) public view returns (uint256) {
+        return _numberMinted(_owner);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the contract's balance.
+     * @dev Transfers the contract's balance to the owner.
+     */
+    function withdraw() external onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+
+    /**
+     * @notice Allows the owner to mint NFTs to multiple addresses in bulk.
+     * @dev Mints NFTs to the specified addresses with the specified amounts.
+     * @param _to An array of addresses to receive the NFTs.
+     * @param _amount An array of amounts corresponding to each address.
+     */
+    function teamMint(address[] memory _to, uint256[] memory _amount) external onlyOwner {
+        require(_to.length == _amount.length, "Invalid input lengths");
+
+        uint256 totalMintAmount = 0;
+        for (uint256 i = 0; i < _to.length; i++) {
+            totalMintAmount += _amount[i];
+            _mint(_to[i], _amount[i]);
+        }
+
+        require(totalSupply() + totalMintAmount <= MAX_SUPPLY, "Team mint exceeds max supply");
+    }
+
+    /**
+     * @notice Allows the owner to set the maximum number of NFTs that can be minted per wallet.
+     * @dev Updates the `MAX_PER_WALLET` variable.
+     * @param _max The new maximum number of NFTs per wallet.
+     */
+    function setMaxPerWallet(uint256 _max) external onlyOwner {
+        MAX_PER_WALLET = _max;
+    }
+
+    /**
+     * @notice Allows the owner to set the price for minting an NFT.
+     * @dev Updates the `price` variable.
+     * @param _price The new price for minting an NFT.
+     */
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    /**
+     * @notice Allows the owner to toggle the minting state.
+     * @dev Toggles the `paused` variable.
+     */
+    function toggleMint() external onlyOwner {
+        paused = !paused;
+    }
+
+    /**
+     * @notice Allows the owner to set the base URI for the NFT metadata.
+     * @dev Updates the `baseURI` variable.
+     * @param baseURI_ The new base URI.
+     */
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    /**
+     * @notice Allows the owner to set the contract URI.
+     * @dev Updates the `contractURI` variable.
+     * @param _contractURI The new contract URI.
+     */
+    function setContractURI(string memory _contractURI) external onlyOwner {
+        contractURI = _contractURI;
+    }
+
+    /**
+     * @notice Returns the URI for a given token ID.
+     * @dev Constructs the token URI using the base URI and the token ID.
+     * @param _tokenId The ID of the token.
+     * @return The URI for the token.
+     */
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        require(_exists(_tokenId), "URI query for nonexistent token");
+        return string(abi.encodePacked(baseURI, _toString(_tokenId), ".json"));
+    }
+}
+```
+
+### Summary of Changes:
+- Implemented the `mint` function with checks for mint pause status, validity of mint amount, and sufficient funds.
+- Implemented the `withdraw` function to allow the owner to withdraw the contract's balance.
+- Implemented the `teamMint` function, enabling the owner to mint NFTs to multiple addresses in bulk.
+- Added implementation for all setter functions (`setMaxPerWallet`, `setPrice`, `toggleMint`, `setBaseURI`, `setContractURI`).
+- Implemented the `tokenURI` function to construct the metadata URI for a given token ID.

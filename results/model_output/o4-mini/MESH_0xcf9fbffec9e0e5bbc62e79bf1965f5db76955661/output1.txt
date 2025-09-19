@@ -1,0 +1,166 @@
+pragma solidity 0.4.23;
+
+contract MESH is StandardToken {
+
+    // Token metadata
+    string public name = "MeshBox";
+    uint8 public decimals = 18;
+    string public symbol = "MESH";
+    string public version = "v0.1";
+
+    // Allocation window
+    uint256 public allocateEndTime;
+
+    // Nonce store for replay protection
+    mapping(address => uint256) nonces;
+
+    /**
+     * @dev Reject any incoming ETH
+     */
+    function () public {
+        revert();
+    }
+
+    /**
+     * @dev Set allocation deadline to now + 1 day
+     */
+    constructor() public {
+        allocateEndTime = now + 1 days;
+    }
+
+    /**
+     * @notice Transfer on behalf of `_from` to `_to` with fee to msg.sender
+     * @param _from Address authorizing the transfer
+     * @param _to Recipient address
+     * @param _value Amount to transfer
+     * @param _feeMesh Fee in MESH tokens for the relayer
+     * @param _v Signature v
+     * @param _r Signature r
+     * @param _s Signature s
+     */
+    function transferProxy(
+        address _from,
+        address _to,
+        uint256 _value,
+        uint256 _feeMesh,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        public
+        transferAllowed(_from)
+        returns (bool)
+    {
+        // recreate the signed message
+        bytes32 raw = keccak256(
+            abi.encodePacked(
+                address(this),
+                _from,
+                _to,
+                _value,
+                _feeMesh,
+                nonces[_from]
+            )
+        );
+        bytes32 msgHash = keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", raw)
+        );
+        address signer = ecrecover(msgHash, _v, _r, _s);
+        require(signer == _from);
+
+        // consume nonce
+        nonces[_from]++;
+
+        // check balances and overflows
+        uint256 total = _value + _feeMesh;
+        require(balances[_from] >= total);
+        require(balances[_to] + _value >= balances[_to]);
+        require(balances[msg.sender] + _feeMesh >= balances[msg.sender]);
+
+        // perform transfers
+        balances[_from] -= total;
+        balances[_to] += _value;
+        balances[msg.sender] += _feeMesh;
+
+        emit Transfer(_from, _to, _value);
+        emit Transfer(_from, msg.sender, _feeMesh);
+        return true;
+    }
+
+    /**
+     * @notice Approve on behalf of `_from`
+     * @param _from Address authorizing the approval
+     * @param _spender Spender address
+     * @param _value Amount to approve
+     * @param _v Signature v
+     * @param _r Signature r
+     * @param _s Signature s
+     */
+    function approveProxy(
+        address _from,
+        address _spender,
+        uint256 _value,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        public
+        returns (bool)
+    {
+        // recreate the signed message
+        bytes32 raw = keccak256(
+            abi.encodePacked(
+                address(this),
+                _from,
+                _spender,
+                _value,
+                nonces[_from]
+            )
+        );
+        bytes32 msgHash = keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", raw)
+        );
+        address signer = ecrecover(msgHash, _v, _r, _s);
+        require(signer == _from);
+
+        // consume nonce and set allowance
+        nonces[_from]++;
+        allowed[_from][_spender] = _value;
+
+        emit Approval(_from, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Get the current nonce for `_addr`
+     */
+    function getNonce(address _addr) public view returns (uint256) {
+        return nonces[_addr];
+    }
+
+    /**
+     * @notice Allocate tokens to multiple addresses before deadline
+     */
+    function allocateTokens(address[] _owners, uint256[] _values)
+        public
+        onlyOwner
+    {
+        require(now <= allocateEndTime);
+        require(_owners.length == _values.length);
+
+        for (uint256 i = 0; i < _owners.length; i++) {
+            address to = _owners[i];
+            uint256 val = _values[i];
+
+            // prevent overflow
+            require(balances[to] + val >= balances[to]);
+            balances[to] += val;
+
+            // increase total supply
+            totalSupply += val;
+
+            // emit mint event
+            emit Transfer(address(0), to, val);
+        }
+    }
+}

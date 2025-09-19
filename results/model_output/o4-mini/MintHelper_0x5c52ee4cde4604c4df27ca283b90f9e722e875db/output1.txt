@@ -1,0 +1,133 @@
+```solidity
+pragma solidity 0.5.10;
+
+/**
+ * @dev Standard SafeMath library from OpenZeppelin (truncated to core ops).
+ */
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "SafeMath: subtraction overflow");
+        return a - b;
+    }
+}
+
+/**
+ * @dev Minimal ERC20 interface.
+ */
+interface ERC20Interface {
+    function transfer(address to, uint256 value) external returns (bool);
+}
+
+/**
+ * @dev Minimal ERC918 (mintable token) interface.
+ */
+interface ERC918Interface {
+    function mint(uint256 nonce, bytes32 challenge_digest) external returns (bool);
+}
+
+contract MintHelper is Ownable {
+    using SafeMath for uint256;
+
+    string public name;
+    address public mintableToken;
+    mapping(bytes32 => bool) private successfulPayments;
+
+    constructor(address mToken, string memory mName) public {
+        require(mToken != address(0), "MintHelper: zero token address");
+        mintableToken = mToken;
+        name = mName;
+    }
+
+    /**
+     * @notice Sets the address of the mintable token.
+     * @dev Only callable by owner.
+     */
+    function setMintableToken(address mToken)
+        public
+        onlyOwner
+        returns (bool)
+    {
+        require(mToken != address(0), "MintHelper: zero token address");
+        mintableToken = mToken;
+        return true;
+    }
+
+    /**
+     * @notice Checks whether a batch payment ID has already been used.
+     */
+    function paymentSuccessful(bytes32 paymentId)
+        public
+        view
+        returns (bool)
+    {
+        return successfulPayments[paymentId];
+    }
+
+    /**
+     * @notice Proxy a mint operation to the ERC918 contract.
+     */
+    function proxyMint(uint256 nonce, bytes32 challenge_digest)
+        public
+        returns (bool)
+    {
+        bool ok = ERC918Interface(mintableToken).mint(nonce, challenge_digest);
+        require(ok, "MintHelper: mint failed");
+        return true;
+    }
+
+    /**
+     * @notice Withdraw all ETH from this contract to the owner.
+     */
+    function withdraw() public onlyOwner {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "MintHelper: no ETH to withdraw");
+        address payable to = address(uint160(owner()));
+        to.transfer(bal);
+    }
+
+    /**
+     * @notice Send ERC20 tokens from this contract to a single address.
+     */
+    function send(
+        address _tokenAddr,
+        address dest,
+        uint256 value
+    ) public onlyOwner returns (bool) {
+        require(dest != address(0), "MintHelper: zero destination");
+        bool ok = ERC20Interface(_tokenAddr).transfer(dest, value);
+        require(ok, "MintHelper: transfer failed");
+        return true;
+    }
+
+    /**
+     * @notice Batch send ERC20 tokens. Marks the paymentId used on success.
+     * @return Number of successful transfers.
+     */
+    function multisend(
+        address _tokenAddr,
+        bytes32 paymentId,
+        address[] memory dests,
+        uint256[] memory values
+    ) public onlyOwner returns (uint256) {
+        require(!successfulPayments[paymentId], "MintHelper: paymentId used");
+        require(dests.length == values.length, "MintHelper: length mismatch");
+        uint256 count = 0;
+        for (uint256 i = 0; i < dests.length; i = i.add(1)) {
+            require(dests[i] != address(0), "MintHelper: zero address in dests");
+            bool ok = ERC20Interface(_tokenAddr).transfer(dests[i], values[i]);
+            require(ok, "MintHelper: transfer failed in multisend");
+            count = count.add(1);
+        }
+        successfulPayments[paymentId] = true;
+        return count;
+    }
+
+    // Fallback to accept ETH
+    function() external payable {}
+}
+```

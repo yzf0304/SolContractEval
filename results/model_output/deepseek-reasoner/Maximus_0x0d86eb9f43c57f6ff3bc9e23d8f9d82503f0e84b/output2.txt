@@ -1,0 +1,89 @@
+Here is the completed `HEXToken` contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    struct Stake {
+        uint40 stakeId;
+        uint256 stakedHearts;
+        uint256 stakedDays;
+        uint256 startDay;
+        bool ended;
+    }
+
+    uint256 private launchDate;
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowances;
+    mapping(address => Stake[]) private stakes;
+    uint40 private stakeCounter = 1;
+
+    constructor() {
+        launchDate = block.timestamp;
+    }
+
+    function currentDay() external view returns (uint256) {
+        return (block.timestamp - launchDate) / 1 days;
+    }
+
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "HEX: stakedHearts must be positive");
+        require(newStakedDays > 0, "HEX: stakedDays must be positive");
+        require(balances[msg.sender] >= newStakedHearts, "HEX: insufficient balance");
+
+        balances[msg.sender] -= newStakedHearts;
+
+        uint256 currentDay_ = this.currentDay();
+        stakes[msg.sender].push(Stake({
+            stakeId: stakeCounter++,
+            stakedHearts: newStakedHearts,
+            stakedDays: newStakedDays,
+            startDay: currentDay_,
+            ended: false
+        }));
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowances[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(recipient != address(0), "HEX: transfer to zero address");
+        require(balances[msg.sender] >= amount, "HEX: insufficient balance");
+
+        balances[msg.sender] -= amount;
+        balances[recipient] += amount;
+        return true;
+    }
+
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        address staker = msg.sender;
+        Stake[] storage userStakes = stakes[staker];
+        require(stakeIndex < userStakes.length, "HEX: invalid stake index");
+        Stake storage stake = userStakes[stakeIndex];
+        
+        require(stake.stakeId == stakeIdParam, "HEX: stake ID mismatch");
+        require(!stake.ended, "HEX: stake already ended");
+        require(block.timestamp >= (stake.startDay + stake.stakedDays) * 1 days + launchDate, 
+            "HEX: stake not mature");
+
+        stake.ended = true;
+        balances[staker] += stake.stakedHearts;
+    }
+
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return stakes[stakerAddr].length;
+    }
+}
+```
+
+Key implementation details:
+1. **Staking System**: Uses a struct to track stakes with unique IDs and maturity checks
+2. **Time Tracking**: Implements `currentDay()` using contract deployment timestamp
+3. **ERC20 Core**: Basic transfer and approval functionality with balance tracking
+4. **Security Checks**: Includes input validation and state checks for all operations
+5. **Stake Management**: Maintains stake history while enforcing duration requirements
+
+The contract maintains ERC20-like functionality while adding the staking features specified in the requirements. All operations include necessary validation checks and state updates to ensure correct behavior.

@@ -1,0 +1,125 @@
+Below is the complete implementation of the `ogreswampwtf` contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.7;
+
+import "@openzeppelin/contracts/utils/Strings.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract ogreswampwtf is ERC721, Ownable {
+  using Counters for Counters.Counter;
+  using Strings for uint256;
+
+  Counters.Counter private _tokenSupply;
+  string public ogreURI;
+  string public ogreExtension = ".json";
+  uint256 public cost = 0 ether;
+  uint256 public maxSupply = 3333;
+  uint256 public freeMints = 3333;
+  uint256 public maxMintAmount = 3;
+  bool public paused = false;
+  bool public revealed = false;
+  string public SwampUri;
+  mapping(address => bool) public whitelisted;
+  mapping(address => uint256) private freeMintsWallet;
+
+  constructor(
+    string memory _name,
+    string memory _symbol,
+    string memory _initOgreURI,
+    string memory _initSwampUri
+  ) ERC721(_name, _symbol) {
+    setOgreURI(_initOgreURI);
+    setSwampURI(_initSwampUri);
+  }
+
+  function totalSupply() public view returns (uint256) {
+    return _tokenSupply.current();
+  }
+
+  function _ogreURI() internal view virtual override returns (string memory) {
+    return ogreURI;
+  }
+
+  function mint(address _to, uint256 _mintAmount) public payable {
+    require(!paused, "Minting is paused");
+    require(_mintAmount > 0 && _mintAmount <= maxMintAmount, "Invalid mint amount");
+    require(totalSupply() + _mintAmount <= maxSupply, "Max supply exceeded");
+
+    uint256 currentSupply = totalSupply();
+    bool isFreeMintPhase = currentSupply < freeMints;
+
+    if (isFreeMintPhase) {
+      require(whitelisted[msg.sender], "Not whitelisted for free mint");
+      require(freeMintsWallet[msg.sender] + _mintAmount <= maxMintAmount, "Exceeds free mint limit per wallet");
+      freeMintsWallet[msg.sender] += _mintAmount;
+    } else {
+      require(msg.value >= cost * _mintAmount, "Insufficient funds");
+    }
+
+    for (uint256 i = 0; i < _mintAmount; i++) {
+      _tokenSupply.increment();
+      _safeMint(_to, _tokenSupply.current());
+    }
+  }
+
+  function tokenURI(uint256 tokenId)
+    public
+    view
+    virtual
+    override
+    returns (string memory)
+  {
+    require(_exists(tokenId), "URI query for nonexistent token");
+
+    if (!revealed) return SwampUri;
+    
+    return string(abi.encodePacked(_ogreURI(), tokenId.toString(), ogreExtension));
+  }
+
+  function reveal() public onlyOwner {
+    revealed = true;
+  }
+
+  function setCost(uint256 _newCost) public onlyOwner {
+    cost = _newCost;
+  }
+
+  function setmaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+    maxMintAmount = _newmaxMintAmount;
+  }
+
+  function setSwampURI(string memory _SwampURI) public onlyOwner {
+    SwampUri = _SwampURI;
+  }
+
+  function setOgreURI(string memory _newOgreURI) public onlyOwner {
+    ogreURI = _newOgreURI;
+  }
+
+  function setOgreExtension(string memory _newOgreExtension) public onlyOwner {
+    ogreExtension = _newOgreExtension;
+  }
+
+  function pause(bool _state) public onlyOwner {
+    paused = _state;
+  }
+
+  function whitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = true;
+  }
+
+  function removeWhitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = false;
+  }
+
+  function withdraw() public payable onlyOwner {
+    payable(msg.sender).transfer(address(this).balance);
+  }
+}
+```
+
+This contract implements all the required functionalities and adheres to the constraints and rules mentioned in the initial description. Ensure you have the necessary imports and OpenZeppelin contracts installed to compile this code successfully.

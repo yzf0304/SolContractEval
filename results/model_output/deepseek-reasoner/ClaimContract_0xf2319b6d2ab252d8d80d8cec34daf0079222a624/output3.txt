@@ -1,0 +1,97 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.7.4;
+
+contract ClaimContract {
+    using SafeMath for uint256;
+    using MerkleProof for bytes32[];
+
+    enum MigrationType { V1_UNCLAIMED, HOLDER, STAKER }
+
+    address public constant FLASH_TOKEN_V1 = 0xB4467E8D621105312a914F1D42f10770C0Ffe3c8;
+    address public constant FLASH_TOKEN_V2 = 0x20398aD62bb2D930646d45a6D4292baa0b860C1f;
+    bytes32 public constant MERKLE_ROOT = 0x56dc616cf485d230be34e774839fc4b1b11b0ab99b92d594f7f16f4065f7e814;
+    uint256 public constant V1_UNCLAIMED_DEADLINE = 1617235140;
+
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    event Claimed(uint256 index, address sender, uint256 amount);
+
+    function isClaimed(uint256 index) public view returns (bool) {
+        uint256 wordIndex = index / 256;
+        uint256 bitIndex = index % 256;
+        uint256 word = claimedBitMap[wordIndex];
+        return (word & (1 << bitIndex)) != 0;
+    }
+
+    function _setClaimed(uint256 index) private {
+        uint256 wordIndex = index / 256;
+        uint256 bitIndex = index % 256;
+        claimedBitMap[wordIndex] |= (1 << bitIndex);
+    }
+
+    function _getMigratableAmountAndTransferV1(address _user, uint256 _balance) private returns (uint256) {
+        require(IFlashToken(FLASH_TOKEN_V1).transferFrom(_user, address(this), _balance), "Transfer failed");
+        return _balance;
+    }
+
+    function claim(
+        uint256 index,
+        uint256 balance,
+        uint256 bonusAmount,
+        uint256 expiry,
+        uint256 expireAfter,
+        MigrationType migrationType,
+        bytes32[] calldata merkleProof
+    ) external {
+        require(!isClaimed(index), "Claimed");
+        bytes32 leaf = keccak256(abi.encodePacked(index, msg.sender, balance, bonusAmount, expiry, expireAfter, migrationType));
+        require(merkleProof.verify(MERKLE_ROOT, leaf), "Invalid proof");
+
+        uint256 totalAmount;
+
+        if (migrationType == MigrationType.V1_UNCLAIMED) {
+            require(block.timestamp <= V1_UNCLAIMED_DEADLINE, "Deadline passed");
+            uint256 flashV2Mint = _getMigratableAmountAndTransferV1(msg.sender, balance);
+            totalAmount = flashV2Mint.add(bonusAmount);
+        } else if (migrationType == MigrationType.HOLDER) {
+            totalAmount = balance.add(bonusAmount);
+        } else if (migrationType == MigrationType.STAKER) {
+            require(block.timestamp <= expiry, "Staker expired");
+            if (block.timestamp <= expireAfter) {
+                totalAmount = balance.add(bonusAmount);
+            } else {
+                uint256 remainingTime = expiry.sub(block.timestamp);
+                uint256 totalTime = expiry.sub(expireAfter);
+                uint256 bonus = bonusAmount.mul(remainingTime).div(totalTime);
+                totalAmount = balance.add(bonus);
+            }
+        } else {
+            revert("Invalid migration type");
+        }
+
+        require(IFlashToken(FLASH_TOKEN_V2).mint(msg.sender, totalAmount), "Mint failed");
+        _setClaimed(index);
+        emit Claimed(index, msg.sender, totalAmount);
+    }
+}
+```
+
+**Step-by-Step Explanation:**
+
+1. **isClaimed Function:**
+   - Checks if a claim index has been marked as claimed using a bitmap. Divides the index into word and bit positions to check the status.
+
+2. **_setClaimed Function:**
+   - Marks an index as claimed by setting the corresponding bit in the bitmap.
+
+3. **_getMigratableAmountAndTransferV1 Function:**
+   - Transfers V1 tokens from the user to the contract and returns the transferred amount. Ensures the transfer is successful.
+
+4. **claim Function:**
+   - **Verification:** Checks if the claim is already processed and validates the Merkle proof using provided parameters.
+   - **Migration Handling:**
+     - **V1_UNCLAIMED:** Transfers V1 tokens and mints V2 tokens including a bonus, within the deadline.
+     - **HOLDER:** Directly mints V2 tokens based on balance and bonus.
+     - **STAKER:** Adjusts the bonus based on the time elapsed since the expiry period starts, ensuring linear reduction until expiry.
+   - **Token Minting:** Mints the calculated V2 tokens to the user and marks the index as claimed, emitting an event upon success.

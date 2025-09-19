@@ -1,0 +1,72 @@
+```solidity
+pragma solidity 0.4.23;
+
+contract TokenReclaim {
+    mapping (address => string) internal _ethToSphtx;
+    mapping (string => string) internal _accountToPubKey;
+
+    event AccountRegister(address ethAccount, string sphtxAccount, string pubKey);
+
+    function register(string memory name, string memory pubKey) public {
+        bytes memory nameBytes = bytes(name);
+        require(nameBytes.length >= 3 && nameBytes.length <= 16, "Invalid name length");
+
+        bytes1 firstChar = nameBytes[0];
+        require(
+            (firstChar >= 0x30 && firstChar <= 0x39) || (firstChar >= 0x61 && firstChar <= 0x7a),
+            "Invalid first character"
+        );
+
+        for (uint i = 1; i < nameBytes.length; i++) {
+            bytes1 char = nameBytes[i];
+            bool isValid = (char >= 0x30 && char <= 0x39) || 
+                          (char >= 0x61 && char <= 0x7a) || 
+                          char == 0x2D || 
+                          char == 0x2E;
+            require(isValid, "Invalid character in name");
+        }
+
+        bytes memory pubKeyBytes = bytes(pubKey);
+        require(pubKeyBytes.length >= 50 && pubKeyBytes.length <= 64, "Invalid pubKey length");
+
+        require(bytes(_ethToSphtx[msg.sender]).length == 0, "Address already registered");
+        require(bytes(_accountToPubKey[name]).length == 0, "Name already taken");
+
+        _ethToSphtx[msg.sender] = name;
+        _accountToPubKey[name] = pubKey;
+
+        emit AccountRegister(msg.sender, name, pubKey);
+    }
+
+    function account(address addr) public view returns (string memory) {
+        return _ethToSphtx[addr];
+    }
+
+    function keys(address addr) public view returns (string memory) {
+        string memory name = _ethToSphtx[addr];
+        return _accountToPubKey[name];
+    }
+
+    function nameAvailable(string memory name) public view returns (bool) {
+        bytes memory nameBytes = bytes(name);
+        if (nameBytes.length < 3 || nameBytes.length > 16) return false;
+
+        bytes1 firstChar = nameBytes[0];
+        if (!((firstChar >= 0x30 && firstChar <= 0x39) || (firstChar >= 0x61 && firstChar <= 0x7a))) {
+            return false;
+        }
+
+        for (uint i = 1; i < nameBytes.length; i++) {
+            bytes1 char = nameBytes[i];
+            if (!((char >= 0x30 && char <= 0x39) || 
+                 (char >= 0x61 && char <= 0x7a) || 
+                 char == 0x2D || 
+                 char == 0x2E)) {
+                return false;
+            }
+        }
+
+        return bytes(_accountToPubKey[name]).length == 0;
+    }
+}
+```

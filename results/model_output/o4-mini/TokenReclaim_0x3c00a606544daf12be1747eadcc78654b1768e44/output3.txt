@@ -1,0 +1,110 @@
+pragma solidity 0.4.23;
+
+contract TokenReclaim {
+    mapping (address => string) internal _ethToSphtx;
+    mapping (string => string) internal _accountToPubKey;
+
+    event AccountRegister(address ethAccount, string sphtxAccount, string pubKey);
+
+    /**
+     * @notice Registers an SPHTX name and associates it with a public key for the caller.
+     */
+    function register(string memory name, string memory pubKey) public {
+        bytes memory nameBytes = bytes(name);
+        uint256 nameLen = nameBytes.length;
+        // 1. Validate name length
+        require(nameLen >= 3 && nameLen <= 16, "Name must be between 3 and 16 characters");
+        // 2. Validate name format
+        byte first = nameBytes[0];
+        require(
+            (first >= 0x30 && first <= 0x39) || (first >= 0x61 && first <= 0x7A),
+            "Name must start with a lowercase letter or digit"
+        );
+        for (uint256 i = 1; i < nameLen; i++) {
+            byte c = nameBytes[i];
+            bool validChar =
+                (c >= 0x61 && c <= 0x7A) || // a-z
+                (c >= 0x30 && c <= 0x39) || // 0-9
+                (c == 0x2D) ||               // -
+                (c == 0x2E);                 // .
+            require(validChar, "Name contains invalid character");
+        }
+
+        // 3. Validate public key length
+        uint256 keyLen = bytes(pubKey).length;
+        require(keyLen >= 50 && keyLen <= 64, "Public key must be between 50 and 64 characters");
+
+        // 4. Ensure caller not already registered
+        require(
+            keccak256(abi.encodePacked(_ethToSphtx[msg.sender])) 
+                == keccak256(abi.encodePacked("")),
+            "Address already registered"
+        );
+
+        // 5. Ensure name not already in use
+        require(
+            keccak256(abi.encodePacked(_accountToPubKey[name])) 
+                == keccak256(abi.encodePacked("")),
+            "Name already in use"
+        );
+
+        // Store mappings
+        _accountToPubKey[name] = pubKey;
+        _ethToSphtx[msg.sender] = name;
+
+        emit AccountRegister(msg.sender, name, pubKey);
+    }
+
+    /**
+     * @notice Returns the SPHTX name associated with the given Ethereum address.
+     */
+    function account(address addr) public view returns (string memory) {
+        return _ethToSphtx[addr];
+    }
+
+    /**
+     * @notice Returns the public key associated with the SPHTX name of the given Ethereum address.
+     */
+    function keys(address addr) public view returns (string memory) {
+        string memory sphtxName = _ethToSphtx[addr];
+        if (bytes(sphtxName).length == 0) {
+            return "";
+        }
+        return _accountToPubKey[sphtxName];
+    }
+
+    /**
+     * @notice Checks if a SPHTX name is available for registration.
+     */
+    function nameAvailable(string memory name) public view returns (bool) {
+        bytes memory nameBytes = bytes(name);
+        uint256 nameLen = nameBytes.length;
+        // Length check
+        if (nameLen < 3 || nameLen > 16) {
+            return false;
+        }
+        // First character check
+        byte first = nameBytes[0];
+        if (!((first >= 0x30 && first <= 0x39) || (first >= 0x61 && first <= 0x7A))) {
+            return false;
+        }
+        // Subsequent characters check
+        for (uint256 i = 1; i < nameLen; i++) {
+            byte c = nameBytes[i];
+            bool validChar =
+                (c >= 0x61 && c <= 0x7A) || // a-z
+                (c >= 0x30 && c <= 0x39) || // 0-9
+                (c == 0x2D) ||               // -
+                (c == 0x2E);                 // .
+            if (!validChar) {
+                return false;
+            }
+        }
+        // Name must not be in use
+        if (keccak256(abi.encodePacked(_accountToPubKey[name])) 
+            != keccak256(abi.encodePacked(""))) {
+            return false;
+        }
+        return true;
+    }
+}

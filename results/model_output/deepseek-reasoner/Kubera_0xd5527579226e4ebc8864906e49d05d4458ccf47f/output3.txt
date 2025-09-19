@@ -1,0 +1,98 @@
+To complete the Kubera token contract in accordance with the provided context and requirements, the following implementation addresses the ERC20 standard with ICO management, transfer restrictions, and token burning functionality.
+
+```solidity
+contract Kubera is SafeMath {
+
+    /* Public variables of the token */
+    string public standard = 'ERC20';
+    string public name = 'Kubera token';
+    string public symbol = 'KBR';
+    uint8 public decimals = 0;
+    uint256 public totalSupply;
+    address public owner;
+    uint public tokensSoldToInvestors = 0;
+    uint public maxGoalInICO = 2100000000;
+    uint256 public startTime = 1510325999;
+    bool public burned;
+    bool public hasICOStarted;
+    address public tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event TransferToReferral(address indexed referralAddress, uint256 value);
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+    event Burned(uint amount);
+
+    function Kubera() {
+        owner = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        balanceOf[owner] = 2205000000;
+        totalSupply      = 2205000000;
+    }
+
+    function transfer(address _to, uint256 _value) returns(bool success) {
+        if (now < startTime && msg.sender != owner) {
+            revert();
+        }
+        if (now < startTime) {
+            uint remaining = maxGoalInICO - tokensSoldToInvestors;
+            if (remaining == 0) revert();
+            if (_value > remaining) _value = remaining;
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, _value);
+        }
+        if (_to == address(0)) revert();
+        balanceOf[msg.sender] = safeSub(balanceOf[msg.sender], _value);
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) returns(bool success) {
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) returns(bool success) {
+        uint256 adjustedValue = _value;
+        if (now < startTime) {
+            if (_from != owner) revert();
+            uint remaining = maxGoalInICO - tokensSoldToInvestors;
+            if (remaining == 0) revert();
+            if (adjustedValue > remaining) adjustedValue = remaining;
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, adjustedValue);
+        }
+        if (allowance[_from][msg.sender] < adjustedValue) revert();
+        balanceOf[_from] = safeSub(balanceOf[_from], adjustedValue);
+        balanceOf[_to] = safeAdd(balanceOf[_to], adjustedValue);
+        allowance[_from][msg.sender] = safeSub(allowance[_from][msg.sender], adjustedValue);
+        Transfer(_from, _to, adjustedValue);
+        return true;
+    }
+
+    function burn() {
+        if (burned || now < startTime || msg.sender != owner) revert();
+        uint balance = balanceOf[owner];
+        if (balance < 105000000) revert();
+        balanceOf[owner] = safeSub(balance, 105000000);
+        balanceOf[tokensHolder] = safeAdd(balanceOf[tokensHolder], 105000000);
+        uint amountToBurn = balanceOf[owner];
+        balanceOf[owner] = 0;
+        totalSupply = safeSub(totalSupply, amountToBurn);
+        burned = true;
+        Burned(amountToBurn);
+        Transfer(owner, tokensHolder, 105000000);
+        Transfer(owner, address(0), amountToBurn);
+    }
+}
+```
+
+### Key Features:
+1. **ERC20 Compliance**: Implements standard ERC20 functions (`transfer`, `transferFrom`, `approve`) with events.
+2. **ICO Management**: Tracks tokens sold during ICO, enforcing the maximum goal and adjusting transfers accordingly.
+3. **Time Restrictions**: Transfers are restricted before the ICO end time (`startTime`), allowing only the owner to distribute tokens during the ICO.
+4. **Token Burning**: After the ICO, the `burn` function transfers a fixed amount to a designated wallet and burns the remaining tokens, ensuring deflationary mechanics.
+5. **SafeMath Integration**: Uses internal SafeMath functions for arithmetic operations to prevent overflows and underflows, enhancing security.
+
+This implementation ensures compliance with the provided specifications while maintaining security and functionality for the Kubera token.

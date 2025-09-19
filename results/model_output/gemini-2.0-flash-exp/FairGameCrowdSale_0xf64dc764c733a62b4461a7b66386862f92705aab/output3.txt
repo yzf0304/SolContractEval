@@ -1,0 +1,327 @@
+```solidity
+pragma solidity ^0.4.18;
+
+/**
+ * @title CrowdSale
+ * @dev This contract is designed to manage a crowd sale for an ERC20 token.
+ * It allows users to purchase tokens with Ether, and the funds are collected in a beneficiary address.
+ * The contract also supports different stages with varying rates and bonus tokens, and it manages the locking and unlocking of bonus tokens.
+ * @notice This contract should be used to conduct a crowd sale for an ERC20 token, allowing for staged bonuses and token locking.
+ */
+contract CrowdSale is Ownable {
+
+    // ERC20 Token
+    ERC20 public token;
+
+    // Address where funds are received
+    address public beneficiary;
+    // Address that provides tokens
+    address public tokenHolder;
+
+    // Rate of token units per wei
+    uint public rate;
+    // Goal amount in wei
+    uint public amountGoal;
+    // Current amount of raised money in wei
+    uint public amountRaised;
+    // Amount of tokens issued
+    uint public amountTokenIssued;
+
+    // Important Time
+    uint public startTime;
+    uint public endTime;
+
+    // Stages Info
+    struct Stage {
+        uint duration;      // Duration in seconds of the current stage
+        uint rate;          // Bonus rate (100 = 100%)
+    }
+    Stage[] public icoStages;
+    Stage[] public lockStages;
+
+    // Purchaser Info
+    struct PurchaserInfo {
+        uint amountEtherSpent;
+        uint amountTokenTaken;
+        uint[] lockedToken;
+    }
+    mapping(address => PurchaserInfo) public purchasers;
+    address[] public purchaserList;
+
+    // ----- Events -----
+    event TokenPurchase(address purchaser, uint value, uint buyTokens, uint bonusTokens);
+    event GoalReached(uint totalAmountRaised, uint totalTokenIssued);
+    event FundingWithdrawn(address beneficiaryAddress, uint value);
+    event UnlockToken(address purchaser, uint amountUnlockedTokens);
+
+    // ----- Modifiers -----
+    /**
+     * @dev Modifier to allow function calls only after the crowd sale has ended.
+     */
+    modifier afterEnded {
+        require(isEnded());
+        _;
+    }
+
+    /**
+     * @dev Modifier to allow function calls only during the open time of the crowd sale.
+     */
+    modifier onlyOpenTime {
+        require(isStarted());
+        require(!isEnded());
+        _;
+    }
+
+    // ----- Functions -----
+
+    /**
+     * @notice Initializes the CrowdSale contract with the provided parameters.
+     * @param beneficiaryAddr The address where the funds will be sent.
+     * @param tokenHolderAddr The address that holds the tokens to be sold.
+     * @param tokenAddr The address of the ERC20 token contract.
+     * @param tokenRate The rate of tokens per wei.
+     * @dev Requires valid addresses and a positive token rate.
+     */
+    function CrowdSale(address beneficiaryAddr, address tokenHolderAddr, address tokenAddr, uint tokenRate) public {
+        require(beneficiaryAddr != address(0));
+        require(tokenHolderAddr != address(0));
+        require(tokenAddr != address(0));
+        require(tokenRate > 0);
+
+        beneficiary = beneficiaryAddr;
+        tokenHolder = tokenHolderAddr;
+        token = ERC20(tokenAddr);
+        rate = tokenRate;
+
+        _initStages();
+    }
+
+    /**
+     * @dev Initializes the stages for the crowd sale. This function needs to be overridden.
+     */
+    function _initStages() internal {
+        // Implemented in derived contracts
+    }
+
+    /**
+     * @notice Returns the address of the ERC20 token contract.
+     * @return The address of the token contract.
+     */
+    function getTokenAddress() public view returns(address) {
+        return address(token);
+    }
+
+    /**
+     * @notice Returns the amount of locked tokens for a specific purchaser at a given stage index.
+     * @param _purchaser The address of the purchaser.
+     * @param stageIdx The index of the stage.
+     * @return The amount of locked tokens.
+     */
+    function getLockedToken(address _purchaser, uint stageIdx) public view returns(uint) {
+        return purchasers[_purchaser].lockedToken[stageIdx];
+    }
+
+    /**
+     * @notice Checks if tokens can be unlocked at a specific stage index.
+     * @param stageIndex The index of the stage.
+     * @return True if tokens can be unlocked, otherwise false.
+     */
+    function canTokenUnlocked(uint stageIndex) public view returns(bool) {
+        if (stageIndex >= lockStages.length) {
+            return false;
+        }
+        return now >= startTime + icoStages[icoStages.length - 1].duration + lockStages[stageIndex].duration;
+    }
+
+    /**
+     * @notice Checks if the crowd sale has started.
+     * @return True if the crowd sale has started, otherwise false.
+     */
+    function isStarted() public view returns(bool) {
+        return startTime > 0 && now >= startTime;
+    }
+
+    /**
+     * @notice Checks if the goal amount has been reached.
+     * @return True if the goal amount has been reached, otherwise false.
+     */
+    function isReachedGoal() public view returns(bool) {
+        return amountRaised >= amountGoal;
+    }
+
+    /**
+     * @notice Checks if the crowd sale has ended.
+     * @return True if the crowd sale has ended, otherwise false.
+     */
+    function isEnded() public view returns(bool) {
+        return endTime > 0 && now >= endTime;
+    }
+
+    /**
+     * @notice Returns the current stage index.
+     * @return The current stage index.
+     */
+    function getCurrentStage() public view returns(int) {
+        if (!isStarted()) return -1;
+        for (uint i = 0; i < icoStages.length; i++) {
+            if (now >= startTime && now < startTime + icoStages[i].duration) {
+                return int(i);
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * @notice Returns the remaining time in seconds until the end of the crowd sale.
+     * @return The remaining time in seconds.
+     */
+    function getRemainingTimeInSecond() public view returns(uint) {
+        if (now >= endTime) {
+            return 0;
+        }
+        return endTime - now;
+    }
+
+    /**
+     * @dev Adds a new purchaser to the list.
+     * @param purchaser The address of the purchaser.
+     */
+    function _addPurchaser(address purchaser) internal {
+        if (purchasers[purchaser].amountEtherSpent == 0) {
+            purchaserList.push(purchaser);
+        }
+    }
+
+    /**
+     * @notice Starts the crowd sale with a specified funding goal.
+     * @param fundingGoalInEther The funding goal in ether.
+     * @dev Only the owner can call this function, and the crowd sale must not have started yet.
+     */
+    function start(uint fundingGoalInEther) public onlyOwner {
+        require(startTime == 0);
+        require(fundingGoalInEther > 0);
+
+        amountGoal = fundingGoalInEther * 1 ether;
+        startTime = now;
+        endTime = startTime + icoStages[icoStages.length - 1].duration;
+    }
+
+    /**
+     * @notice Stops the crowd sale.
+     * @dev Only the owner can call this function, and the crowd sale must have started.
+     */
+    function stop() public onlyOwner {
+        require(startTime > 0);
+        endTime = now;
+    }
+
+    /**
+     * @notice Allows users to purchase tokens by sending Ether.
+     * @dev Only callable during the open time of the crowd sale.
+     */
+    function () payable public onlyOpenTime {
+        _addPurchaser(msg.sender);
+        uint amountInWei = msg.value;
+        uint buyTokens;
+        uint bonusTokens;
+        (buyTokens, bonusTokens) = _getTokenCount(amountInWei);
+
+        require(token.transferFrom(tokenHolder, msg.sender, buyTokens + bonusTokens));
+
+        purchasers[msg.sender].amountEtherSpent += amountInWei;
+        purchasers[msg.sender].amountTokenTaken += buyTokens + bonusTokens;
+
+        amountRaised += amountInWei;
+        amountTokenIssued += buyTokens + bonusTokens;
+
+        emit TokenPurchase(msg.sender, amountInWei, buyTokens, bonusTokens);
+
+        if (isReachedGoal()) {
+            emit GoalReached(amountRaised, amountTokenIssued);
+        }
+    }
+
+    /**
+     * @dev Calculates the number of tokens to be bought and the bonus tokens.
+     * @param amountInWei The amount of Ether sent.
+     * @return The number of tokens to be bought and the bonus tokens.
+     */
+    function _getTokenCount(uint amountInWei) internal view returns(uint buyTokenCount, uint bonusTokenCount) {
+        int currentStage = getCurrentStage();
+        require(currentStage >= 0, "Crowdsale is not in valid stage");
+
+        buyTokenCount = amountInWei * rate;
+        bonusTokenCount = buyTokenCount * icoStages[uint(currentStage)].rate / 100;
+
+        //Lock token
+        if(lockStages.length > 0){
+            if(purchasers[msg.sender].lockedToken.length < lockStages.length){
+                purchasers[msg.sender].lockedToken.length = lockStages.length;
+            }
+
+            for(uint i = 0; i < lockStages.length; i++){
+                purchasers[msg.sender].lockedToken[i] += bonusTokenCount / lockStages.length;
+            }
+            bonusTokenCount = bonusTokenCount - bonusTokenCount % lockStages.length;
+        }
+
+        return (buyTokenCount, bonusTokenCount);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw the collected funds.
+     * @dev Only the owner can call this function.
+     */
+    function safeWithdrawal() public onlyOwner {
+        uint amount = address(this).balance;
+        beneficiary.transfer(amount);
+        emit FundingWithdrawn(beneficiary, amount);
+    }
+
+    /**
+     * @dev Unlocks bonus tokens for a range of purchasers in a specific stage.
+     * @param stageIndex Index of the stage for which tokens are being unlocked
+     * @param purchaserStartIdx Starting index in purchaserList (inclusive)
+     * @param purchaserEndIdx Ending index in purchaserList (exclusive)
+     * @dev Requirements:
+     *   - Must be called after the event has ended
+     *   - Only callable by the contract owner
+     *   - Valid purchaser index range must be provided
+     *   - Tokens must be unlockable for the specified stage
+     * @dev Behavior:
+     *   - Iterates through purchasers in the specified range
+     *   - Unlocks bonus tokens for each valid purchaser
+     *   - Updates purchaser and contract state:
+     *     - Clears locked tokens for the stage
+     *     - Tracks total tokens taken by purchaser
+     *     - Updates total tokens issued
+     *     - Transfers tokens to purchaser
+     *     - Emits UnlockToken event
+     * @dev Notes:
+     *   - Purchaser list is assumed to be maintained elsewhere
+     *   - Token transfer uses tokenHolder as source
+     *   - Requires sufficient token balance in tokenHolder
+     */
+    function unlockBonusTokens(uint stageIndex, uint purchaserStartIdx, uint purchaserEndIdx) public afterEnded onlyOwner {
+        require(stageIndex < lockStages.length, "Invalid stage index");
+        require(purchaserStartIdx < purchaserList.length, "Invalid purchaser start index");
+        require(purchaserEndIdx <= purchaserList.length, "Invalid purchaser end index");
+        require(purchaserStartIdx < purchaserEndIdx, "Start index must be less than end index");
+        require(canTokenUnlocked(stageIndex), "Tokens cannot be unlocked for this stage yet");
+
+        for (uint i = purchaserStartIdx; i < purchaserEndIdx; i++) {
+            address purchaser = purchaserList[i];
+            uint amountUnlockedTokens = purchasers[purchaser].lockedToken[stageIndex];
+            if (amountUnlockedTokens > 0) {
+                require(token.transferFrom(tokenHolder, purchaser, amountUnlockedTokens));
+
+                purchasers[purchaser].lockedToken[stageIndex] = 0;
+                purchasers[purchaser].amountTokenTaken += amountUnlockedTokens;
+                amountTokenIssued += amountUnlockedTokens;
+
+                emit UnlockToken(purchaser, amountUnlockedTokens);
+            }
+        }
+    }
+}
+```

@@ -1,0 +1,148 @@
+```solidity
+/**
+ *Submitted for verification at Etherscan.io on 2021-02-24
+*/
+
+contract TellorWrapper {
+    function balanceOf(address _user) external view returns (uint256);
+    function transfer(address _to, uint256 _amount) external returns (bool);
+    
+    function withdrawStake() external;
+    function getUintVar(bytes32 _data) public view returns (uint256);
+}
+
+
+
+// You task is to complete the smart contract TellorC strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.5.17, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @notice This contract interacts with the Tellor system, allowing for staking, withdrawing, and submitting mining solutions.
+ * @dev The contract is designed to be controlled by an owner, who can change the miner, withdraw TRB and ETH, manage staking,
+ * and submit mining solutions. It also allows forwarding calls to the Tellor contract under certain conditions.
+ */
+contract TellorC {
+    address private tellor = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+
+    bytes32 constant slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a; // keccak256("slotProgress")
+    address private owner;
+    address private miner;
+    
+    /**
+     * @notice Initializes the contract, setting the deployer as the owner.
+     */
+    constructor () public {
+        owner = msg.sender;
+    }
+    
+    /**
+     * @notice Allows the owner to change the designated miner.
+     * @dev Only the owner can call this function. The new miner's address is set.
+     * @param _addr The new miner's address.
+     */
+    function changeMiner(address _addr) external {
+        require(msg.sender == owner, "Not owner");
+        miner = _addr;
+    }
+
+    /**
+     * @notice Allows the owner to withdraw TRB tokens from the Tellor contract.
+     * @dev Only the owner can call this function. The specified amount of TRB is transferred to the owner.
+     * @param _amount The amount of TRB to withdraw.
+     */
+    function withdrawTrb(uint256 _amount) external {
+        require(msg.sender == owner, "Not owner");
+        TellorWrapper(tellor).transfer(owner, _amount);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw ETH from the contract.
+     * @dev Only the owner can call this function. The specified amount of ETH is transferred to the owner.
+     * @param _amount The amount of ETH to withdraw.
+     */
+    function withdrawEth(uint256 _amount) external {
+        require(msg.sender == owner, "Not owner");
+        msg.sender.transfer(_amount);
+    }
+
+    /**
+     * @notice Allows the owner to deposit a stake in the Tellor contract.
+     * @dev Only the owner can call this function. A stake is deposited in the Tellor contract.
+     */
+    function depositStake() external {
+        require(msg.sender == owner, "Not owner");
+        (bool success, ) = tellor.call(abi.encodeWithSignature("depositStake()"));
+        require(success, "Stake deposit failed");
+    }
+
+    /**
+     * @notice Allows the owner to request a staking withdrawal from the Tellor contract.
+     * @dev Only the owner can call this function. A staking withdrawal request is made to the Tellor contract.
+     */
+    function requestStakingWithdraw() external {
+        require(msg.sender == owner, "Not owner");
+        (bool success, ) = tellor.call(abi.encodeWithSignature("requestStakingWithdraw()"));
+        require(success, "Withdrawal request failed");
+    }
+
+    /**
+     * @notice Allows the owner to withdraw their stake from the Tellor contract.
+     * @dev Only the owner can call this function. The stake is withdrawn from the Tellor contract.
+     * Prefer using `finalize` if possible.
+     */
+    function withdrawStake() external {
+        require(msg.sender == owner, "Not owner");
+        TellorWrapper(tellor).withdrawStake();
+    }
+
+    /**
+     * @notice Finalizes the contract, withdrawing the stake and transferring any remaining TRB to the owner before self-destructing.
+     * @dev Only the owner can call this function. The stake is withdrawn, all TRB is transferred to the owner, and the contract is self-destructed.
+     */
+    function finalize() external {
+        require(msg.sender == owner, "Not owner");
+        TellorWrapper(tellor).withdrawStake();
+        uint256 balance = TellorWrapper(tellor).balanceOf(address(this));
+        TellorWrapper(tellor).transfer(owner, balance);
+        selfdestruct(owner);
+    }
+
+    /**
+     * @notice Submits a mining solution to the Tellor contract.
+     * @dev Only the miner or the owner can call this function. The solution is submitted to the Tellor contract.
+     * @param _nonce The nonce used for the mining solution.
+     * @param _requestId Array of request IDs.
+     * @param _value Array of values corresponding to the request IDs.
+     */
+    function submitMiningSolution(string calldata _nonce, uint256[5] calldata _requestId, uint256[5] calldata _value) external {
+        require(msg.sender == owner || msg.sender == miner, "Not owner or miner");
+        (bool success, ) = tellor.call(abi.encodeWithSignature("submitMiningSolution(string,uint256[5],uint256[5])", _nonce, _requestId, _value));
+        require(success, "Solution submission failed");
+    }
+
+    /**
+     * @notice Fallback function that forwards calls to the Tellor contract.
+     * @dev This function only allows view calls and ensures that the call is not from a non-zero address.
+     */
+    function() external {
+        require(msg.sender == address(0), "Not allowed"); // Dont allow actual calls, only views
+        
+        address addr = tellor;
+        bytes memory _calldata = msg.data;
+        assembly {
+            let result := call(not(0), addr, 0, add(_calldata, 0x20), mload(_calldata), 0, 0)
+            let size := returndatasize
+            let ptr := mload(0x40)
+            returndatacopy(ptr, 0, size)
+            // revert instead of invalid() bc if the underlying call failed with invalid() it already wasted gas.
+            // if the call returned error data, forward it
+            switch result
+                case 0 {
+                    revert(ptr, size)
+                }
+                default {
+                    return(ptr, size)
+                }
+        }
+    }
+}
+```

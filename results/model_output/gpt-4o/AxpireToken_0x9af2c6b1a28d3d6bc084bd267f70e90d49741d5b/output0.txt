@@ -1,0 +1,151 @@
+Below is the completed implementation of the `AxpireToken` contract based on the provided context and contract description:
+
+```solidity
+pragma solidity ^0.4.20;
+
+contract AxpireToken is ERC223, ERC20 {
+    uint256 initialSupply = 350000000 * 10**8;
+    string tokenName = "aXpire Token";
+    string tokenSymbol = "AXP";
+    uint8 decimalUnits = 8;
+
+    // Constructor
+    function AxpireToken() public 
+        ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol) 
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        // Assign total tokens to the owner's balance
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+    
+    /**
+     * @notice Transfers tokens to a recipient address, including additional data.
+     * @dev Implements ERC223 functionality with data handling.
+     * @param to The recipient address.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @return success Whether the transfer was successful.
+     */
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        // Perform the internal transfer with data
+        return transferInternal(msg.sender, to, value, data);
+    }
+    
+    /**
+     * @notice Transfers tokens to a recipient address, including data and a custom fallback function.
+     * @dev Implements ERC223 functionality with a custom fallback function for contract recipients.
+     * @param to The recipient address.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send.
+     * @param customFallback The custom fallback function.
+     * @return success Whether the transfer was successful.
+     */
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool success) {
+        // Perform the internal transfer with data and custom fallback behavior
+        return transferInternal(msg.sender, to, value, data, true, customFallback);
+    }
+    
+    /**
+     * @notice Transfers tokens from one address to another using allowances.
+     * @param _from The address from which tokens will be transferred.
+     * @param _to The address to receive the tokens.
+     * @param _value The amount of tokens to transfer.
+     * @return success Whether the transfer was successful.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _value, "Allowance exceeded");
+        
+        // Perform the internal transfer
+        bool transferSuccess = transferInternal(_from, _to, _value);
+        
+        if (transferSuccess) {
+            allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        }
+        
+        return transferSuccess;
+    }
+    
+    /**
+     * @dev Internal function to transfer tokens and handle ERC223 data.
+     * @param from The sender address.
+     * @param to The recipient address.
+     * @param value The amount of tokens.
+     * @param data Additional data for ERC223 behavior.
+     * @return success Whether the transfer was successful.
+     */
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        require(value > 0, "Transfer value must be greater than 0");
+        require(balances[from] >= value, "Insufficient balance");
+        
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        
+        if (isContract(to)) {
+            ContractReceiver receiver = ContractReceiver(to);
+            receiver.tokenFallback(from, value, data);
+        }
+        
+        emit Transfer(from, to, value, data);
+        return true;
+    }
+    
+    /**
+     * @dev Internal function to transfer tokens with additional fallback handling.
+     * @param from The sender address.
+     * @param to The recipient address.
+     * @param value The amount of tokens.
+     * @param data Additional data for ERC223 behavior.
+     * @param useCustomFallback Whether a custom fallback function is used.
+     * @param customFallback The custom fallback function name.
+     * @return success Whether the transfer was successful.
+     */
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        require(value > 0, "Transfer value must be greater than 0");
+        require(balances[from] >= value, "Insufficient balance");
+        
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                require(to.call.value(0)(bytes4(keccak256(customFallback)), from, value, data));
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+        
+        emit Transfer(from, to, value, data);
+        return true;
+    }
+    
+    /**
+     * @dev Checks whether the given address is a contract.
+     * @param _addr The address to check.
+     * @return Whether the address is a contract.
+     */
+    function isContract(address _addr) private returns (bool) {
+        uint256 size;
+        assembly {
+            size := extcodesize(_addr)
+        }
+        return size > 0;
+    }
+}
+```
+
+### Key Notes:
+1. I adhered to the specified version (`pragma solidity ^0.4.20`).
+2. Functions such as `transferInternal` handle both ERC20 and ERC223 standards.
+3. The `isContract` function validates whether the recipient address is a contract.
+4. Proper use of the provided `ContractReceiver` interface for `tokenFallback`. 
+
+This contract meets the requirements and strictly follows the context.

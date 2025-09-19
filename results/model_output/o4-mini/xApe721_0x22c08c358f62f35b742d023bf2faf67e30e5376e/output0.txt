@@ -1,0 +1,161 @@
+```solidity
+// SPDX-License-Identifier: AGPL-3.0-only
+pragma solidity 0.8.10;
+
+import "./Ownable.sol";                // your Ownable from context
+import "./ERC721.sol";                 // Solmate ERC721
+import "./IERC721.sol";                // the old‐contract interface
+import "./Strings.sol";                // for uint256 → string
+
+contract xApe721 is Ownable, ERC721 {
+    using Strings for uint256;
+
+    uint256 public constant TOTAL_SUPPLY       = 10_000;
+    uint256 public constant PRICE_PER_MINT     = 0.05 ether;
+    uint256 public constant MAX_MINT_PER_TX    = 20;
+
+    bool    public mintActive;
+    uint256 public totalSupply;
+
+    uint256 internal nextMintableId = 10038;
+
+    string public baseURI;
+    IERC721 public oldContract;
+    address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        string memory _baseURI,
+        address      _oldContract,
+        address[]    memory recipients,
+        uint256[]    memory tokens
+    ) payable ERC721(_name, _symbol) {
+        require(recipients.length == tokens.length, "Airdrop lengths");
+        baseURI = _baseURI;
+        if (_oldContract != address(0)) {
+            oldContract = IERC721(_oldContract);
+        }
+        uint256 len = tokens.length;
+        for (uint256 i = 0; i < len; ++i) {
+            _mint(recipients[i], tokens[i]);
+            totalSupply++;
+        }
+    }
+
+    modifier onlyTeamWallet() {
+        require(msg.sender == teamWallet, "Not callable except by team wallet");
+        _;
+    }
+
+    function mint(uint16 amount) external payable {
+        require(mintActive, "Mint is not active");
+        require(amount > 0 && amount <= MAX_MINT_PER_TX, "Invalid mint amount");
+        require(totalSupply + amount <= TOTAL_SUPPLY, "Exceeds total supply");
+        require(msg.value == PRICE_PER_MINT * amount, "Incorrect ETH value");
+
+        for (uint256 i = 0; i < amount; i++) {
+            uint256 id = _getNextUnusedID();
+            _mint(msg.sender, id);
+            totalSupply++;
+        }
+    }
+
+    function claim(uint256 tokenId) external payable {
+        require(msg.value == 0, "No ETH required");
+        require(_ownsOldToken(msg.sender, tokenId), "Not owner of old token");
+        require(ownerOf[tokenId] == address(0), "Already claimed");
+        require(totalSupply + 1 <= TOTAL_SUPPLY, "Exceeds total supply");
+
+        _mint(msg.sender, tokenId);
+        totalSupply++;
+    }
+
+    function claimAll() external payable {
+        require(msg.value == 0, "No ETH required");
+        uint256[] memory oldTokens = oldContract.getPhunksBelongingToOwner(msg.sender);
+        uint256 len = oldTokens.length;
+        uint256 count;
+
+        // first count how many are unclaimed
+        for (uint256 i = 0; i < len; i++) {
+            uint256 t = oldTokens[i];
+            if (ownerOf[t] == address(0) && _ownsOldToken(msg.sender, t)) {
+                count++;
+            }
+        }
+        require(count > 0, "No tokens to claim");
+        require(totalSupply + count <= TOTAL_SUPPLY, "Exceeds total supply");
+
+        // now mint
+        for (uint256 i = 0; i < len; i++) {
+            uint256 t = oldTokens[i];
+            if (ownerOf[t] == address(0) && _ownsOldToken(msg.sender, t)) {
+                _mint(msg.sender, t);
+            }
+        }
+        totalSupply += count;
+    }
+
+    function _ownsOldToken(address account, uint256 tokenId) internal view returns (bool) {
+        // safely check oldContract.ownerOf
+        try oldContract.ownerOf(tokenId) returns (address owner) {
+            return owner == account;
+        } catch {
+            return false;
+        }
+    }
+
+    function _getNextUnusedID() internal returns (uint256) {
+        uint256 id = nextMintableId;
+        // skip any that have been taken (e.g. by airdrop)
+        while (ownerOf[id] != address(0)) {
+            id++;
+        }
+        nextMintableId = id + 1;
+        return id;
+    }
+
+    function tokenURI(uint256 id) public view override returns (string memory) {
+        require(ownerOf[id] != address(0), "URI query for nonexistent token");
+        return string(abi.encodePacked(baseURI, id.toString()));
+    }
+
+    function withdraw() external onlyTeamWallet {
+        uint256 bal = address(this).balance;
+        require(bal > 0, "No balance");
+        (bool ok, ) = teamWallet.call{value: bal}("");
+        require(ok, "Withdraw failed");
+    }
+
+    function pauseMint() external onlyOwner {
+        mintActive = false;
+    }
+
+    function startMint() external onlyOwner {
+        mintActive = true;
+    }
+
+    function setBaseURI(string memory _baseURI) external onlyOwner {
+        baseURI = _baseURI;
+    }
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        pure
+        override
+        returns (bool)
+    {
+        return ERC721.supportsInterface(interfaceId);
+    }
+
+    function onERC721Received(
+        address, 
+        address, 
+        uint256, 
+        bytes calldata
+    ) external pure returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+    }
+}
+```

@@ -1,0 +1,123 @@
+```solidity
+pragma solidity ^0.5.17;
+
+contract Ownable {
+    address private _owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor () internal {
+        _owner = msg.sender;
+        emit OwnershipTransferred(address(0), _owner);
+    }
+
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    modifier onlyOwner() {
+        require(isOwner(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    function isOwner() public view returns (bool) {
+        return msg.sender == _owner;
+    }
+
+    function renounceOwnership() public onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        _transferOwnership(newOwner);
+    }
+
+    function _transferOwnership(address newOwner) internal {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+contract TrbInterface {
+    function getUintVar(bytes32 _data) view public returns(uint256);
+    function transfer(address _to, uint256 _amount) external returns (bool);
+    function depositStake() external;
+    function requestStakingWithdraw() external;
+    function withdrawStake() external;
+    function submitMiningSolution(string calldata _nonce,uint256[5] calldata _requestId, uint256[5] calldata _value) external;
+    function addTip(uint256 _requestId, uint256 _tip) external;
+}
+
+contract Collection is Ownable {
+    address createAddress;
+    address trbAddress = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+    TrbInterface trbContract = TrbInterface(trbAddress);
+
+    constructor() public {
+        createAddress = msg.sender;
+    }
+
+    function() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+    }
+
+    function finalize() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+    }
+
+    function getCreate() public view returns(address) {
+        return createAddress;
+    }
+
+    function withdrawEth(uint _amount) public onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        require(address(this).balance >= _amount, "Insufficient balance");
+        msg.sender.transfer(_amount);
+    }
+
+    function withdrawTrb(uint _amount) public onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        bool success = trbContract.transfer(msg.sender, _amount);
+        require(success, "Transfer failed");
+    }
+
+    function depositStake() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        trbContract.depositStake();
+    }
+
+    function requestStakingWithdraw() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        trbContract.requestStakingWithdraw();
+    }
+
+    function withdrawStake() external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        trbContract.withdrawStake();
+    }
+
+    function submitMiningSolution(string calldata _nonce, uint256[5] calldata _requestId, uint256[5] calldata _value) external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        
+        if (gasleft() <= 10**6) {
+            bytes32 slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+            uint256 tmpSlot = trbContract.getUintVar(slotProgress);
+            require(tmpSlot < 4, "Z");
+        }
+        
+        trbContract.submitMiningSolution(_nonce, _requestId, _value);
+    }
+
+    function addTip(uint256 _requestId, uint256 _tip) external onlyOwner payable {
+        require(msg.sender == createAddress, "author no");
+        trbContract.addTip(_requestId, _tip);
+    }
+
+    function getUintVar(bytes32 _data) public onlyOwner view returns (uint256) {
+        require(msg.sender == createAddress, "author no");
+        return trbContract.getUintVar(_data);
+    }
+}
+```

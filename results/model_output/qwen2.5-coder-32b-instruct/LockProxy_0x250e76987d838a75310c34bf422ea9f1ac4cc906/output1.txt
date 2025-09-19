@@ -1,0 +1,163 @@
+Certainly! Below is the completed `LockProxy` contract according to the provided context and description. The contract is designed to facilitate the cross-chain transfer of assets, ensuring that only authorized parties can lock and unlock assets. The contract owner can set mappings and proxy addresses, while the cross-chain manager contract can execute unlock transactions.
+
+```solidity
+pragma solidity ^0.5.17;
+
+import "./SafeMath.sol"; // Ensure SafeMath.sol is included in your project
+import "./Context.sol";
+import "./IERC20.sol";
+import "./SafeERC20.sol";
+import "./IEthCrossChainManager.sol";
+import "./IEthCrossChainManagerProxy.sol";
+import "./Utils.sol";
+import "./ZeroCopySource.sol";
+import "./ZeroCopySink.sol";
+
+contract LockProxy is Ownable {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+
+    struct TxArgs {
+        bytes toAssetHash;
+        bytes toAddress;
+        uint256 amount;
+    }
+
+    address public managerProxyContract;
+    mapping(uint64 => bytes) public proxyHashMap;
+    mapping(address => mapping(uint64 => bytes)) public assetHashMap;
+    mapping(address => bool) public safeTransfer;
+
+    event SetManagerProxyEvent(address manager);
+    event BindProxyEvent(uint64 toChainId, bytes targetProxyHash);
+    event BindAssetEvent(address fromAssetHash, uint64 toChainId, bytes targetProxyHash, uint initialAmount);
+    event UnlockEvent(address toAssetHash, address toAddress, uint256 amount);
+    event LockEvent(address fromAssetHash, address fromAddress, uint64 toChainId, bytes toAssetHash, bytes toAddress, uint256 amount);
+
+    modifier onlyManagerContract() {
+        IEthCrossChainManagerProxy ieccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        require(_msgSender() == ieccmp.getEthCrossChainManager(), "msgSender is not EthCrossChainManagerContract");
+        _;
+    }
+
+    function setManagerProxy(address ethCCMProxyAddr) onlyOwner public {
+        managerProxyContract = ethCCMProxyAddr;
+        emit SetManagerProxyEvent(ethCCMProxyAddr);
+    }
+
+    function bindProxyHash(uint64 toChainId, bytes memory targetProxyHash) onlyOwner public returns (bool) {
+        require(targetProxyHash.length == 20, "targetProxyHash must be 20 bytes long");
+        proxyHashMap[toChainId] = targetProxyHash;
+        emit BindProxyEvent(toChainId, targetProxyHash);
+        return true;
+    }
+
+    function bindAssetHash(address fromAssetHash, uint64 toChainId, bytes memory toAssetHash) onlyOwner public returns (bool) {
+        require(toAssetHash.length == 20, "toAssetHash must be 20 bytes long");
+        assetHashMap[fromAssetHash][toChainId] = toAssetHash;
+        emit BindAssetEvent(fromAssetHash, toChainId, toAssetHash, 0);
+        return true;
+    }
+
+    function lock(address fromAssetHash, uint64 toChainId, bytes memory toAddress, uint256 amount) public payable returns (bool) {
+        require(amount > 0, "Amount must be greater than zero");
+        require(assetHashMap[fromAssetHash][toChainId].length > 0, "Asset not bound for this chainId");
+
+        // Transfer tokens to contract
+        require(_transferToContract(fromAssetHash, amount), "Failed to transfer tokens to contract");
+
+        // Serialize the transaction arguments
+        TxArgs memory txArgs = TxArgs({
+            toAssetHash: assetHashMap[fromAssetHash][toChainId],
+            toAddress: toAddress,
+            amount: amount
+        });
+        bytes memory data = _serializeTxArgs(txArgs);
+
+        // Call EthCrossChainManager to lock
+        IEthCrossChainManagerProxy ieccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        address ethCrossChainManager = ieccmp.getEthCrossChainManager();
+        require(IEthCrossChainManager(ethCrossChainManager).crossChain(toChainId, proxyHashMap[toChainId], "unlock", data), "Cross-chain call failed");
+
+        emit LockEvent(fromAssetHash, _msgSender(), toChainId, assetHashMap[fromAssetHash][toChainId], toAddress, amount);
+        return true;
+    }
+
+    function unlock(bytes memory argsBs, bytes memory fromContractAddr, uint64 fromChainId) onlyManagerContract public returns (bool) {
+        // Deserialize the transaction arguments
+        TxArgs memory txArgs = _deserializeTxArgs(argsBs);
+
+        // Validate the fromContractAddr against the proxyHashMap
+        require(proxyHashMap[fromChainId] == fromContractAddr, "Invalid fromContractAddr");
+
+        // Unlock and transfer tokens to the recipient
+        require(_transferFromContract(txArgs.toAssetHash, Utils.bytesToAddress(txArgs.toAddress), txArgs.amount), "Failed to transfer tokens from contract");
+
+        emit UnlockEvent(txArgs.toAssetHash, Utils.bytesToAddress(txArgs.toAddress), txArgs.amount);
+        return true;
+    }
+
+    function getBalanceFor(address fromAssetHash) public view returns (uint256) {
+        if (fromAssetHash == address(0)) {
+            return address(this).balance;
+        } else {
+            return IERC20(fromAssetHash).balanceOf(address(this));
+        }
+    }
+
+    function _transferToContract(address fromAssetHash, uint256 amount) internal returns (bool) {
+        if (fromAssetHash == address(0)) {
+            require(msg.value == amount, "Incorrect value sent with message");
+            return true;
+        } else {
+            return _transferERC20ToContract(fromAssetHash, _msgSender(), address(this), amount);
+        }
+    }
+
+    function _transferFromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        if (toAssetHash == address(0)) {
+            toAddress.transfer(amount);
+            return true;
+        } else {
+            return _transferERC20FromContract(toAssetHash, toAddress, amount);
+        }
+    }
+
+    function _transferERC20ToContract(address fromAssetHash, address fromAddress, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20(fromAssetHash).safeTransferFrom(fromAddress, toAddress, amount);
+        return true;
+    }
+
+    function _transferERC20FromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20(toAssetHash).safeTransfer(toAddress, amount);
+        return true;
+    }
+
+    function _serializeTxArgs(TxArgs memory args) internal pure returns (bytes memory) {
+        bytes memory res = abi.encodePacked(
+            ZeroCopySink.WriteBytes(args.toAssetHash),
+            ZeroCopySink.WriteBytes(args.toAddress),
+            ZeroCopySink.WriteUint255(args.amount)
+        );
+        return res;
+    }
+
+    function _deserializeTxArgs(bytes memory valueBs) internal pure returns (TxArgs memory) {
+        uint offset = 0;
+        bytes memory toAssetHash;
+        bytes memory toAddress;
+        uint256 amount;
+        (toAssetHash, offset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        (toAddress, offset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        (amount, offset) = ZeroCopySource.NextUint255(valueBs, offset);
+
+        return TxArgs({
+            toAssetHash: toAssetHash,
+            toAddress: toAddress,
+            amount: amount
+        });
+    }
+}
+```
+
+This contract includes the necessary functionality for locking and unlocking assets across different blockchain networks. It ensures that only the contract owner can set bindings and mappings, and only the cross-chain manager contract can perform unlock operations. The contract uses utility libraries for serialization and deserialization of data, as well as for safe ERC20 token transfers.

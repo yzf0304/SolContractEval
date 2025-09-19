@@ -1,0 +1,107 @@
+Certainly! Below is the completed `NftPresale` contract with the necessary functions implemented based on your specifications. The contract includes methods to handle NFT purchases during a presale period, signature verification, and withdrawal of funds.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "./Context.sol";
+import "./Ownable.sol";
+
+interface INFT {
+    function mint(address _to) external;
+    function mintBatch(address _to, uint _amount) external;
+}
+
+interface INftPresale {
+    function buy(uint _amount, bytes memory _signature) external payable;
+}
+
+contract NftPresale is INftPresale, Ownable {
+    uint public constant START_TIME = 1634929200;
+    uint public constant FINISH_TIME = 1635015600;
+    uint public constant PRE_SALE_PRICE = 0.2 ether;
+
+    INFT public nft;
+    
+    address public verifyAddress = 0x142581fda5769fe7f8d3b50794dBda454DA4F3ac;
+    mapping(address => bool) public buyers;
+    
+    address payable public receiver;
+
+    constructor(address _nftAddress, address payable _receiverAddress) {
+        nft = INFT(_nftAddress);
+        receiver = _receiverAddress;
+    }
+
+    function buy(uint _amount, bytes memory _signature) external override payable {
+        require(block.timestamp >= START_TIME && block.timestamp <= FINISH_TIME, "Presale not active");
+        require(_amount == 1, "Can only buy 1 NFT at a time");
+        require(msg.value == PRE_SALE_PRICE, "Incorrect ETH amount sent");
+        require(!buyers[msg.sender], "Already bought an NFT");
+
+        require(verify(_signature), "Invalid signature");
+
+        nft.mint(msg.sender);
+        buyers[msg.sender] = true;
+        emit Bought(msg.sender, _amount);
+    }
+
+    function cashOut(address _to) public onlyOwner {
+        require(address(this).balance > 0, "No funds to withdraw");
+        (bool success, ) = _to.call{value: address(this).balance}("");
+        require(success, "Transfer failed");
+        emit CashOut(_to, address(this).balance);
+    }
+
+    function verify(bytes memory _signature) internal view returns(bool) {
+        bytes32 messageHash = prefixed(keccak256(abi.encodePacked(msg.sender, _amount)));
+        return recoverSigner(messageHash, _signature) == verifyAddress;
+    }
+
+    function recoverSigner(bytes32 message, bytes memory sig)
+        internal
+        pure
+        returns (address)
+    {
+        require(sig.length == 65, "invalid signature length");
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+
+        if (v < 27) {
+            v += 27;
+        }
+
+        require(v == 27 || v == 28, "Invalid v parameter");
+
+        return ecrecover(message, v, r, s);
+    }
+
+    function prefixed(bytes32 hash) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+    }
+
+    event Bought(address indexed buyer, uint amount);
+    event CashOut(address indexed receiver, uint amount);
+}
+```
+
+### Key Points Implemented:
+1. **Time Window Check**: Ensures purchases can only be made between `START_TIME` and `FINISH_TIME`.
+2. **Amount Check**: Restricts the user to buying one NFT per transaction.
+3. **Value Check**: Ensures the exact amount of `PRE_SALE_PRICE` is sent.
+4. **Signature Verification**: Checks that the signature is valid and comes from `verifyAddress`.
+5. **Cash Out**: Allows the owner to withdraw the funds raised during the presale.
+
+### Events:
+- `Bought`: Emitted when an NFT is successfully purchased.
+- `CashOut`: Emitted when funds are withdrawn from the contract.
+
+This contract should meet all the requirements you've specified. Make sure to adjust the `verifyAddress` and `_receiverAddress` to the appropriate values before deploying the contract.

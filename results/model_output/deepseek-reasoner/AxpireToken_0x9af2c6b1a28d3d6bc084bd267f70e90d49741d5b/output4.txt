@@ -1,0 +1,115 @@
+```solidity
+pragma solidity ^0.4.20;
+
+contract AxpireToken is ERC223, ERC20 {
+
+    uint256 initialSupply = 350000000 * 10**8;
+    string tokenName = "aXpire Token";
+    string tokenSymbol = "AXP";
+    uint8 decimalUnits = 8;
+
+    function AxpireToken() public
+    ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        bool transferOk = transferInternal(msg.sender, to, value);
+        require(transferOk);
+
+        if (isContract(to)) {
+            ContractReceiver receiver = ContractReceiver(to);
+            receiver.tokenFallback(msg.sender, value, data);
+        }
+
+        emit Transfer(msg.sender, to, value, data);
+        return true;
+    }
+
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool success) {
+        bool transferOk = transferInternal(msg.sender, to, value);
+        require(transferOk);
+
+        if (isContract(to)) {
+            bytes4 sig = bytes4(keccak256(customFallback));
+            bytes memory payload = abi.encodePacked(sig, abi.encode(msg.sender, value, data));
+            require(to.call(payload));
+        }
+
+        emit Transfer(msg.sender, to, value, data);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _value);
+        bool transferSuccess = transferInternal(_from, _to, _value);
+        require(transferSuccess);
+        allowed[_from][msg.sender] -= _value;
+        return true;
+    }
+
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        success = transferInternal(from, to, value);
+        if (success && isContract(to)) {
+            ContractReceiver receiver = ContractReceiver(to);
+            receiver.tokenFallback(from, value, data);
+        }
+    }
+
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        success = transferInternal(from, to, value);
+        if (success && isContract(to)) {
+            if (useCustomFallback) {
+                bytes4 sig = bytes4(keccak256(customFallback));
+                bytes memory payload = abi.encodePacked(sig, abi.encode(from, value, data));
+                require(to.call(payload));
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+    }
+
+    function transferInternal(address from, address to, uint256 value) internal returns (bool success) {
+        return super.transferInternal(from, to, value);
+    }
+
+    function isContract(address _addr) private view returns (bool) {
+        uint256 codeSize;
+        assembly {
+            codeSize := extcodesize(_addr)
+        }
+        return codeSize > 0;
+    }
+}
+```
+
+**Step-by-Step Explanation:**
+
+1. **Constructor Initialization:**
+   - The constructor initializes the token with predefined parameters (name, symbol, decimals) and sets the initial supply to the owner's address.
+
+2. **ERC223 Transfer Functions:**
+   - `transfer(address, uint256, bytes)` uses the ERC20 `transferInternal` to move tokens, checks if the recipient is a contract, and calls `tokenFallback` if applicable.
+   - `transfer(address, uint, bytes, string)` allows specifying a custom fallback function for contract recipients, using low-level calls with the provided function name.
+
+3. **transferFrom Function:**
+   - Overrides the ERC20 `transferFrom` to ensure compatibility, checking allowances and performing the transfer using the internal method.
+
+4. **Internal Transfer Helpers:**
+   - `transferInternal` methods handle token transfers with additional data and fallback logic, ensuring ERC223 compliance by invoking contract callbacks.
+
+5. **Contract Check:**
+   - `isContract` uses assembly to check if an address is a contract by examining its code size.
+
+This implementation ensures compliance with both ERC20 and ERC223 standards, enabling token transfers with data payloads and contract notifications.

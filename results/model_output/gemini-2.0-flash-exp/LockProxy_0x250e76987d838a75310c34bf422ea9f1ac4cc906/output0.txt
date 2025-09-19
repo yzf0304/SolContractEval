@@ -1,0 +1,258 @@
+```solidity
+pragma solidity ^0.5.17;
+
+/**
+ * @title LockProxy
+ * @notice A contract for locking and unlocking assets between different blockchain networks.
+ * @dev This contract facilitates the cross-chain transfer of assets. It locks assets on one chain and unlocks them on another.
+ * The contract is owned and managed, with specific roles to control certain operations.
+ */
+contract LockProxy is Ownable {
+    using SafeMath for uint;
+    using SafeERC20 for IERC20;
+
+    struct TxArgs {
+        bytes toAssetHash;
+        bytes toAddress;
+        uint256 amount;
+    }
+
+    address public managerProxyContract;
+    mapping(uint64 => bytes) public proxyHashMap;
+    mapping(address => mapping(uint64 => bytes)) public assetHashMap;
+    mapping(address => bool) safeTransfer;
+
+    event SetManagerProxyEvent(address manager);
+    event BindProxyEvent(uint64 toChainId, bytes targetProxyHash);
+    event BindAssetEvent(address fromAssetHash, uint64 toChainId, bytes targetProxyHash, uint initialAmount);
+    event UnlockEvent(address toAssetHash, address toAddress, uint256 amount);
+    event LockEvent(address fromAssetHash, address fromAddress, uint64 toChainId, bytes toAssetHash, bytes toAddress, uint256 amount);
+
+    /**
+     * @notice Modifier to ensure that only the EthCrossChainManager contract can call the function.
+     * @dev This modifier checks if the message sender is the EthCrossChainManager contract.
+     */
+    modifier onlyManagerContract() {
+        IEthCrossChainManagerProxy ieccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        require(_msgSender() == ieccmp.getEthCrossChainManager(), "msgSender is not EthCrossChainManagerContract");
+        _;
+    }
+
+    /**
+     * @notice Sets the manager proxy contract address.
+     * @dev Only the owner can set the manager proxy contract address.
+     * @param ethCCMProxyAddr The address of the EthCrossChainManager proxy contract.
+     */
+    function setManagerProxy(address ethCCMProxyAddr) onlyOwner public {
+        require(ethCCMProxyAddr != address(0), "ManagerProxy address cannot be zero");
+        managerProxyContract = ethCCMProxyAddr;
+        emit SetManagerProxyEvent(ethCCMProxyAddr);
+    }
+
+    /**
+     * @notice Binds a proxy hash to a specific chain ID.
+     * @dev Only the owner can bind a proxy hash to a chain ID.
+     * @param toChainId The target chain ID.
+     * @param targetProxyHash The target proxy hash in bytes.
+     * @return bool Returns true if the binding is successful.
+     */
+    function bindProxyHash(uint64 toChainId, bytes memory targetProxyHash) onlyOwner public returns (bool) {
+        require(targetProxyHash.length > 0, "Target proxy hash cannot be empty");
+        proxyHashMap[toChainId] = targetProxyHash;
+        emit BindProxyEvent(toChainId, targetProxyHash);
+        return true;
+    }
+
+    /**
+     * @notice Binds an asset hash to a specific chain ID.
+     * @dev Only the owner can bind an asset hash to a chain ID.
+     * @param fromAssetHash The asset address in the current chain.
+     * @param toChainId The target chain ID.
+     * @param toAssetHash The target asset hash in bytes.
+     * @return bool Returns true if the binding is successful.
+     */
+    function bindAssetHash(address fromAssetHash, uint64 toChainId, bytes memory toAssetHash) onlyOwner public returns (bool) {
+        require(fromAssetHash != address(0), "From asset hash cannot be zero address");
+        require(toAssetHash.length > 0, "Target asset hash cannot be empty");
+        assetHashMap[fromAssetHash][toChainId] = toAssetHash;
+        emit BindAssetEvent(fromAssetHash, toChainId, toAssetHash, 0);
+        return true;
+    }
+
+    /**
+     * @notice Locks a specified amount of tokens in the current chain and prepares to unlock them in the target chain.
+     * @dev This function transfers the tokens from the user to the contract, then sends a cross-chain request to unlock the tokens on the target chain.
+     * @param fromAssetHash The asset address in the current chain.
+     * @param toChainId The target chain ID.
+     * @param toAddress The address in bytes format to receive the tokens in the target chain.
+     * @param amount The amount of tokens to be transferred.
+     * @return bool Returns true if the lock operation is successful.
+     */
+    function lock(address fromAssetHash, uint64 toChainId, bytes memory toAddress, uint256 amount) public payable returns (bool) {
+        require(toAddress.length > 0, "To address cannot be empty");
+        require(amount > 0, "Amount must be greater than zero");
+
+        _transferToContract(fromAssetHash, amount);
+
+        bytes memory toAssetHash = assetHashMap[fromAssetHash][toChainId];
+        require(toAssetHash.length > 0, "Asset hash not bound for the target chain");
+
+        TxArgs memory args = TxArgs({
+            toAssetHash: toAssetHash,
+            toAddress: toAddress,
+            amount: amount
+        });
+
+        bytes memory txData = _serializeTxArgs(args);
+        bytes memory method = bytes("unlock(bytes,bytes,uint64)");
+        bytes memory targetContract = proxyHashMap[toChainId];
+        require(targetContract.length > 0, "Target contract not bound for the target chain");
+
+        IEthCrossChainManagerProxy ieccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        IEthCrossChainManager ieccm = IEthCrossChainManager(ieccmp.getEthCrossChainManager());
+        bool success = ieccm.crossChain(toChainId, targetContract, method, txData);
+
+        emit LockEvent(fromAssetHash, _msgSender(), toChainId, toAssetHash, toAddress, amount);
+        return success;
+    }
+
+    /**
+     * @notice Unlocks a specified amount of tokens on the current chain after they have been locked on the source chain.
+     * @dev This function is called by the ETH crosschain management contract to unlock the tokens and transfer them to the designated address.
+     * @param argsBs The argument bytes received by the Ethereum lock proxy contract, which need to be deserialized.
+     * @param fromContractAddr The source chain contract address.
+     * @param fromChainId The source chain ID.
+     * @return bool Returns true if the unlock operation is successful.
+     */
+    function unlock(bytes memory argsBs, bytes memory fromContractAddr, uint64 fromChainId) onlyManagerContract public returns (bool) {
+        TxArgs memory args = _deserializeTxArgs(argsBs);
+        address toAssetHash = Utils.bytesToAddress(args.toAssetHash);
+        address toAddress = Utils.bytesToAddress(args.toAddress);
+        uint256 amount = args.amount;
+
+        require(toAddress != address(0), "To address cannot be zero address");
+        require(amount > 0, "Amount must be greater than zero");
+
+        _transferFromContract(toAssetHash, toAddress, amount);
+
+        emit UnlockEvent(toAssetHash, toAddress, amount);
+        return true;
+    }
+
+    /**
+     * @notice Gets the balance of a specific asset in the contract.
+     * @dev If the asset address is zero, it returns the Ether balance; otherwise, it returns the ERC20 token balance.
+     * @param fromAssetHash The asset address in the current chain.
+     * @return uint256 The balance of the specified asset.
+     */
+    function getBalanceFor(address fromAssetHash) public view returns (uint256) {
+        if (fromAssetHash == address(0)) {
+            return address(this).balance;
+        } else {
+            IERC20 token = IERC20(fromAssetHash);
+            return token.balanceOf(address(this));
+        }
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from the user to the contract.
+     * @dev This internal function handles the transfer of both Ether and ERC20 tokens.
+     * @param fromAssetHash The asset address in the current chain.
+     * @param amount The amount of tokens to be transferred.
+     * @return bool Returns true if the transfer is successful.
+     */
+    function _transferToContract(address fromAssetHash, uint256 amount) internal returns (bool) {
+        if (fromAssetHash == address(0)) {
+            require(msg.value >= amount, "Insufficient Ether sent");
+            return true;
+        } else {
+            _transferERC20ToContract(fromAssetHash, _msgSender(), address(this), amount);
+            return true;
+        }
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from the contract to the designated address.
+     * @dev This internal function handles the transfer of both Ether and ERC20 tokens.
+     * @param toAssetHash The asset address in the current chain.
+     * @param toAddress The address to receive the tokens.
+     * @param amount The amount of tokens to be transferred.
+     * @return bool Returns true if the transfer is successful.
+     */
+    function _transferFromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        if (toAssetHash == address(0)) {
+            address(uint160(toAddress)).transfer(amount);
+            return true;
+        } else {
+            _transferERC20FromContract(toAssetHash, toAddress, amount);
+            return true;
+        }
+    }
+
+    /**
+     * @notice Transfers a specified amount of ERC20 tokens from the user to the contract.
+     * @dev This internal function uses the SafeERC20 library to handle the transfer.
+     * @param fromAssetHash The asset address in the current chain.
+     * @param fromAddress The address of the user.
+     * @param toAddress The address of the contract.
+     * @param amount The amount of tokens to be transferred.
+     * @return bool Returns true if the transfer is successful.
+     */
+    function _transferERC20ToContract(address fromAssetHash, address fromAddress, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20 token = IERC20(fromAssetHash);
+        token.safeTransferFrom(fromAddress, toAddress, amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfers a specified amount of ERC20 tokens from the contract to the designated address.
+     * @dev This internal function uses the SafeERC20 library to handle the transfer.
+     * @param toAssetHash The asset address in the current chain.
+     * @param toAddress The address to receive the tokens.
+     * @param amount The amount of tokens to be transferred.
+     * @return bool Returns true if the transfer is successful.
+     */
+    function _transferERC20FromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20 token = IERC20(toAssetHash);
+        token.safeTransfer(toAddress, amount);
+        return true;
+    }
+
+    /**
+     * @notice Serializes the transaction arguments into a byte array.
+     * @dev This internal function encodes the transaction arguments using the ZeroCopySink utility.
+     * @param args The transaction arguments to be serialized.
+     * @return bytes The serialized transaction arguments.
+     */
+    function _serializeTxArgs(TxArgs memory args) internal pure returns (bytes memory) {
+        bytes memory toAssetHashBytes = ZeroCopySink.WriteVarBytes(args.toAssetHash);
+        bytes memory toAddressBytes = ZeroCopySink.WriteVarBytes(args.toAddress);
+        bytes memory amountBytes = ZeroCopySink.WriteUint255(args.amount);
+
+        return abi.encodePacked(toAssetHashBytes, toAddressBytes, amountBytes);
+    }
+
+    /**
+     * @notice Deserializes the transaction arguments from a byte array.
+     * @dev This internal function decodes the transaction arguments using the ZeroCopySource utility.
+     * @param valueBs The byte array containing the serialized transaction arguments.
+     * @return TxArgs The deserialized transaction arguments.
+     */
+    function _deserializeTxArgs(bytes memory valueBs) internal pure returns (TxArgs memory) {
+        uint256 offset = 0;
+        bytes memory toAssetHash;
+        bytes memory toAddress;
+        uint256 amount;
+
+        (toAssetHash, offset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        (toAddress, offset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        (amount, offset) = ZeroCopySource.NextUint255(valueBs, offset);
+
+        return TxArgs({
+            toAssetHash: toAssetHash,
+            toAddress: toAddress,
+            amount: amount
+        });
+    }
+}
+```

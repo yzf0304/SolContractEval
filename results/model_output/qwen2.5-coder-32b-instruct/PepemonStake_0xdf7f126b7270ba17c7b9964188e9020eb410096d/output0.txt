@@ -1,0 +1,255 @@
+Certainly! Below is the complete implementation of the `PepemonStake` contract based on the provided specification and context. This implementation includes all view functions, functions to manage staking events, and user interactions for staking, claiming, and canceling staking events.
+
+```solidity
+pragma solidity 0.6.6;
+
+import "./Context.sol";
+import "./Ownable.sol";
+import "./SafeMath.sol";
+
+interface IPepemonFactory {
+    function balanceOf(address _owner, uint256 _id) external view returns (uint256);
+    function balanceOfBatch(address[] calldata _owners, uint256[] calldata _ids) external view returns (uint256[] memory);
+    function mint(address _to, uint256 _id, uint256 _quantity, bytes calldata _data) external;
+    function burn(address _account, uint256 _id, uint256 _amount) external;
+    function safeTransferFrom(address _from, address _to, uint256 _id, uint256 _amount, bytes calldata _data) external;
+    function safeBatchTransferFrom(address _from, address _to, uint256[] calldata _ids, uint256[] calldata _amounts, bytes calldata _data) external;
+}
+
+contract PepemonStake is Ownable {
+    using SafeMath for uint256;
+
+    IPepemonFactory public pepemonFactory;
+
+    struct StakingEvent {
+        uint256[] cardIdList;
+        uint256 cardAmountAny;
+        uint256[] cardAmountList;
+        uint256 cardRewardId;
+        uint256 blockStakeLength;
+        uint256 blockEventClose;
+        uint256[] toBurnIdList;
+        uint256[] toBurnAmountList;
+    }
+
+    struct UserInfo {
+        bool isCompleted;
+        uint256 blockEnd;
+    }
+
+    StakingEvent[] public stakingEvents;
+    mapping (address => mapping(uint256 => UserInfo)) public userInfo;
+    mapping (address => mapping(uint256 => mapping(uint256 => uint256))) public cardsStaked; // address => eventId => cardId => amountStaked
+
+    event StakingEventCreated(uint256 eventId);
+    event StakingEventEntered(address indexed user, uint256 eventId);
+    event StakingEventCompleted(address indexed user, uint256 eventId);
+    event StakingEventCancelled(address indexed user, uint256 eventId);
+
+    constructor(IPepemonFactory _pepemonFactoryAddress) public {
+        pepemonFactory = _pepemonFactoryAddress;
+    }
+
+    function getStakingEventsLength() external view returns(uint256) {
+        return stakingEvents.length;
+    }
+
+    function getAllEvents() public view returns(StakingEvent[] memory) {
+        return stakingEvents;
+    }
+
+    function getActiveEvents() external view returns(uint256[] memory) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < stakingEvents.length; i++) {
+            if (block.number < stakingEvents[i].blockEventClose) {
+                count++;
+            }
+        }
+        uint256[] memory activeEvents = new uint256[](count);
+        uint256 index;
+        for (uint256 i = 0; i < stakingEvents.length; i++) {
+            if (block.number < stakingEvents[i].blockEventClose) {
+                activeEvents[index] = i;
+                index++;
+            }
+        }
+        return activeEvents;
+    }
+
+    function getClosedEvents() external view returns(uint256[] memory) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < stakingEvents.length; i++) {
+            if (block.number >= stakingEvents[i].blockEventClose) {
+                count++;
+            }
+        }
+        uint256[] memory closedEvents = new uint256[](count);
+        uint256 index;
+        for (uint256 i = 0; i < stakingEvents.length; i++) {
+            if (block.number >= stakingEvents[i].blockEventClose) {
+                closedEvents[index] = i;
+                index++;
+            }
+        }
+        return closedEvents;
+    }
+
+    function getCardIdListOfEvent(uint256 _eventId) external view returns(uint256[] memory) {
+        return stakingEvents[_eventId].cardIdList;
+    }
+
+    function getCardAmountListOfEvent(uint256 _eventId) external view returns(uint256[] memory) {
+        return stakingEvents[_eventId].cardAmountList;
+    }
+
+    function getUserProgress(address _user, uint256 _eventId) external view returns(uint256) {
+        require(block.number <= stakingEvents[_eventId].blockEventClose, "Event is closed");
+        if (userInfo[_user][_eventId].blockEnd == 0) {
+            return 0;
+        }
+        if (block.number >= userInfo[_user][_eventId].blockEnd) {
+            return 1e5; // 100%
+        }
+        uint256 timePassed = block.number.sub(userInfo[_user][_eventId].blockEnd).sub(stakingEvents[_eventId].blockStakeLength);
+        uint256 timeLeft = stakingEvents[_eventId].blockStakeLength;
+        return timePassed.mul(1e5).div(timeLeft);
+    }
+
+    function createStakingEvent(uint256[] memory _cardIdList, uint256 _cardAmountAny, uint256[] memory _cardAmountList, uint256 _cardRewardId,
+        uint256 _blockStakeLength, uint256 _blockEventClose, uint256[] memory _toBurnIdList, uint256[] memory _toBurnAmountList) public onlyOwner {
+        require(_blockStakeLength > 0 && _blockEventClose > block.number, "Invalid event parameters");
+        stakingEvents.push(StakingEvent({
+            cardIdList: _cardIdList,
+            cardAmountAny: _cardAmountAny,
+            cardAmountList: _cardAmountList,
+            cardRewardId: _cardRewardId,
+            blockStakeLength: _blockStakeLength,
+            blockEventClose: _blockEventClose,
+            toBurnIdList: _toBurnIdList,
+            toBurnAmountList: _toBurnAmountList
+        }));
+        emit StakingEventCreated(stakingEvents.length - 1);
+    }
+
+    function closeStakingEvent(uint256 _eventId) public onlyOwner {
+        require(block.number < stakingEvents[_eventId].blockEventClose, "Event already closed");
+        stakingEvents[_eventId].blockEventClose = block.number;
+    }
+
+    function stakeAny(uint256 _eventId, uint256[] memory _cardIdList, uint256[] memory _cardAmountList) public {
+        require(block.number < stakingEvents[_eventId].blockEventClose, "Event is closed");
+        require(!userInfo[msg.sender][_eventId].isCompleted, "User has already completed this event");
+        require(userInfo[msg.sender][_eventId].blockEnd == 0, "User is already staking in this event");
+        require(_cardIdList.length == _cardAmountList.length, "Mismatched arrays");
+
+        uint256 totalAmount = 0;
+        for (uint256 i = 0; i < _cardAmountList.length; i++) {
+            totalAmount = totalAmount.add(_cardAmountList[i]);
+        }
+        require(totalAmount >= stakingEvents[_eventId].cardAmountAny, "Not enough cards staked");
+
+        pepemonFactory.safeBatchTransferFrom(msg.sender, address(this), _cardIdList, _cardAmountList, "");
+        for (uint256 i = 0; i < _cardIdList.length; i++) {
+            cardsStaked[msg.sender][_eventId][_cardIdList[i]] = cardsStaked[msg.sender][_eventId][_cardIdList[i]].add(_cardAmountList[i]);
+        }
+
+        userInfo[msg.sender][_eventId].blockEnd = block.number.add(stakingEvents[_eventId].blockStakeLength);
+        emit StakingEventEntered(msg.sender, _eventId);
+    }
+
+    function stake(uint256 _eventId) public {
+        require(block.number < stakingEvents[_eventId].blockEventClose, "Event is closed");
+        require(!userInfo[msg.sender][_eventId].isCompleted, "User has already completed this event");
+        require(userInfo[msg.sender][_eventId].blockEnd == 0, "User is already staking in this event");
+        require(stakingEvents[_eventId].cardAmountList.length == stakingEvents[_eventId].cardIdList.length, "Mismatched arrays");
+
+        for (uint256 i = 0; i < stakingEvents[_eventId].cardIdList.length; i++) {
+            require(pepemonFactory.balanceOf(msg.sender, stakingEvents[_eventId].cardIdList[i]) >= stakingEvents[_eventId].cardAmountList[i], "Insufficient balance");
+        }
+
+        pepemonFactory.safeBatchTransferFrom(msg.sender, address(this), stakingEvents[_eventId].cardIdList, stakingEvents[_eventId].cardAmountList, "");
+        for (uint256 i = 0; i < stakingEvents[_eventId].cardIdList.length; i++) {
+            cardsStaked[msg.sender][_eventId][stakingEvents[_eventId].cardIdList[i]] = cardsStaked[msg.sender][_eventId][stakingEvents[_eventId].cardIdList[i]].add(stakingEvents[_eventId].cardAmountList[i]);
+        }
+
+        userInfo[msg.sender][_eventId].blockEnd = block.number.add(stakingEvents[_eventId].blockStakeLength);
+        emit StakingEventEntered(msg.sender, _eventId);
+    }
+
+    function claim(uint256 _eventId) public {
+        require(block.number >= userInfo[msg.sender][_eventId].blockEnd, "Staking period not over yet");
+        require(!userInfo[msg.sender][_eventId].isCompleted, "Already claimed");
+
+        for (uint256 i = 0; i < stakingEvents[_eventId].toBurnIdList.length; i++) {
+            pepemonFactory.burn(address(this), stakingEvents[_eventId].toBurnIdList[i], stakingEvents[_eventId].toBurnAmountList[i]);
+        }
+        pepemonFactory.mint(msg.sender, stakingEvents[_eventId].cardRewardId, 1, "");
+
+        userInfo[msg.sender][_eventId].isCompleted = true;
+        emit StakingEventCompleted(msg.sender, _eventId);
+    }
+
+    function cancel(uint256 _eventId) public {
+        require(block.number < userInfo[msg.sender][_eventId].blockEnd, "Cannot cancel after staking period ends");
+        require(userInfo[msg.sender][_eventId].blockEnd != 0, "User is not staking in this event");
+
+        _withdrawCardsStaked(_eventId, false);
+        userInfo[msg.sender][_eventId].blockEnd = 0;
+        emit StakingEventCancelled(msg.sender, _eventId);
+    }
+
+    function _withdrawCardsStaked(uint256 _eventId, bool _burn) internal {
+        for (uint256 i = 0; i < stakingEvents[_eventId].cardIdList.length; i++) {
+            uint256 amountStaked = cardsStaked[msg.sender][_eventId][stakingEvents[_eventId].cardIdList[i]];
+            if (_burn) {
+                pepemonFactory.burn(address(this), stakingEvents[_eventId].cardIdList[i], amountStaked);
+            } else {
+                pepemonFactory.safeTransferFrom(address(this), msg.sender, stakingEvents[_eventId].cardIdList[i], amountStaked, "");
+            }
+            cardsStaked[msg.sender][_eventId][stakingEvents[_eventId].cardIdList[i]] = 0;
+        }
+    }
+
+    function _isInArray(uint256 _value, uint256[] memory _array) internal pure returns(bool) {
+        for (uint256 i = 0; i < _array.length; i++) {
+            if (_array[i] == _value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function onERC1155Received(address , address , uint256 , uint256 , bytes calldata ) external returns(bytes4) {
+        return 0xf23a6e61;
+    }
+
+    function onERC1155BatchReceived(address , address , uint256[] calldata , uint256[] calldata , bytes calldata ) external returns(bytes4) {
+        return 0xbc197c81;
+    }
+
+    function supportsInterface(bytes4 interfaceID) external view returns (bool) {
+        return  interfaceID == 0x01ffc9a7 ||    // ERC-165 support (i.e. `bytes4(keccak256('supportsInterface(bytes4)'))`).
+        interfaceID == 0x4e2312e0;      // ERC-1155 `ERC1155TokenReceiver` support (i.e. `bytes4(keccak256("onERC1155Received(address,address,uint256,uint256,bytes)")) ^ bytes4(keccak256("onERC1155BatchReceived(address,address,uint256[],uint256[],bytes)"))`).
+    }
+}
+```
+
+### Key Features Implemented:
+1. **Staking Event Management**:
+   - Creating and closing staking events.
+   - Managing card requirements per staking event.
+
+2. **User Interactions**:
+   - Users can stake cards into active events.
+   - Users can claim rewards once the staking period ends.
+   - Users can cancel staking before the period ends, retrieving their staked cards.
+
+3. **View Functions**:
+   - Retrieval of staking event details.
+   - Checking user staking status and progress.
+
+4. **Security**:
+   - Only the owner can create and close staking events.
+   - Users can only stake into active events and claim after their staking period ends.
+
+This contract is designed to interact with an ERC-1155 compatible token contract (`IPepemonFactory`), handling batch transfers and burns as necessary.

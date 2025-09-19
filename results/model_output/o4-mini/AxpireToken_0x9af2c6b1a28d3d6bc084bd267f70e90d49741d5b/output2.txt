@@ -1,0 +1,147 @@
+Here is the completed AxpireToken contract (Solidity 0.4.20) with all of the ERC20 + ERC223 transfer methods implemented exactly as specified—no extra contracts or libraries have been introduced:
+
+```solidity
+pragma solidity ^0.4.20;
+
+contract AxpireToken is ERC223, ERC20 {
+    uint256 initialSupply = 350000000 * 10**8;
+    string  tokenName     = "aXpire Token";
+    string  tokenSymbol   = "AXP";
+    uint8   decimalUnits  = 8;
+
+    //Constructor
+    function AxpireToken() public
+        ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        balances[owner] = initialSupply;
+        totalSupply      = initialSupply;
+    }
+
+    // ERC223 transfer with data
+    function transfer(address to, uint256 value, bytes data)
+        public
+        returns (bool success)
+    {
+        return transferInternal(msg.sender, to, value, data);
+    }
+
+    // ERC223 transfer with data + custom fallback
+    function transfer(address to, uint256 value, bytes data, string customFallback)
+        public
+        returns (bool success)
+    {
+        return transferInternal(msg.sender, to, value, data, true, customFallback);
+    }
+
+    // Override ERC20 transferFrom
+    function transferFrom(address _from, address _to, uint256 _value)
+        public
+        returns (bool success)
+    {
+        require(allowed[_from][msg.sender] >= _value);
+        bool ok = transferInternal(_from, _to, _value);
+        if (ok) {
+            allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        }
+        return ok;
+    }
+
+    // ERC223 core: transfer + data
+    function transferInternal(address from, address to, uint256 value, bytes data)
+        internal
+        returns (bool success)
+    {
+        // zero-value transfer is allowed
+        if (value == 0) {
+            Transfer(from, to, value);
+            Transfer(from, to, value, data);
+            return true;
+        }
+
+        // standard balance check
+        balances[from] = balances[from].sub(value);
+        balances[to]   = balances[to].add(value);
+
+        // if recipient is a contract, call fallback
+        if (isContract(to)) {
+            ContractReceiver receiver = ContractReceiver(to);
+            receiver.tokenFallback(from, value, data);
+        }
+
+        // emit both ERC20 and ERC223 Transfer events
+        Transfer(from, to, value);
+        Transfer(from, to, value, data);
+        return true;
+    }
+
+    // ERC223 core: transfer + data + optional custom fallback
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    )
+        internal
+        returns (bool success)
+    {
+        if (value == 0) {
+            Transfer(from, to, value);
+            Transfer(from, to, value, data);
+            return true;
+        }
+
+        balances[from] = balances[from].sub(value);
+        balances[to]   = balances[to].add(value);
+
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                // call custom fallback
+                bytes4 sig = bytes4(keccak256(customFallback));
+                require(to.call(sig, from, value, data));
+            } else {
+                // default ERC223 fallback
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+
+        Transfer(from, to, value);
+        Transfer(from, to, value, data);
+        return true;
+    }
+
+    // ERC20 transferInternal without data simply delegates
+    function transferInternal(address from, address to, uint256 value)
+        internal
+        returns (bool success)
+    {
+        bytes memory empty;
+        return transferInternal(from, to, value, empty);
+    }
+
+    // checks whether _addr is a contract
+    function isContract(address _addr) private view returns (bool) {
+        uint256 length;
+        assembly { length := extcodesize(_addr) }
+        return (length > 0);
+    }
+}
+```
+
+Explanation of the key pieces:
+
+1. We overload `transfer(...)` three ways:
+   - ERC20 style (`to`, `value`) is inherited.
+   - ERC223 style with `bytes data`.
+   - ERC223 style with `bytes data` + `string customFallback`.
+
+2. All of them delegate into `transferInternal(...)` variants:
+   - The 4‐argument version handles standard ERC223 transfers (calling `tokenFallback` on contract recipients).
+   - The 6‐argument version allows a custom fallback function if desired (using a low‐level `.call`).
+   - The 3‐argument version (`from`, `to`, `value`) simply wraps an empty‐data call.
+
+3. We emit both the standard ERC20 `Transfer(from,to,value)` event and the ERC223 `Transfer(from,to,value,data)` event on every transfer.  
+4. `isContract` uses `extcodesize` to check whether the target is a contract.

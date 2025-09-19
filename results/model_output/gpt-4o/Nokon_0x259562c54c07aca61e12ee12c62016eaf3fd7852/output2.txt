@@ -1,0 +1,205 @@
+Here is the complete implementation of the `Nokon` contract based on the provided description and context. The contract adheres to the ERC20 standard, includes presell functionality, administrative operations, and uses the `SafeMath` library for secure arithmetic:
+
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.7.4;
+
+import "./IERC20.sol";
+import "./SafeMath.sol";
+
+/**
+ * @title Nokon Token Contract
+ * @author [Your Name]
+ * @notice Implements the ERC20 standard with presell functionality.
+ */
+contract Nokon is IERC20 {
+    using SafeMath for uint256;
+
+    string public constant name = "Nokon";
+    string public constant symbol = "NKO";
+    uint8 public constant decimals = 8;
+
+    uint256 private totalSupply_ = 1200000000000000000;
+    bool private presell = true;
+    uint256 private ethRateFix = 10000000000;
+
+    address private authAddress = parseAddr("0x44F6827aa307F4d7FAeb64Be47543647B3a871dB");
+
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowed;
+    mapping(address => bool) public authorizedAddress;
+
+    event Bought(uint256 amount);
+    event Sold(uint256 amount);
+    event Approval(address indexed tokenOwner, address indexed spender, uint256 tokens);
+    event Transfer(address indexed from, address indexed to, uint256 tokens);
+
+    constructor() {
+        balances[msg.sender] = totalSupply_;
+        balances[address(this)] = totalSupply_;
+        balances[authAddress] = totalSupply_;
+
+        authorizedAddress[msg.sender] = true;
+        authorizedAddress[authAddress] = true;
+    }
+
+    function parseAddr(string memory _a) internal pure returns (address) {
+        bytes memory tmp = bytes(_a);
+        uint160 iaddr = 0;
+        uint160 b1;
+        uint160 b2;
+        for (uint256 i = 2; i < 2 + 2 * 20; i += 2) {
+            iaddr *= 256;
+            b1 = uint160(uint8(tmp[i]));
+            b2 = uint160(uint8(tmp[i + 1]));
+            if ((b1 >= 97) && (b1 <= 102)) {
+                b1 -= 87;
+            } else if ((b1 >= 65) && (b1 <= 70)) {
+                b1 -= 55;
+            } else if ((b1 >= 48) && (b1 <= 57)) {
+                b1 -= 48;
+            }
+            if ((b2 >= 97) && (b2 <= 102)) {
+                b2 -= 87;
+            } else if ((b2 >= 65) && (b2 <= 70)) {
+                b2 -= 55;
+            } else if ((b2 >= 48) && (b2 <= 57)) {
+                b2 -= 48;
+            }
+            iaddr += (b1 * 16 + b2);
+        }
+        return address(iaddr);
+    }
+
+    function totalSupply() public view override returns (uint256) {
+        return totalSupply_;
+    }
+
+    function balanceOf(address tokenOwner) public view override returns (uint256) {
+        return balances[tokenOwner];
+    }
+
+    function allowance(address owner, address delegate) public view override returns (uint256) {
+        return allowed[owner][delegate];
+    }
+
+    function transfer(address receiver, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[msg.sender], "Insufficient balance");
+        balances[msg.sender] = balances[msg.sender].sub(numTokens);
+        balances[receiver] = balances[receiver].add(numTokens);
+        emit Transfer(msg.sender, receiver, numTokens);
+        return true;
+    }
+
+    function approve(address delegate, uint256 numTokens) public override returns (bool) {
+        allowed[msg.sender][delegate] = numTokens;
+        emit Approval(msg.sender, delegate, numTokens);
+        return true;
+    }
+
+    function transferFrom(address owner, address buyer, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[owner], "Insufficient balance");
+        require(numTokens <= allowed[owner][msg.sender], "Allowance exceeded");
+
+        balances[owner] = balances[owner].sub(numTokens);
+        allowed[owner][msg.sender] = allowed[owner][msg.sender].sub(numTokens);
+        balances[buyer] = balances[buyer].add(numTokens);
+        emit Transfer(owner, buyer, numTokens);
+        return true;
+    }
+
+    receive() external payable {
+        buy();
+    }
+
+    function buy() public payable {
+        require(presell, "Presell is not active");
+        require(msg.value >= 50000000000000000, "Minimum 0.05 ETH required");
+
+        uint256 amountToBuy = (msg.value.div(ethRateFix)).mul(calculateRate());
+        require(amountToBuy <= balances[address(this)], "Insufficient contract token balance");
+
+        balances[address(this)] = balances[address(this)].sub(amountToBuy);
+        balances[msg.sender] = balances[msg.sender].add(amountToBuy);
+
+        emit Transfer(address(this), msg.sender, amountToBuy);
+        emit Bought(amountToBuy);
+    }
+
+    function calculateRate() private view returns (uint256) {
+        uint256 contractBalance = balances[address(this)];
+        if (contractBalance > 100000000) {
+            return 666666;
+        } else if (contractBalance > 50000000) {
+            return 333333;
+        } else {
+            return 250000;
+        }
+    }
+
+    function closePresell(bytes32 hash, bytes memory signature) public {
+        require(isAuthorized(hash, signature), "Unauthorized");
+        presell = false;
+    }
+
+    function openPresell(bytes32 hash, bytes memory signature) public {
+        require(isAuthorized(hash, signature), "Unauthorized");
+        presell = true;
+    }
+
+    function getEthBalance(bytes32 hash, bytes memory signature) public returns (uint256) {
+        require(isAuthorized(hash, signature), "Unauthorized");
+        return address(this).balance;
+    }
+
+    function transferEth(bytes32 hash, bytes memory signature, uint256 _amount) public {
+        require(isAuthorized(hash, signature), "Unauthorized");
+        require(address(this).balance >= _amount, "Insufficient Ether balance");
+        payable(authAddress).transfer(_amount);
+    }
+
+    function supply() public view returns (uint256) {
+        return balances[address(this)];
+    }
+
+    function presellStatus() public view returns (bool) {
+        return presell;
+    }
+
+    function getAddress() public view returns (address) {
+        return address(this);
+    }
+
+    function isAuthorized(bytes32 hash, bytes memory signature) internal view returns (bool) {
+        address signer = recover(hash, signature);
+        return authorizedAddress[signer];
+    }
+
+    function recover(bytes32 hash, bytes memory signature) internal pure returns (address) {
+        if (signature.length != 65) {
+            return address(0);
+        }
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(signature, 32))
+            s := mload(add(signature, 64))
+            v := byte(0, mload(add(signature, 96)))
+        }
+
+        if (v < 27) {
+            v += 27;
+        }
+
+        if (v != 27 && v != 28) {
+            return address(0);
+        }
+
+        return ecrecover(hash, v, r, s);
+    }
+}
+```
+
+This implementation strictly adheres to your requirements and context, ensuring the contract is complete, functional, and does not include extraneous code.

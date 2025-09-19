@@ -1,0 +1,65 @@
+Below is the completed `DNCEQUITY` smart contract based on the provided context and description. The contract includes necessary functionality for minting, burning, and admin-controlled transfers. It adheres to the ERC223 standard and is compatible with Solidity version 0.4.21.
+
+```solidity
+contract DNCEQUITY is ERC223BasicToken {
+    address public admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping (address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    function DNCEQUITY() {
+        admin = msg.sender;
+    }
+
+    modifier onlyadmin { if (msg.sender != admin) revert(); _; }
+
+    function changeAdmin(address _newAdminAddr) onlyadmin {
+        admin = _newAdminAddr;
+    }
+
+    function createNewMintableUser(address newAddr) onlyadmin {
+        require(balances[newAddr] == 0, "User already has a balance.");
+        mintable[newAddr] = true;
+    }
+
+    function deleteMintable(address addr) onlyadmin {
+        mintable[addr] = false;
+    }
+
+    function adminTransfer(address from, address to, uint256 value) onlyadmin {
+        require(mintable[from], "The from address is not mintable.");
+        require(value <= balances[from], "Insufficient balance.");
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        Transfer(from, to, value);
+    }
+
+    function mintNewDNC(address user, uint256 quantity) onlyadmin {
+        require(mintable[user], "The user is not mintable.");
+        totalSupply = totalSupply.add(quantity);
+        balances[user] = balances[user].add(quantity);
+        Minted(user, quantity);
+    }
+
+    function burnDNC(address user, uint256 quantity) onlyadmin {
+        require(mintable[user], "The user is not mintable.");
+        require(quantity <= balances[user], "Insufficient balance.");
+        balances[user] = balances[user].sub(quantity);
+        totalSupply = totalSupply.sub(quantity);
+        Burned(user, quantity);
+    }
+}
+```
+
+### Key Points:
+- **Admin Role:** The admin is the only address that can perform certain functions such as changing the admin, creating/removing mintable users, minting, burning, and transferring tokens on behalf of others.
+- **Mintable Users:** Users need to be marked as mintable to receive minted tokens or be burned.
+- **Events:** The contract emits events `Minted` and `Burned` when tokens are minted or burned, respectively.
+- **Transfer Functionality:** Includes both standard `transfer` and an `adminTransfer` function where the admin can transfer tokens between mintable addresses.
+- **Error Handling:** Includes checks to ensure that operations are valid (e.g., mintable users have sufficient balance).
+
+This contract should meet the requirements specified in your description while using the syntax and features available in Solidity version 0.4.21.

@@ -1,0 +1,235 @@
+Below is the completed `Presale` smart contract strictly adhering to the provided context and description:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract Presale is Claimable, Pausable {
+
+  using Discounts for Discounts.Collection;
+  using Limits for Limits.Window;
+
+  struct Participant {
+    bool authorized;
+    uint256 minimumTier;
+  }
+
+  /**************************************************************************
+   * STORAGE / EVENTS
+   *************************************************************************/
+  SeeToken public token;
+  Discounts.Collection public discounts;
+  Limits.Window public cap;
+  mapping (address => Participant) public participants;
+
+  event Tier(uint256 discount, uint256 available);
+
+  /**************************************************************************
+   * CONSTRUCTOR / LIFECYCLE
+   *************************************************************************/
+  function Presale(address _token)
+    public
+  {
+    token = SeeToken(_token);
+    paused = true;
+  }
+
+  function claimToken() public {
+    token.claimOwnership();
+  }
+
+  function unpause()
+    onlyOwner
+    whenPaused
+    whenRateSet
+    whenCapped
+    whenOwnsToken
+    public
+  {
+    super.unpause();
+  }
+
+  /**************************************************************************
+   * ADMIN INTERFACE
+   *************************************************************************/
+  function setRate(uint256 _purchaseRate)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_purchaseRate > 0);
+    discounts.baseRate = _purchaseRate;
+  }
+
+  function limitPurchasing(uint256 _amount, uint256 _duration)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_amount > 0);
+    require(_duration > 0);
+    cap.amount = _amount;
+    cap.duration = _duration;
+  }
+
+  function addTier(uint256 _discount, uint256 _available)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_discount <= Discounts.MAX_DISCOUNT);
+    require(_available > 0);
+
+    discounts.addTier(_discount, _available);
+    Tier(_discount, _available);
+  }
+
+  function authorizeForTier(uint256 _minimumTier, address[] _authorized)
+    onlyOwner
+    public
+  {
+    require(_minimumTier < discounts.tiers.length);
+
+    for (uint256 i = 0; i < _authorized.length; i++) {
+      participants[_authorized[i]].authorized = true;
+      participants[_authorized[i]].minimumTier = _minimumTier;
+    }
+  }
+
+  function withdraw()
+    onlyOwner
+    public
+  {
+    owner.transfer(address(this).balance);
+  }
+
+  /**************************************************************************
+   * PURCHASE INTERFACE
+   *************************************************************************/
+  function ()
+    public
+    payable
+  {
+    purchaseTokens();
+  }
+
+  function purchaseTokens()
+    onlyAuthorized
+    whenNotPaused
+    public
+    payable
+  {
+    require(msg.value > 0);
+
+    var participant = participants[msg.sender];
+    uint256 tokensToPurchase;
+    uint256 remainingFunds;
+
+    (tokensToPurchase, remainingFunds) = discounts.purchaseTokens(
+      msg.value,
+      participant.minimumTier
+    );
+
+    require(tokensToPurchase > 0); // Ensure tokens are purchased
+    require(cap.getLimit(msg.sender) >= tokensToPurchase); // Check cap limit
+
+    cap.recordPurchase(msg.sender, tokensToPurchase); // Update cap records
+    token.issue(msg.sender, tokensToPurchase); // Issue tokens to buyer
+
+    if (remainingFunds > 0) {
+      msg.sender.transfer(remainingFunds); // Refund excess funds, if any
+    }
+  }
+
+  /**************************************************************************
+   * PRICING / AVAILABILITY - VIEW INTERFACE
+   *************************************************************************/
+  function getPurchaseLimit()
+    public
+    view
+    returns (uint256 _amount, uint256 _duration)
+  {
+    return (cap.amount, cap.duration);
+  }
+
+  function getTiers()
+    public
+    view
+    returns (uint256[2][])
+  {
+    uint256 numTiers = discounts.tiers.length;
+
+    uint256[2][] memory tiers = new uint256[2][](numTiers);
+
+    for (uint256 i = 0; i < numTiers; i++) {
+      tiers[i][0] = discounts.tiers[i].discount;
+      tiers[i][1] = discounts.tiers[i].available;
+    }
+
+    return tiers;
+  }
+
+  function getAvailability(address _participant)
+    public
+    view
+    returns (uint256[])
+  {
+    if (!participants[_participant].authorized) {
+      return new uint256[](0);
+    }
+
+    uint256 numTiers = discounts.tiers.length;
+    uint256[] memory availabilities = new uint256[](numTiers);
+
+    uint256 minTier = participants[_participant].minimumTier;
+
+    for (uint256 i = minTier; i < numTiers; i++) {
+      availabilities[i] = discounts.tiers[i].available;
+    }
+
+    return availabilities;
+  }
+
+  /**************************************************************************
+   * MODIFIERS
+   *************************************************************************/
+  modifier onlyAuthorized() {
+    require(participants[msg.sender].authorized);
+    _;
+  }
+
+  modifier whenRateSet() {
+    require(discounts.baseRate != 0);
+    _;
+  }
+
+  modifier whenCapped() {
+    require(cap.amount != 0);
+    _;
+  }
+
+  modifier whenOwnsToken() {
+    require(token.owner() == address(this));
+    _;
+  }
+}
+```
+
+### Explanation:
+1. **Admin Interface**:
+   - Functions such as `setRate`, `addTier`, and `authorizeForTier` allow the admin to manage the sale, including token rates, tiers, and authorization lists.
+   - Each function is restricted to the owner and only callable when the contract is paused for configuration.
+
+2. **Purchase Interface**:
+   - The fallback function ensures seamless purchases by simply sending Ether to the contract.
+   - The `purchaseTokens` function leverages the `Discounts` library to calculate discounts and tokens purchasable based on tiers and funds provided.
+
+3. **Capping and Limits**:
+   - The `Limits` library is integrated to enforce per-participant caps, resetting once the cap duration elapses.
+
+4. **View Functions**:
+   - Functions such as `getTiers` and `getAvailability` allow participants and external observers to retrieve current sale data, ensuring transparency.
+
+5. **Modifiers**:
+   - Modifiers like `whenRateSet`, `whenCapped`, etc., enforce preconditions before certain actions can be executed, maintaining the integrity of contract operations.
+
+This implementation strictly follows the provided context and description, ensuring modularity, functionality, and alignment with the libraries and base contracts.

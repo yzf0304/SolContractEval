@@ -1,0 +1,133 @@
+Certainly! Below is the complete implementation of the `TombRaid` contract based on the provided description and interfaces. The contract includes all the necessary modifiers, functions, and view functions as specified.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface IBoneheadz {
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function totalSupply() external view returns (uint256);
+}
+
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+
+    uint256 internal cutoff;
+
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+
+    uint256 public raidPrice = 0.005 ether;
+
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    // MODIFIERS
+
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    // OWNER FUNCTIONS
+
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    function flipLockStatuses(uint256[] calldata tokenIds) public onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            isLocked[tokenIds[i]] = !isLocked[tokenIds[i]];
+            emit Locked(tokenIds[i]);
+        }
+    }
+
+    function withdraw(address recipient) external onlyOwner {
+        require(recipient != address(0), "Invalid recipient address");
+        payable(recipient).transfer(address(this).balance);
+    }
+
+    // RAID FUNCTIONS
+
+    function raid(uint256 tokenId) public payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raid is not active");
+        require(msg.value >= raidPrice, "Insufficient payment");
+
+        uint256 randomNumber = _genPseudoRandomNumber(tokenId);
+        uint256 tierIncrement = (randomNumber % cutoff) + 1;
+
+        if (tokenTiers[tokenId] + tierIncrement > MAX_TIER) {
+            isLocked[tokenId] = true;
+            emit Locked(tokenId);
+        } else {
+            tokenTiers[tokenId] += tierIncrement;
+            emit TierUpdated(tokenId, tokenTiers[tokenId]);
+        }
+    }
+
+    // VIEW FUNCTIONS
+
+    function numPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        for (uint256 i = 1; i <= Boneheadz.totalSupply(); i++) {
+            counts[tokenTiers[i]]++;
+        }
+        return counts;
+    }
+
+    function numLockedPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        for (uint256 i = 1; i <= Boneheadz.totalSupply(); i++) {
+            if (isLocked[i]) {
+                counts[tokenTiers[i]]++;
+            }
+        }
+        return counts;
+    }
+
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.difficulty, block.timestamp, tokenId)));
+    }
+}
+```
+
+### Explanation:
+- **Modifiers**: `onlyTokenOwner` ensures that the caller of a function owns the specified token.
+- **Owner Functions**:
+  - `flipRaidStatus`: Toggles the raiding status.
+  - `setRaidPrice`: Sets a new price for raiding.
+  - `setCutoff`: Sets a new cutoff value for pseudo-random number generation.
+  - `flipLockStatuses`: Toggles the lock status of multiple tokens.
+  - `withdraw`: Allows the contract owner to withdraw all funds from the contract.
+- **Raid Function**: `raid` allows the owner of a token to attempt to increase its tier. If the new tier exceeds `MAX_TIER`, the token is locked.
+- **View Functions**: 
+  - `numPerTier`: Returns the count of tokens at each tier.
+  - `numLockedPerTier`: Returns the count of locked tokens at each tier.
+- **Internal Function**: `_genPseudoRandomNumber` generates a pseudo-random number using block data combined with the token ID.

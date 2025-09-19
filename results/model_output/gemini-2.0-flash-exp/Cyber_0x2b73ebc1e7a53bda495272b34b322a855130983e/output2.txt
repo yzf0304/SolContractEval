@@ -1,0 +1,758 @@
+```solidity
+pragma solidity ^0.8.14;
+
+/**
+ *Submitted for verification at Etherscan.io on 2022-06-12
+*/
+// SPDX-License-Identifier: MIT
+// Made with love by Mai
+
+library Strings {
+    bytes16 private constant _HEX_SYMBOLS = "0123456789abcdef";
+
+    /**
+     * @dev Converts a `uint256` to its ASCII `string` decimal representation.
+     */
+    function toString(uint256 value) internal pure returns (string memory) {
+        // Inspired by OraclizeAPI's implementation - MIT licence
+        // https://github.com/oraclize/ethereum-api/blob/b42146b063c7d6ee1358846c198246239e9360e8/oraclizeAPI_0.4.25.sol
+
+        if (value == 0) {
+            return "0";
+        }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+
+    /**
+     * @dev Converts a `uint256` to its ASCII `string` hexadecimal representation.
+     */
+    function toHexString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0x00";
+        }
+        uint256 temp = value;
+        uint256 length = 0;
+        while (temp != 0) {
+            length++;
+            temp >>= 8;
+        }
+        return toHexString(value, length);
+    }
+
+    /**
+     * @dev Converts a `uint256` to its ASCII `string` hexadecimal representation with fixed length.
+     */
+    function toHexString(uint256 value, uint256 length) internal pure returns (string memory) {
+        bytes memory buffer = new bytes(2 * length + 2);
+        buffer[0] = "0";
+        buffer[1] = "x";
+        for (uint256 i = 2 * length + 1; i > 1; --i) {
+            buffer[i] = _HEX_SYMBOLS[value & 0xf];
+            value >>= 4;
+        }
+        require(value == 0, "Strings: hex length insufficient");
+        return string(buffer);
+    }
+}
+
+interface ILayerZeroEndpoint is ILayerZeroUserApplicationConfig {
+    // @notice send a LayerZero message to the specified address at a LayerZero endpoint.
+    // @param _dstChainId - the destination chain identifier
+    // @param _destination - the address on destination chain (in bytes). address length/format may vary by chains
+    // @param _payload - a custom bytes payload to send to the destination contract
+    // @param _refundAddress - if the source transaction is cheaper than the amount of value passed, refund the additional amount to this address
+    // @param _zroPaymentAddress - the address of the ZRO token holder who would pay for the transaction
+    // @param _adapterParams - parameters for custom functionality. e.g. receive airdropped native gas from the relayer on destination
+    function send(uint16 _dstChainId, bytes calldata _destination, bytes calldata _payload, address payable _refundAddress, address _zroPaymentAddress, bytes calldata _adapterParams) external payable;
+
+    // @notice used by the messaging library to publish verified payload
+    // @param _srcChainId - the source chain identifier
+    // @param _srcAddress - the source contract (as bytes) at the source chain
+    // @param _dstAddress - the address on destination chain
+    // @param _nonce - the unbound message ordering nonce
+    // @param _gasLimit - the gas limit for external contract execution
+    // @param _payload - verified payload to send to the destination contract
+    function receivePayload(uint16 _srcChainId, bytes calldata _srcAddress, address _dstAddress, uint64 _nonce, uint _gasLimit, bytes calldata _payload) external;
+
+    // @notice get the inboundNonce of a receiver from a source chain which could be EVM or non-EVM chain
+    // @param _srcChainId - the source chain identifier
+    // @param _srcAddress - the source chain contract address
+    function getInboundNonce(uint16 _srcChainId, bytes calldata _srcAddress) external view returns (uint64);
+
+    // @notice get the outboundNonce from this source chain which, consequently, is always an EVM
+    // @param _srcAddress - the source chain contract address
+    function getOutboundNonce(uint16 _dstChainId, address _srcAddress) external view returns (uint64);
+
+    // @notice gets a quote in source native gas, for the amount that send() requires to pay for message delivery
+    // @param _dstChainId - the destination chain identifier
+    // @param _userApplication - the user app address on this EVM chain
+    // @param _payload - the custom message to send over LayerZero
+    // @param _payInZRO - if false, user app pays the protocol fee in native token
+    // @param _adapterParam - parameters for the adapter service, e.g. send some dust native token to dstChain
+    function estimateFees(uint16 _dstChainId, address _userApplication, bytes calldata _payload, bool _payInZRO, bytes calldata _adapterParam) external view returns (uint nativeFee, uint zroFee);
+
+    // @notice get this Endpoint's immutable source identifier
+    function getChainId() external view returns (uint16);
+
+    // @notice the interface to retry failed message on this Endpoint destination
+    // @param _srcChainId - the source chain identifier
+    // @param _srcAddress - the source chain contract address
+    // @param _payload - the payload to be retried
+    function retryPayload(uint16 _srcChainId, bytes calldata _srcAddress, bytes calldata _payload) external;
+
+    // @notice query if any STORED payload (message blocking) at the endpoint.
+    // @param _srcChainId - the source chain identifier
+    // @param _srcAddress - the source chain contract address
+    function hasStoredPayload(uint16 _srcChainId, bytes calldata _srcAddress) external view returns (bool);
+
+    // @notice query if the _libraryAddress is valid for sending msgs.
+    // @param _userApplication - the user app address on this EVM chain
+    function getSendLibraryAddress(address _userApplication) external view returns (address);
+
+    // @notice query if the _libraryAddress is valid for receiving msgs.
+    // @param _userApplication - the user app address on this EVM chain
+    function getReceiveLibraryAddress(address _userApplication) external view returns (address);
+
+    // @notice query if the non-reentrancy guard for send() is on
+    // @return true if the guard is on. false otherwise
+    function isSendingPayload() external view returns (bool);
+
+    // @notice query if the non-reentrancy guard for receive() is on
+    // @return true if the guard is on. false otherwise
+    function isReceivingPayload() external view returns (bool);
+
+    // @notice get the configuration of the LayerZero messaging library of the specified version
+    // @param _version - messaging library version
+    // @param _chainId - the chainId for the pending config change
+    // @param _userApplication - the contract address of the user application
+    // @param _configType - type of configuration. every messaging library has its own convention.
+    function getConfig(uint16 _version, uint16 _chainId, address _userApplication, uint _configType) external view returns (bytes memory);
+
+    // @notice get the send() LayerZero messaging library version
+    // @param _userApplication - the contract address of the user application
+    function getSendVersion(address _userApplication) external view returns (uint16);
+
+    // @notice get the lzReceive() LayerZero messaging library version
+    // @param _userApplication - the contract address of the user application
+    function getReceiveVersion(address _userApplication) external view returns (uint16);
+}
+
+interface ILayerZeroUserApplicationConfig {
+    // @notice set the configuration of the LayerZero messaging library of the specified version
+    // @param _version - messaging library version
+    // @param _chainId - the chainId for the pending config change
+    // @param _configType - type of configuration. every messaging library has its own convention.
+    // @param _config - configuration in bytes. every messaging library has its own convention.
+    function setConfig(uint16 _version, uint16 _chainId, uint _configType, bytes calldata _config) external;
+}
+
+
+abstract contract ERC721Omni {
+    using Address for address;
+    using Strings for uint256;
+
+    event Approval(address indexed owner, address indexed spender, uint256 indexed id);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    event Transfer(address indexed from, address indexed to, uint256 indexed id);
+    event MessageFailed(uint16 _srcChainId, bytes _srcAddress, uint64 _nonce, bytes _payload);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    string public name;
+    string public symbol;
+    address public owner;
+    ILayerZeroEndpoint internal endpoint;
+
+    struct FailedMessages {
+        uint payloadLength;
+        bytes32 payloadHash;
+    }
+
+    struct addressData {
+        uint128 balance;
+        uint128 huntlistMinted;
+    }
+
+    struct tokenData {
+        address tokenHolder;
+        uint96 timestampHolder;//Maybe if you guys like your hunters we can do cool stuff with this
+    }
+
+    mapping(uint256 => tokenData) internal _ownerOf;
+    mapping(address => addressData) internal _addressData;
+
+    mapping(uint16 => mapping(bytes => mapping(uint => FailedMessages))) public failedMessages;
+    mapping(uint16 => bytes) public trustedRemoteLookup;
+    mapping(uint256 => address) public getApproved;
+    mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    error NewOwnerAddressZero();
+    error CallerNotOwner();
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+        _transferOwnership(msg.sender);
+    }
+
+    function ownerOf(uint256 id) public view virtual returns (address) {
+        require(_ownerOf[id].tokenHolder != address(0), "Nonexistent Token");
+        return _ownerOf[id].tokenHolder;
+    }
+
+    function balanceOf(address _owner) public view virtual returns (uint256) {
+        require(_owner != address(0), "Zero Address");
+        return _addressData[_owner].balance;
+    }
+
+    function durationTimestamp(uint256 tokenId) public view virtual returns (uint256) {
+        return _ownerOf[tokenId].timestampHolder;
+    }
+
+    function huntlistMinted(address _owner) public view virtual returns (uint256) {
+        require(_owner != address(0), "Zero Address");
+        return _addressData[_owner].huntlistMinted;
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public {
+        require(from == _ownerOf[tokenId].tokenHolder, "Non Owner");
+        require(to != address(0), "Zero Address");
+
+        require(msg.sender == from || isApprovedForAll[from][msg.sender] || msg.sender == getApproved[tokenId],
+            "Lacks Permissions"
+        );
+
+        unchecked {
+            _addressData[from].balance--;
+            _addressData[to].balance++;
+        }
+
+        _ownerOf[tokenId].tokenHolder = to;
+        _ownerOf[tokenId].timestampHolder = uint96(block.timestamp);
+        delete getApproved[tokenId];
+        emit Transfer(from, to, tokenId);
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId) public {
+        transferFrom(from, to, tokenId);
+
+        require(to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, from, tokenId, "") ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "Unsafe Transfer"
+        );
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata data) public {
+        transferFrom(from, to, tokenId);
+
+        require(to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, from, tokenId, data) ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "Unsafe Transfer"
+        );
+    }
+
+    function setApprovalForAll(address operator, bool approved) public {
+        isApprovedForAll[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function approve(address spender, uint256 tokenId) public {
+        address _owner = _ownerOf[tokenId].tokenHolder;
+        require(msg.sender == _owner || isApprovedForAll[_owner][msg.sender], "Lacks Permissions");
+
+        getApproved[tokenId] = spender;
+        emit Approval(_owner, spender, tokenId);
+    }
+
+    function _mint(address to, uint256 tokenId) internal {
+        require(to != address(0), "Zero Address");
+        require(_ownerOf[tokenId].tokenHolder == address(0), "Already Exists");
+
+        unchecked {
+            _addressData[to].balance++;
+        }
+
+        _ownerOf[tokenId].tokenHolder = to;
+        _ownerOf[tokenId].timestampHolder = uint96(block.timestamp);
+        emit Transfer(address(0), to, tokenId);
+    }
+
+    function _safeMint(address to, uint256 tokenId) internal {
+        _mint(to, tokenId);
+
+        require(to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), tokenId, "") ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "Unsafe Mint"
+        );
+    }
+
+    function _safeMint(address to, uint256 tokenId, bytes memory data) internal {
+        _mint(to, tokenId);
+
+        require(to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), tokenId, data) ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "Unsafe Mint"
+        );
+    }
+
+    function _burn(uint256 tokenId) internal {
+        address _owner = _ownerOf[tokenId].tokenHolder;
+        require(_owner != address(0), "Nonexistent Token");
+
+        unchecked {
+            _addressData[_owner].balance--;
+        }
+
+        delete _ownerOf[tokenId];
+        delete getApproved[tokenId];
+
+        emit Transfer(_owner, address(0), tokenId);
+    }
+
+    function baseURI() public view virtual returns (string memory) {
+        return '';
+    }
+
+    function tokenURI(uint256 tokenId) public view returns (string memory) {
+        require(_ownerOf[tokenId].tokenHolder != address(0), "Nonexistent Token");
+        string memory _baseURI = baseURI();
+        return bytes(_baseURI).length > 0 ? string(abi.encodePacked(_baseURI, tokenId.toString())) : '';
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual returns (bool) {
+        return
+            interfaceId == 0x01ffc9a7 ||
+            interfaceId == 0x80ac58cd ||
+            interfaceId == 0x5b5e139f;
+    }
+
+    function lzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) external {
+        require(msg.sender == address(endpoint)); 
+        require(_srcAddress.length == trustedRemoteLookup[_srcChainId].length && keccak256(_srcAddress) == keccak256(trustedRemoteLookup[_srcChainId]), 
+            "NonblockingReceiver: invalid source sending contract");
+
+        try this.onLzReceive(_srcChainId, _srcAddress, _nonce, _payload) {
+        } catch {
+            failedMessages[_srcChainId][_srcAddress][_nonce] = FailedMessages(_payload.length, keccak256(_payload));
+            emit MessageFailed(_srcChainId, _srcAddress, _nonce, _payload);
+        }
+    }
+
+    function onLzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) public {
+        require(msg.sender == address(this), "NonblockingReceiver: caller must be Bridge.");
+        _LzReceive( _srcChainId, _srcAddress, _nonce, _payload);
+    }
+
+    function _LzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) virtual internal;
+
+    function _lzSend(uint16 _dstChainId, bytes memory _payload, address payable _refundAddress, address _zroPaymentAddress, bytes memory _txParam) internal {
+        endpoint.send{value: msg.value}(_dstChainId, trustedRemoteLookup[_dstChainId], _payload, _refundAddress, _zroPaymentAddress, _txParam);
+    }
+
+    function retryMessage(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes calldata _payload) external payable {
+        FailedMessages storage failedMsg = failedMessages[_srcChainId][_srcAddress][_nonce];
+        require(failedMsg.payloadHash != bytes32(0), "NonblockingReceiver: no stored message");
+        require(_payload.length == failedMsg.payloadLength && keccak256(_payload) == failedMsg.payloadHash, "LayerZero: invalid payload");
+        failedMsg.payloadLength = 0;
+        failedMsg.payloadHash = bytes32(0);
+        this.onLzReceive(_srcChainId, _srcAddress, _nonce, _payload);
+    }
+
+    function setTrustedRemote(uint16 _chainId, bytes calldata _trustedRemote) external onlyOwner {
+        trustedRemoteLookup[_chainId] = _trustedRemote;
+    }
+
+    function renounceOwnership() public onlyOwner {
+        _transferOwnership(address(0));
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        if (newOwner == address(0)) revert NewOwnerAddressZero();
+        _transferOwnership(newOwner);
+    }
+
+    function _transferOwnership(address newOwner) internal {
+        address oldOwner = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+
+    modifier onlyOwner() {
+        if (owner != msg.sender) revert CallerNotOwner();
+        _;
+    }
+
+}
+
+abstract contract ERC721TokenReceiver {
+    function onERC721Received(address, address, uint256, bytes calldata) external virtual returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+    }
+}
+
+
+
+// You task is to complete the smart contract Cyber strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.8.14, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @title Cyber
+ * @author [Your Name]
+ * @notice The Cyber contract is an ERC721 token contract that allows for minting, burning, and traversing tokens across different chains using LayerZero.
+ * @dev This contract extends the ERC721Omni contract to include additional functionality such as public minting, huntlist minting, and chain traversal.
+ */
+contract Cyber is ERC721Omni {
+
+    string private _baseURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    error ContractCaller();
+    error MintInactive();
+    error ExceedsSupply();
+    error InvalidProof();
+    error NotTokenOwner();
+    error CannotBurnZeroAddress();
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") { 
+        endpoint = ILayerZeroEndpoint(_lzEndpoint); 
+    }
+
+    /**
+     * @dev Modifier to ensure that the caller is a user (not a contract).
+     */
+    modifier callerIsUser() {
+        if (tx.origin != msg.sender) revert ContractCaller();
+        _;
+    }
+
+    /**
+     * @notice Allows users to donate to the contract.
+     * @dev This function accepts ETH donations.
+     */
+    function donate() external payable {}
+
+    /**
+     * @dev Allows token owner to traverse to another chain via LayerZero.
+     * @param _chainId Destination chain ID
+     * @param tokenId ID of the token to traverse
+     * @dev Requirements:
+     *   - Caller must be the token owner
+     *   - Destination chain must be available in trustedRemoteLookup
+     * @dev Behavior:
+     *   - Burns the token (removes from supply)
+     *   - Encodes payload with sender and token ID
+     *   - Estimates message fees for cross-chain transfer
+     *   - Validates msg.value covers the fees
+     *   - Sends cross-chain message via LayerZero endpoint
+     * @dev Notes:
+     *   - Uses adapterParams for gas configuration
+     *   - Excess funds are returned to msg.sender
+     *   - Requires LayerZero endpoint setup
+     */
+    function traverseChains(uint16 _chainId, uint tokenId) public payable {
+        address ownerOfToken = ownerOf(tokenId);
+        if (msg.sender != ownerOfToken) revert NotTokenOwner();
+        
+        bytes memory destination = trustedRemoteLookup[_chainId];
+        require(destination.length > 0, "Destination chain not configured");
+
+        _burn(tokenId);
+        totalSupply--;
+
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        (uint nativeFee, ) = endpoint.estimateFees(_chainId, address(this), payload, false, "0x");
+        require(msg.value >= nativeFee, "Insufficient funds for cross-chain transfer");
+
+        bytes memory adapterParams = abi.encodePacked(gasForLzReceive);
+
+        _lzSend(_chainId, payload, payable(msg.sender), address(0), adapterParams);
+
+        if (msg.value > nativeFee) {
+            (bool success,) = msg.sender.call{value: msg.value - nativeFee}("");
+            require(success, "Refund failed");
+        }
+    }
+
+    /**
+     * @notice Internal function to handle the reception of tokens from another chain.
+     * @dev This function is called by the LayerZero endpoint when a token is received from another chain.
+     * @param _srcChainId The ID of the source chain.
+     * @param _srcAddress The address of the sender on the source chain.
+     * @param _nonce The nonce of the message.
+     * @param _payload The payload containing the recipient address and token ID.
+     */
+    function _LzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) override internal {
+        (address recipient, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        _safeMint(recipient, tokenId);
+        totalSupply++;
+    }
+
+    /**
+     * @notice Allows users to mint a token during the public mint phase.
+     * @dev This function mints a new token to the caller's address if the public mint is active and within the supply limits.
+     */
+    function publicMint() external callerIsUser {
+        if (!publicStatus) revert MintInactive();
+        if (totalSupply >= maximumSupply || publicMinted >= publicMintedCap) revert ExceedsSupply();
+
+        _safeMint(msg.sender, totalSupply + 1);
+        totalSupply++;
+        publicMinted++;
+    }
+
+    /**
+     * @notice Allows users to mint tokens if they are on the huntlist.
+     * @dev This function mints two tokens to the caller's address if they are on the huntlist and the huntlist mint is active.
+     * @param _proof The Merkle proof to verify the caller's inclusion in the huntlist.
+     */
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        if (!huntlistStatus) revert MintInactive();
+        if (totalSupply + 2 > maximumSupply) revert ExceedsSupply();
+
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        if (!verifyProof(_proof, merkleRoot, leaf)) revert InvalidProof();
+
+        uint256 minted = huntlistMinted(msg.sender);
+        if(minted >= 2) revert ExceedsSupply();
+
+
+        _safeMint(msg.sender, totalSupply + 1);
+        _safeMint(msg.sender, totalSupply + 2);
+
+        unchecked {
+            _addressData[msg.sender].huntlistMinted += 2;
+        }
+
+        totalSupply += 2;
+    }
+
+    /**
+     * @notice Verifies a Merkle proof against the root.
+     * @dev This function checks if the provided proof and leaf match the Merkle root.
+     * @param proof The Merkle proof.
+     * @param root The Merkle root.
+     * @param leaf The leaf to be verified.
+     * @return A boolean indicating whether the proof is valid.
+     */
+    function verifyProof(bytes32[] memory proof, bytes32 root, bytes32 leaf) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+
+        // Check if the computed hash (root) is equal to the provided root
+        return computedHash == root;
+    }
+
+    /**
+     * @notice Allows the owner of a token to burn it.
+     * @dev This function burns the specified token and decreases the total supply.
+     * @param tokenId The ID of the token to be burned.
+     */
+    function burnHunter(uint256 tokenId) external {
+        address ownerOfToken = ownerOf(tokenId);
+        if (msg.sender != ownerOfToken) revert NotTokenOwner();
+
+        _burn(tokenId);
+        totalSupply--;
+    }
+
+    /**
+     * @notice Sets the state of the public mint.
+     * @dev This function can only be called by the contract owner and sets the public mint status.
+     * @param _state The new state of the public mint.
+     */
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    /**
+     * @notice Sets the state of the huntlist mint.
+     * @dev This function can only be called by the contract owner and sets the huntlist mint status.
+     * @param _state The new state of the huntlist mint.
+     */
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    /**
+     * @notice Sets the cap for the public mint supply.
+     * @dev This function can only be called by the contract owner and sets the maximum number of tokens that can be minted during the public mint phase.
+     * @param _supply The new cap for the public mint supply.
+     */
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        publicMintedCap = _supply;
+    }
+
+    /**
+     * @notice Sets the Merkle root for the huntlist.
+     * @dev This function can only be called by the contract owner and updates the Merkle root used for verifying the huntlist.
+     * @param _newROOT The new Merkle root.
+     */
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    /**
+     * @notice Depreciates the mint and mints remaining tokens to the deployer.
+     * @dev This function can only be called by the contract owner and deprecates the mint, mints 66 tokens to the deployer, and sets the mint status.
+     */
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Mint already deprecated");
+        depreciatedMint = true;
+        publicStatus = false;
+        huntlistStatus = false;
+
+        uint256 mintAmount = 66;
+        require(totalSupply + mintAmount <= maximumSupply, "Exceeds total supply");
+
+        for (uint256 i = 0; i < mintAmount; i++) {
+            _safeMint(owner, totalSupply + 1);
+            totalSupply++;
+        }
+    }
+
+    /**
+     * @notice Sets the base URI for the token metadata.
+     * @dev This function can only be called by the contract owner and updates the base URI used for token metadata.
+     * @param _newURI The new base URI.
+     */
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseURI = _newURI;
+    }
+
+    /**
+     * @notice Sets the gas amount for the LayerZero receive function.
+     * @dev This function can only be called by the contract owner and updates the gas amount for the LayerZero receive function.
+     * @param _newGasValue The new gas value.
+     */
+    function setGasForDestinationLzReceive(uint _newGasValue) external onlyOwner {
+        gasForLzReceive = _newGasValue;
+    }
+
+    /**
+     * @notice Sets the LayerZero endpoint address.
+     * @dev This function can only be called by the contract owner and updates the LayerZero endpoint address.
+     * @param _lzEndpoint The new LayerZero endpoint address.
+     */
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    /**
+     * @notice Returns the base URI for the token metadata.
+     * @dev This function is overridden to return the base URI for the token metadata.
+     * @return The base URI.
+     */
+    function baseURI() override public view returns (string memory) {
+        return _baseURI;
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all ETH from the contract.
+     * @dev This function can only be called by the contract owner and transfers the contract's balance to the owner.
+     */
+    function withdrawDonations() external onlyOwner {
+        (bool success, ) = owner.call{value: address(this).balance}("");
+        require(success, "Withdrawal failed");
+    }
+
+}
+
+library Address {
+    /**
+     * @dev Returns whether the target address is a contract.
+     * @param account Address of the account to check.
+     * @return bool True if the target address is a contract, false otherwise.
+     */
+    function isContract(address account) internal view returns (bool) {
+        uint256 size;
+        assembly {
+            size := extcodesize(account)
+        }
+        return size > 0;
+    }
+
+    /**
+     * @dev Converts an address into address payable. Note that address(this) is already payable.
+     * @param account Address of the account to convert.
+     * @return address payable Address payable of the input address.
+     */
+    function toPayable(address account) internal pure returns (address payable) {
+        return payable(account);
+    }
+
+    /**
+     * @dev Performs a low level call on the given address. Returns an error if the target address
+     * is not a contract.
+     * @param target Address of the contract to be called.
+     * @param data Encoded function call, data and gas.
+     * @return bytes Raw return data of the call.
+     */
+    function functionCall(address target, bytes memory data) internal returns (bytes memory) {
+        return functionCall(target, data, "Address: low-level call failed");
+    }
+
+    /**
+     * @dev Performs a low level call on the given address. Returns an error if the target address
+     * is not a contract.
+     * @param target Address of the contract to be called.
+     * @param data Encoded function call, data and gas.
+     * @param errorMessage String to be appended to the revert reason if the call fails.
+     * @return bytes Raw return data of the call.
+     */
+    function functionCall(address target, bytes memory data, string memory errorMessage) internal returns (bytes memory) {
+        require(isContract(target), "Address: call to non-contract");
+
+        (bool success, bytes memory returndata) = target.call(data);
+        if (success) {
+            return returndata;
+        } else {
+            // Look for revert reason and bubble it up if present
+            if (returndata.length > 0) {
+                // The easiest way to bubble the revert reason is using memory via assembly
+
+                assembly {
+                    let returndata_size := mload(returndata)
+                    revert(add(32, returndata), returndata_size)
+                }
+            } else {
+                revert(errorMessage);
+            }
+        }
+    }
+}
+```

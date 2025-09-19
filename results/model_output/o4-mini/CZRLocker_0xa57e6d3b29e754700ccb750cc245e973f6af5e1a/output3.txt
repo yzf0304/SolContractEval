@@ -1,0 +1,99 @@
+pragma solidity ^0.4.18;
+
+contract CZRLocker is owned {
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+    event RemoveLock(address addr, uint index);
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    address public tokenAddr;
+    address public unlocker;
+
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length);
+        LockedCZR storage l = lockedCZRMap[addr][index];
+        l.startLockTime = 0;
+        l.lockMonth = 0;
+        l.lockedAmount = 0;
+        l.unlockedAmount = 0;
+        RemoveLock(addr, index);
+    }
+
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        uint s = startLockTime;
+        if (s == 0) {
+            s = now;
+        }
+        LockedCZR memory newLock = LockedCZR({
+            startLockTime: s,
+            lockMonth: lockMonth,
+            lockedAmount: amount,
+            unlockedAmount: 0
+        });
+        lockedCZRMap[addr].push(newLock);
+        uint idx = lockedCZRMap[addr].length - 1;
+        AddLock(addr, idx, s, lockMonth, amount);
+    }
+
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker);
+        LockedCZR[] storage locks = lockedCZRMap[addr];
+        uint len = locks.length;
+        require(len > 0);
+        uint processed = 0;
+        for (uint i = 0; i < len; i++) {
+            if (limit > 0 && processed >= limit) {
+                break;
+            }
+            LockedCZR storage l = locks[i];
+            if (l.lockedAmount == 0) {
+                // skip removed or empty
+                continue;
+            }
+            uint elapsed = 0;
+            if (now > l.startLockTime) {
+                elapsed = now - l.startLockTime;
+            }
+            uint monthsPassed = elapsed / 30 days;
+            if (monthsPassed > l.lockMonth) {
+                monthsPassed = l.lockMonth;
+            }
+            // total unlocked so far at this moment
+            uint totalUnlockedAllowed = l.lockedAmount * monthsPassed / l.lockMonth;
+            if (totalUnlockedAllowed <= l.unlockedAmount) {
+                continue;
+            }
+            uint toUnlock = totalUnlockedAllowed - l.unlockedAmount;
+            // perform token transfer; assumes this contract has allowance to pull or holds tokens
+            require(token(tokenAddr).transferFrom(this, addr, toUnlock));
+            l.unlockedAmount += toUnlock;
+            Unlock(addr, i, toUnlock);
+            processed++;
+        }
+        require(processed > 0);
+    }
+
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        require(to != address(0));
+        to.transfer(value);
+    }
+
+    function() payable public { }
+}
+
+interface token {
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+}

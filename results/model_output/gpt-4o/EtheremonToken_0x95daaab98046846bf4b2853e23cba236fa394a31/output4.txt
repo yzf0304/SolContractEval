@@ -1,0 +1,99 @@
+Here’s the fully implemented `TokenERC20` contract as per the provided description and context. It adheres strictly to the specified version (`0.4.19`), implements all the required methods, and does not include any extraneous code.
+
+```solidity
+pragma solidity ^0.4.19;
+
+interface TokenRecipient {
+    function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public;
+}
+
+contract TokenERC20 {
+    uint256 public totalSupply;
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Burn(address indexed _from, uint256 _value);
+
+    function TokenERC20(uint256 initialSupply) public {
+        totalSupply = initialSupply;
+        balanceOf[msg.sender] = totalSupply;
+    }
+
+    function _transfer(address _from, address _to, uint _value) internal {
+        require(_to != address(0)); // Prevent transfer to 0x0 address
+        require(balanceOf[_from] >= _value); // Ensure sender has enough balance
+        require(balanceOf[_to] + _value >= balanceOf[_to]); // Check for overflows
+
+        balanceOf[_from] -= _value; // Deduct from sender
+        balanceOf[_to] += _value; // Add to recipient
+
+        emit Transfer(_from, _to, _value);
+    }
+
+    function transfer(address _to, uint256 _value) public {
+        _transfer(msg.sender, _to, _value);
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_value <= allowance[_from][msg.sender]); // Check allowance
+        allowance[_from][msg.sender] -= _value;
+        _transfer(_from, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowance[msg.sender][_spender] = _value;
+        return true;
+    }
+
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        TokenRecipient spender = TokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+        return false;
+    }
+
+    function burn(uint256 _value) public returns (bool success) {
+        require(balanceOf[msg.sender] >= _value); // Ensure sender has enough tokens
+        balanceOf[msg.sender] -= _value;
+        totalSupply -= _value;
+        emit Burn(msg.sender, _value);
+        return true;
+    }
+
+    function burnFrom(address _from, uint256 _value) public returns (bool success) {
+        require(balanceOf[_from] >= _value); // Ensure _from has enough tokens
+        require(_value <= allowance[_from][msg.sender]); // Check allowance
+
+        balanceOf[_from] -= _value;
+        allowance[_from][msg.sender] -= _value;
+        totalSupply -= _value;
+        emit Burn(_from, _value);
+        return true;
+    }
+}
+```
+
+### Key Implementation Notes:
+1. **Compiler Version (`0.4.19`)**:
+   - The contract adheres to Solidity version `0.4.19`.
+   - Explicit `public` visibility is used on all functions and state variables as required in versions prior to `0.5.0`.
+
+2. **Core Functionalities**:
+   - The `_transfer` function is internal and handles safe transfers, including checks for sufficient balance and prevention of overflows.
+   - The `transfer`, `transferFrom`, and `approve` methods follow the standard ERC20 specification.
+
+3. **Burn Functionality**:
+   - `burn` allows the sender to destroy their own tokens.
+   - `burnFrom` allows a spender to destroy tokens from another address, reducing the allowance accordingly.
+
+4. **`approveAndCall`**:
+   - Implements an approval and callback mechanism, leveraging the `TokenRecipient` interface provided in the context.
+
+5. **Event Emissions**:
+   - Both `Transfer` and `Burn` events are emitted to provide transparency in state changes.
+
+This implementation is concise, follows the context provided, and respects the design constraints of the ERC20 token standard.

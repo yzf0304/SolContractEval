@@ -1,0 +1,219 @@
+Here is the completed Nokon contract implementing all specified functionalities:
+
+```solidity
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity 0.7.4;
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+}
+
+library SafeMath {
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) return 0;
+        uint256 c = a * b;
+        require(c / a == b, "SafeMath: multiplication overflow");
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "SafeMath: division by zero");
+        return a / b;
+    }
+}
+
+contract Nokon is IERC20 {
+    using SafeMath for uint256;
+    
+    string public constant name = "Nokon";
+    string public constant symbol = "NKO";
+    uint8 public constant decimals = 8;
+    
+    event Bought(uint256 amountz);
+    event Sold(uint256 amount);
+    event Approval(address indexed tokenOwner, address indexed spender, uint tokens);
+    event Transfer(address indexed from, address indexed to, uint tokens);
+
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+    mapping(address => bool) public authorizedAddress;
+    
+    address authAddress = parseAddr('0x44F6827aa307F4d7FAeb64Be47543647B3a871dB');
+    uint256 totalSupply_ = 1200000000000000000;
+    bool presell = true;
+    uint256 ethRateFix = 10000000000;
+
+    constructor() {
+        balances[msg.sender] = totalSupply_;
+        balances[address(this)] = totalSupply_;
+        balances[authAddress] = totalSupply_;
+
+        authorizedAddress[msg.sender] = true;
+        authorizedAddress[authAddress] = true;
+    }
+
+    function parseAddr(string memory _a) internal pure returns (address _parsedAddress) {
+        bytes memory tmp = bytes(_a);
+        uint160 iaddr = 0;
+        uint160 b1;
+        uint160 b2;
+        for (uint i = 2; i < 2 + 2 * 20; i += 2) {
+            iaddr *= 256;
+            b1 = uint160(uint8(tmp[i]));
+            b2 = uint160(uint8(tmp[i + 1]));
+            if ((b1 >= 97) && (b1 <= 102)) b1 -= 87;
+            else if ((b1 >= 65) && (b1 <= 70)) b1 -= 55;
+            else if ((b1 >= 48) && (b1 <= 57)) b1 -= 48;
+            if ((b2 >= 97) && (b2 <= 102)) b2 -= 87;
+            else if ((b2 >= 65) && (b2 <= 70)) b2 -= 55;
+            else if ((b2 >= 48) && (b2 <= 57)) b2 -= 48;
+            iaddr += (b1 * 16 + b2);
+        }
+        return address(iaddr);
+    }
+
+    function recover(bytes32 hash, bytes memory signature) internal pure returns (address) {
+        require(signature.length == 65, "Invalid signature length");
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(signature, 0x20))
+            s := mload(add(signature, 0x40))
+            v := byte(0, mload(add(signature, 0x60)))
+        }
+        if (v < 27) v += 27;
+        require(v == 27 || v == 28, "Invalid signature v value");
+        return ecrecover(hash, v, r, s);
+    }
+
+    function calculateRate() private returns (uint256) {
+        uint256 contractBalance = balances[address(this)];
+        if (contractBalance > 1e18) return 666666;
+        else if (contractBalance > 5e17) return 333333;
+        else return 250000;
+    }
+
+    function totalSupply() public override view returns (uint256) {
+        return totalSupply_;
+    }
+
+    function balanceOf(address tokenOwner) public override view returns (uint256) {
+        return balances[tokenOwner];
+    }
+
+    function transfer(address receiver, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[msg.sender], "Insufficient balance");
+        balances[msg.sender] = balances[msg.sender].sub(numTokens);
+        balances[receiver] = balances[receiver].add(numTokens);
+        emit Transfer(msg.sender, receiver, numTokens);
+        return true;
+    }
+
+    function approve(address delegate, uint256 numTokens) public override returns (bool) {
+        allowed[msg.sender][delegate] = numTokens;
+        emit Approval(msg.sender, delegate, numTokens);
+        return true;
+    }
+
+    function allowance(address owner, address delegate) public override view returns (uint) {
+        return allowed[owner][delegate];
+    }
+
+    function transferFrom(address owner, address buyer, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[owner], "Insufficient balance");
+        require(numTokens <= allowed[owner][msg.sender], "Insufficient allowance");
+        
+        balances[owner] = balances[owner].sub(numTokens);
+        allowed[owner][msg.sender] = allowed[owner][msg.sender].sub(numTokens);
+        balances[buyer] = balances[buyer].add(numTokens);
+        emit Transfer(owner, buyer, numTokens);
+        return true;
+    }
+
+    receive() payable external {
+        buy();
+    }
+
+    function buy() public payable {
+        require(presell, "Presell closed");
+        require(msg.value >= 5e16, "Minimum 0.05 ETH");
+        
+        uint256 rate = calculateRate();
+        uint256 ethAmount = msg.value.div(ethRateFix);
+        uint256 amountToBuy = ethAmount.mul(rate);
+        
+        require(amountToBuy <= balances[address(this)], "Insufficient contract balance");
+        
+        balances[address(this)] = balances[address(this)].sub(amountToBuy);
+        balances[msg.sender] = balances[msg.sender].add(amountToBuy);
+        
+        emit Transfer(address(this), msg.sender, amountToBuy);
+        emit Bought(amountToBuy);
+    }
+
+    function closePresell(bytes32 hash, bytes memory signature) public {
+        address signer = recover(hash, signature);
+        require(authorizedAddress[signer], "Unauthorized");
+        presell = false;
+    }
+
+    function openPresell(bytes32 hash, bytes memory signature) public {
+        address signer = recover(hash, signature);
+        require(authorizedAddress[signer], "Unauthorized");
+        presell = true;
+    }
+
+    function getEthBalance(bytes32 hash, bytes memory signature) public returns (uint256) {
+        address signer = recover(hash, signature);
+        require(authorizedAddress[signer], "Unauthorized");
+        return address(this).balance;
+    }
+
+    function transferEth(bytes32 hash, bytes memory signature, uint256 _amount) public {
+        address signer = recover(hash, signature);
+        require(authorizedAddress[signer], "Unauthorized");
+        require(address(this).balance >= _amount, "Insufficient ETH balance");
+        payable(authAddress).transfer(_amount);
+    }
+
+    function supply() public view returns (uint256) {
+        return balances[address(this)];
+    }
+
+    function presellStatus() public view returns (bool) {
+        return presell;
+    }
+
+    function getAddress() public view returns (address) {
+        return address(this);
+    }
+}
+```
+
+This implementation:
+1. Uses SafeMath for all arithmetic operations
+2. Implements ERC20 standard functions
+3. Includes presale functionality with rate calculation
+4. Provides authorization through ECDSA signatures
+5. Maintains compatibility with Solidity 0.7.4
+6. Includes all specified events and functionality
+7. Handles ETH transfers and token purchases during presale
+
+The contract maintains the original structure and functionality described while adding necessary implementations for all interface methods and security checks.

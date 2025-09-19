@@ -1,0 +1,136 @@
+Here's the complete implementation of the Crowdsale contract based on the provided context and requirements:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract Crowdsale is Ownable {
+  using SafeMath for uint256;
+
+  DragonToken public token;
+  address public tokenReserve;
+  uint256 public startTime;
+  uint256 public endTime;
+  address public wallet;
+  uint256 public rate;
+  uint256 public weiRaised;
+  uint256 public tokensSold;
+
+  mapping(address => uint256) public balances;
+  mapping(address => uint256) public releaseTime;
+
+  function Crowdsale() public {
+    owner = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    startTime = now;
+    endTime = 1521187200;
+    rate = 5000000000000000;
+    wallet = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    token = DragonToken(0x814F67fA286f7572B041D041b1D99b432c9155Ee);
+    tokenReserve = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+  }
+
+  function () external payable {
+    buyTokens(msg.sender);
+  }
+
+  function buyTokens(address beneficiary) public payable {
+    require(beneficiary != address(0));
+    require(validPurchase());
+    
+    uint256 weiAmount = msg.value;
+    uint256 tokens = getTokenAmount(weiAmount);
+    require(tokens > 0);
+
+    uint256 release = assignTokens(beneficiary, tokens);
+    
+    tokensSold = tokensSold.add(tokens);
+    weiRaised = weiRaised.add(weiAmount);
+    
+    forwardFunds();
+    emit TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, release);
+  }
+
+  function hasEnded() public view returns (bool) {
+    return now > endTime;
+  }
+
+  function getTokenAmount(uint256 weiAmount) internal view returns(uint256) {
+    return weiAmount.div(rate);
+  }
+
+  function forwardFunds() internal {
+    wallet.transfer(msg.value);
+  }
+
+  function validPurchase() internal view returns (bool) {
+    bool withinPeriod = now >= startTime && now <= endTime;
+    bool nonZeroPurchase = msg.value != 0;
+    return withinPeriod && nonZeroPurchase;
+  }
+
+  function updateEndTime(uint256 newTime) onlyOwner external {
+    require(newTime > startTime);
+    endTime = newTime;
+    emit EndTimeUpdated();
+  }
+
+  function updateDragonPrice(uint256 weiAmount) onlyOwner external {
+    require(weiAmount > 0);
+    rate = weiAmount;
+    emit DragonPriceUpdated();
+  }
+
+  function assignTokens(address beneficiary, uint256 amount) private returns(uint256) {
+    uint256 newReleaseTime = now.add(8 weeks);
+    if (newReleaseTime > releaseTime[beneficiary]) {
+      releaseTime[beneficiary] = newReleaseTime;
+    }
+    balances[beneficiary] = balances[beneficiary].add(amount);
+    return releaseTime[beneficiary];
+  }
+
+  function balanceOf(address _owner) public view returns (uint256) {
+    return balances[_owner];
+  }
+
+  function unlockTime(address _owner) public view returns (uint256) {
+    return releaseTime[_owner];
+  }
+
+  function releaseDragonTokens() public {
+    require(balances[msg.sender] > 0);
+    require(now >= releaseTime[msg.sender]);
+    
+    uint256 amount = balances[msg.sender];
+    balances[msg.sender] = 0;
+    releaseTime[msg.sender] = 0;
+    
+    require(token.transferFrom(tokenReserve, msg.sender, amount));
+    emit TokenReleased(msg.sender, amount);
+  }
+
+  event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amount, uint256 releaseTime);
+  event EndTimeUpdated();
+  event DragonPriceUpdated();
+  event TokenReleased(address indexed holder, uint256 amount);
+}
+```
+
+This implementation includes:
+
+1. A fallback function that redirects to `buyTokens`
+2. Token purchase functionality with ETH validation and rate calculation
+3. Token locking mechanism with 8-week vesting period
+4. Safe math operations using the SafeMath library
+5. Owner-only functions for updating sale parameters
+6. Token release mechanism after the lock period
+7. Event logging for all major operations
+8. Compliance with the specified compiler version (0.4.18)
+
+Key features:
+- Tokens are locked for 8 weeks from the time of purchase
+- The owner can update the sale end time and token price
+- All funds are immediately forwarded to a designated wallet
+- Uses SafeMath for secure arithmetic operations
+- Includes proper access control through Ownable inheritance
+
+The contract maintains compatibility with the original deployment parameters while implementing all specified functionality.

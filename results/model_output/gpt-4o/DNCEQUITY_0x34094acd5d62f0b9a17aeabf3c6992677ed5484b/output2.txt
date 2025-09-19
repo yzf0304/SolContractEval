@@ -1,0 +1,162 @@
+Here is the complete and functional implementation of the `DNCEQUITY` contract strictly adhering to the provided description and context:
+
+```solidity
+pragma solidity ^0.4.21;
+
+contract DNCAsset {
+    uint256 public totalSupply = 0;
+    event Transfer(address indexed from, address indexed to, uint value);
+}
+
+contract DNCReceivingContract {
+    function tokenFallback(address _from, uint _value, bytes _data);
+}
+
+/* SafeMath for checking error */
+
+library SafeMath {
+    function mul(uint a, uint b) internal pure returns (uint) {
+        uint c = a * b;
+        require(a == 0 || c / a == b);
+        return c;
+    }
+
+    function div(uint a, uint b) internal pure returns (uint) {
+        require(b > 0);
+        uint c = a / b;
+        return c;
+    }
+
+    function sub(uint a, uint b) internal pure returns (uint) {
+        require(b <= a);
+        return a - b;
+    }
+
+    function add(uint a, uint b) internal pure returns (uint) {
+        uint c = a + b;
+        require(c >= a);
+        return c;
+    }
+}
+
+contract ERC223BasicToken is DNCAsset {
+    using SafeMath for uint256;
+
+    mapping(address => uint256) balances;
+
+    function transfer(address _to, uint _value) public returns (bool success) {
+        uint codeLength;
+        bytes memory empty;
+
+        assembly {
+            codeLength := extcodesize(_to)
+        }
+
+        require(balances[msg.sender] >= _value);
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        if (codeLength > 0) {
+            DNCReceivingContract receiver = DNCReceivingContract(_to);
+            receiver.tokenFallback(msg.sender, _value, empty);
+        }
+
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function balanceOf(address _owner) public view returns (uint balance) {
+        return balances[_owner];
+    }
+}
+
+contract DNCEQUITY is ERC223BasicToken {
+    address public admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping(address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    function DNCEQUITY() public {
+        admin = msg.sender;
+    }
+
+    modifier onlyadmin() {
+        require(msg.sender == admin);
+        _;
+    }
+
+    function changeAdmin(address _newAdminAddr) public onlyadmin {
+        require(_newAdminAddr != address(0));
+        admin = _newAdminAddr;
+    }
+
+    function createNewMintableUser(address newAddr) public onlyadmin {
+        require(newAddr != address(0));
+        require(balances[newAddr] == 0);
+        mintable[newAddr] = true;
+    }
+
+    function deleteMintable(address addr) public onlyadmin {
+        require(addr != address(0));
+        mintable[addr] = false;
+    }
+
+    function adminTransfer(address from, address to, uint256 value) public onlyadmin {
+        require(mintable[from]);
+        require(balances[from] >= value);
+
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+
+        emit Transfer(from, to, value);
+    }
+
+    function mintNewDNC(address user, uint256 quantity) public onlyadmin {
+        require(mintable[user]);
+        require(quantity > 0);
+
+        balances[user] = balances[user].add(quantity);
+        totalSupply = totalSupply.add(quantity);
+
+        emit Minted(user, quantity);
+    }
+
+    function burnDNC(address user, uint256 quantity) public onlyadmin {
+        require(mintable[user]);
+        require(balances[user] >= quantity);
+
+        balances[user] = balances[user].sub(quantity);
+        totalSupply = totalSupply.sub(quantity);
+
+        emit Burned(user, quantity);
+    }
+}
+```
+
+### Explanation:
+1. **Admin Role**: 
+   - The contract initializes the `admin` role as the deployer's address in the constructor `DNCEQUITY`.
+   - Admin-exclusive functions are gated using the `onlyadmin` modifier.
+
+2. **Minting and Burning**:
+   - Admin can mint (`mintNewDNC`) new tokens to mintable addresses only.
+   - Admin can burn (`burnDNC`) tokens from mintable addresses only.
+
+3. **Mintable Users**:
+   - Admin can add a new mintable user (`createNewMintableUser`) or remove a mintable user's status (`deleteMintable`).
+   - Mintable users must have no initial balance to avoid misuse during creation.
+
+4. **Admin Transfers**:
+   - Admin can transfer tokens on behalf of a mintable user (`adminTransfer`).
+
+5. **Token Transfers**:
+   - Standard ERC223 token transfer function is inherited from `ERC223BasicToken`.
+   
+6. **Safety**:
+   - `SafeMath` is used for overflow and underflow protection in arithmetic operations.
+
+This implementation strictly follows the requirements and avoids any extraneous code.

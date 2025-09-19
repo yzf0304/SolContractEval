@@ -1,0 +1,259 @@
+Below is the implementation of the `T0ken` contract based on the provided context and description:
+
+```solidity
+pragma solidity ^0.5.2;
+
+interface ComplianceRule {}
+
+contract T0ken is ERC20, Ownable, LockableDestroyable {
+
+    using AdditiveMath for uint256;
+    using AddressMap for AddressMap.Data;
+
+    address constant internal ZERO_ADDRESS = address(0);
+    string public constant name = "TZERO PREFERRED";
+    string public constant symbol = "TZROP";
+    uint8 public constant decimals = 0;
+
+    AddressMap.Data public shareholders;
+    Compliance public compliance;
+    address public issuer;
+    bool public issuingFinished = false;
+    mapping(address => address) public cancellations;
+
+    mapping(address => uint256) internal balances;
+    uint256 internal totalSupplyTokens;
+
+    mapping (address => mapping (address => uint256)) private allowed;
+
+    modifier onlyIssuer() {
+        require(msg.sender == issuer, "Only issuer allowed");
+        _;
+    }
+
+    modifier canIssue() {
+        require(!issuingFinished, "Issuing is already finished");
+        _;
+    }
+
+    modifier isNotCancelled(address addr) {
+        require(cancellations[addr] == ZERO_ADDRESS, "Address has been cancelled");
+        _;
+    }
+
+    modifier hasFunds(address addr, uint256 tokens) {
+        require(tokens <= balances[addr], "Insufficient funds");
+        _;
+    }
+
+    event VerifiedAddressSuperseded(address indexed original, address indexed replacement, address indexed sender);
+    event IssuerSet(address indexed previousIssuer, address indexed newIssuer);
+    event Issue(address indexed to, uint256 tokens);
+    event IssueFinished();
+    event ShareholderAdded(address shareholder);
+    event ShareholderRemoved(address shareholder);
+
+    constructor(address _issuer) public {
+        issuer = _issuer;
+        emit IssuerSet(ZERO_ADDRESS, issuer);
+    }
+
+    function transfer(address to, uint256 tokens)
+    external
+    isUnlocked
+    isNotCancelled(to)
+    hasFunds(msg.sender, tokens)
+    returns (bool) {
+        require(compliance.canTransfer(msg.sender, msg.sender, to, tokens), "Transfer not compliant");
+        transferTokens(msg.sender, to, tokens);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 tokens)
+    external
+    isUnlocked
+    isNotCancelled(to)
+    hasFunds(from, tokens)
+    returns (bool) {
+        require(allowed[from][msg.sender] >= tokens, "Allowance exceeded");
+        require(compliance.canTransfer(msg.sender, from, to, tokens), "Transfer not compliant");
+        allowed[from][msg.sender] = allowed[from][msg.sender].subtract(tokens);
+        transferTokens(from, to, tokens);
+        return true;
+    }
+
+    function transferOverride(address from, address to, uint256 tokens)
+    external
+    isUnlocked
+    isNotCancelled(to)
+    hasFunds(from, tokens)
+    returns (bool) {
+        require(compliance.canOverride(msg.sender, from, to, tokens), "Override not allowed");
+        transferTokens(from, to, tokens);
+        return true;
+    }
+
+    function issueTokens(uint256 quantity)
+    external
+    isUnlocked
+    onlyIssuer
+    canIssue
+    returns (bool) {
+        require(quantity > 0, "Quantity must be greater than zero");
+        balances[issuer] = balances[issuer].add(quantity);
+        totalSupplyTokens = totalSupplyTokens.add(quantity);
+
+        if (!shareholders.exists(issuer)) {
+            shareholders.append(issuer);
+            emit ShareholderAdded(issuer);
+        }
+
+        emit Issue(issuer, quantity);
+        emit Transfer(ZERO_ADDRESS, issuer, quantity);
+        return true;
+    }
+
+    function finishIssuing()
+    external
+    isUnlocked
+    onlyIssuer
+    canIssue
+    returns (bool) {
+        issuingFinished = true;
+        emit IssueFinished();
+        return true;
+    }
+
+    function cancelAndReissue(address original, address replacement)
+    external
+    isUnlocked
+    onlyIssuer
+    isNotCancelled(replacement) {
+        require(original != replacement, "Original and replacement must be different");
+        require(shareholders.exists(original), "Original is not a shareholder");
+        require(!shareholders.exists(replacement), "Replacement is already a shareholder");
+
+        cancellations[original] = replacement;
+        shareholders.remove(original);
+        shareholders.append(replacement);
+
+        balances[replacement] = balances[original];
+        delete balances[original];
+
+        emit VerifiedAddressSuperseded(original, replacement, msg.sender);
+        emit Transfer(original, replacement, balances[replacement]);
+    }
+
+    function approve(address spender, uint256 tokens)
+    external
+    isUnlocked
+    isNotCancelled(msg.sender)
+    returns (bool) {
+        require(spender != ZERO_ADDRESS, "Spender cannot be zero address");
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    function setIssuer(address newIssuer)
+    external
+    isUnlocked
+    onlyOwner {
+        require(newIssuer != issuer, "New issuer is the same as current issuer");
+        address prevIssuer = issuer;
+        issuer = newIssuer;
+        emit IssuerSet(prevIssuer, issuer);
+    }
+
+    function setCompliance(address newComplianceAddress)
+    external
+    isUnlocked
+    onlyOwner {
+        require(newComplianceAddress != address(compliance), "New compliance address is the same as current");
+        compliance = Compliance(newComplianceAddress);
+    }
+
+    function totalSupply()
+    external
+    view
+    returns (uint256) {
+        return totalSupplyTokens;
+    }
+
+    function balanceOf(address addr)
+    external
+    view
+    returns (uint256) {
+        return balances[addr];
+    }
+
+    function allowance(address addrOwner, address spender)
+    external
+    view
+    returns (uint256) {
+        return allowed[addrOwner][spender];
+    }
+
+    function holderAt(int256 index)
+    external
+    view
+    returns (address) {
+        return shareholders.at(index);
+    }
+
+    function isHolder(address addr)
+    external
+    view
+    returns (bool) {
+        return shareholders.exists(addr);
+    }
+
+    function isSuperseded(address addr)
+    external
+    view
+    returns (bool) {
+        return cancellations[addr] != ZERO_ADDRESS;
+    }
+
+    function getSuperseded(address addr)
+    external
+    view
+    returns (address) {
+        address current = addr;
+        while (cancellations[current] != ZERO_ADDRESS) {
+            current = cancellations[current];
+        }
+        return current;
+    }
+
+    function canTransfer(address from, address to, uint256 tokens, bool isOverride)
+    private
+    isNotCancelled(to)
+    returns (bool) {
+        if (isOverride) {
+            return compliance.canOverride(msg.sender, from, to, tokens);
+        } else {
+            return compliance.canTransfer(msg.sender, from, to, tokens);
+        }
+    }
+
+    function transferTokens(address from, address to, uint256 tokens)
+    private {
+        balances[from] = balances[from].subtract(tokens);
+        balances[to] = balances[to].add(tokens);
+        emit Transfer(from, to, tokens);
+
+        if (balances[from] == 0) {
+            shareholders.remove(from);
+            emit ShareholderRemoved(from);
+        }
+
+        if (!shareholders.exists(to)) {
+            shareholders.append(to);
+            emit ShareholderAdded(to);
+        }
+    }
+}
+```
+
+This implementation adheres strictly to the provided guidelines and requirements, ensuring that the contract functionalities align with the specifications detailed in your description.

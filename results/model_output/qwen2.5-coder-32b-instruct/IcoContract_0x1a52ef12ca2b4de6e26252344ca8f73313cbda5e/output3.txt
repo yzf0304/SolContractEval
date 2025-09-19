@@ -1,0 +1,128 @@
+Certainly! Below is the completed `Bonus` contract implementation based on your requirements. The contract includes the necessary logic for enabling and disabling the bonus system, calculating bonuses based on the current phase and ETH amount, and managing bonus balances for participants.
+
+```solidity
+/**
+ * @notice This contract manages the bonus distribution for an ICO, allowing the owner to enable or disable bonuses,
+ *         calculate bonuses based on time and ETH amount, and manage bonus balances for participants.
+ * @dev This contract inherits from IcoPhase and Ownable. It uses SafeMath for arithmetic operations.
+ */
+contract Bonus is IcoPhase, Ownable {
+    using SafeMath for uint256;
+
+    // decimals of tokens
+    uint256 constant decimals = 18;
+
+    // enable/disable
+    bool public isBonus;
+
+    // storage
+    mapping(address => uint256) public bonusAccountBalances;
+    mapping(uint256 => address) public bonusAccountIndex;
+    uint256 public bonusAccountCount;
+
+    /**
+     * @notice Initializes the contract with bonuses enabled.
+     * @dev Constructor sets the initial state of the contract.
+     */
+    function Bonus() public {
+        isBonus = true;
+    }
+
+    /**
+     * @notice Enables the bonus system.
+     * @dev Can only be called by the contract owner and when bonuses are currently disabled.
+     * @return A boolean indicating the success of the operation.
+     */
+    function enableBonus() public onlyOwner returns (bool) {
+        require(!isBonus);
+        isBonus = true;
+        return true;
+    }
+
+    /**
+     * @notice Disables the bonus system.
+     * @dev Can only be called by the contract owner and when bonuses are currently enabled.
+     * @return A boolean indicating the success of the operation.
+     */
+    function disableBonus() public onlyOwner returns (bool) {
+        require(isBonus);
+        isBonus = false;
+        return true;
+    }
+
+    /**
+     * @notice Gets the bonus percentage based on the current time.
+     * @dev Checks the current time against predefined phases and returns the corresponding bonus percentage.
+     * @return The bonus percentage as a uint256.
+     */
+    function getBonusByTime() public view returns(uint256) {
+        uint256 currentTime = now;
+
+        if (currentTime >= phasePresale_From && currentTime <= phasePresale_To) {
+            return 20; // Presale: 20% bonus
+        } else if (currentTime >= phasePublicSale1_From && currentTime <= phasePublicSale1_To) {
+            return 15; // Public Sale Phase 1: 15% bonus
+        } else if (currentTime >= phasePublicSale2_From && currentTime <= phasePublicSale2_To) {
+            return 10; // Public Sale Phase 2: 10% bonus
+        } else if (currentTime >= phasePublicSale3_From && currentTime <= phasePublicSale3_To) {
+            return 5; // Public Sale Phase 3: 5% bonus
+        } else {
+            return 0; // No bonus outside of ICO phases
+        }
+    }
+
+    /**
+     * @notice Calculates the bonus amount based on the provided ETH value.
+     * @dev Determines the bonus amount based on the current phase and the provided ETH value.
+     * @param _value The amount of ETH to convert to a bonus.
+     * @return The bonus amount as a uint256.
+     */
+    function getBonusByETH(uint256 _value) public view returns(uint256) {
+        uint256 bonusPercentage = getBonusByTime();
+        return _value.mul(bonusPercentage).div(100);
+    }
+
+    /**
+     * @notice Returns the bonus balance of a specific account.
+     * @dev Fetches the bonus balance from the storage mapping.
+     * @param _owner The address of the account to check the bonus balance for.
+     * @return The bonus balance as a uint256.
+     */
+    function balanceBonusOf(address _owner) public view returns (uint256 balance) {
+        return bonusAccountBalances[_owner];
+    }
+
+    /**
+     * @notice Pays a bonus to a specified address.
+     * @dev Only the contract owner can call this function. The actual implementation of paying the bonus should be defined.
+     * @param _address The address to which the bonus will be paid.
+     * @return A boolean indicating the success of the operation.
+     */
+    function payBonusToAddress(address _address) public onlyOwner returns (bool success) {
+        require(_address != address(0));
+        uint256 bonusBalance = bonusAccountBalances[_address];
+        require(bonusBalance > 0);
+
+        // Assuming bonus is paid in tokens, you might need to interact with a token contract here.
+        // For demonstration, we'll just set the balance to 0.
+        bonusAccountBalances[_address] = 0;
+        bonusAccountCount--;
+
+        // Here you would typically emit an event and/or handle token transfer logic.
+
+        return true;
+    }
+
+    /**
+     * @notice Fallback function to receive Ether.
+     * @dev This function allows the contract to receive Ether.
+     */
+    receive() external payable {}
+}
+```
+
+### Key Points:
+- **Bonus Calculation**: The `getBonusByTime` function checks the current time and returns the appropriate bonus percentage. The `getBonusByETH` function calculates the bonus amount based on the ETH value and the current bonus percentage.
+- **Bonus Management**: The contract tracks bonus balances in `bonusAccountBalances`. The `payBonusToAddress` function is used by the owner to distribute the bonuses, which in a real-world scenario would involve token transfers.
+- **Safety**: The contract uses `SafeMath` for arithmetic operations to prevent overflows and underflows.
+- **Ownership Control**: The `onlyOwner` modifier ensures that certain functions can only be executed by the contract owner.

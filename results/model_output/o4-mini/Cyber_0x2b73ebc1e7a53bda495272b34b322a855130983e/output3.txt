@@ -1,0 +1,479 @@
+```
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.14;
+
+library Strings {
+    bytes16 private constant _HEX_SYMBOLS = "0123456789abcdef";
+
+    function toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0";
+        }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+
+    function toHexString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0x00";
+        }
+        uint256 temp = value;
+        uint256 length = 0;
+        while (temp != 0) {
+            length++;
+            temp >>= 8;
+        }
+        return toHexString(value, length);
+    }
+
+    function toHexString(uint256 value, uint256 length) internal pure returns (string memory) {
+        bytes memory buffer = new bytes(2 * length + 2);
+        buffer[0] = "0";
+        buffer[1] = "x";
+        for (uint256 i = 2 * length + 1; i > 1; --i) {
+            buffer[i] = _HEX_SYMBOLS[value & 0xf];
+            value >>= 4;
+        }
+        require(value == 0, "Strings: hex length insufficient");
+        return string(buffer);
+    }
+}
+
+interface ILayerZeroUserApplicationConfig {
+    function setConfig(uint16 _version, uint16 _chainId, uint _configType, bytes calldata _config) external;
+    function setSendVersion(uint16 _version) external;
+    function setReceiveVersion(uint16 _version) external;
+}
+
+interface ILayerZeroEndpoint is ILayerZeroUserApplicationConfig {
+    function send(uint16 _dstChainId, bytes calldata _destination, bytes calldata _payload, address payable _refundAddress, address _zroPaymentAddress, bytes calldata _adapterParams) external payable;
+    function receivePayload(uint16 _srcChainId, bytes calldata _srcAddress, address _dstAddress, uint64 _nonce, uint _gasLimit, bytes calldata _payload) external;
+    function getInboundNonce(uint16 _srcChainId, bytes calldata _srcAddress) external view returns (uint64);
+    function getOutboundNonce(uint16 _dstChainId, address _srcAddress) external view returns (uint64);
+    function estimateFees(uint16 _dstChainId, address _userApplication, bytes calldata _payload, bool _payInZRO, bytes calldata _adapterParam) external view returns (uint nativeFee, uint zroFee);
+    function getChainId() external view returns (uint16);
+    function retryPayload(uint16 _srcChainId, bytes calldata _srcAddress, bytes calldata _payload) external;
+    function hasStoredPayload(uint16 _srcChainId, bytes calldata _srcAddress) external view returns (bool);
+    function getSendLibraryAddress(address _userApplication) external view returns (address);
+    function getReceiveLibraryAddress(address _userApplication) external view returns (address);
+    function isSendingPayload() external view returns (bool);
+    function isReceivingPayload() external view returns (bool);
+    function getConfig(uint16 _version, uint16 _chainId, address _userApplication, uint _configType) external view returns (bytes memory);
+    function getSendVersion(address _userApplication) external view returns (uint16);
+    function getReceiveVersion(address _userApplication) external view returns (uint16);
+}
+
+abstract contract ERC721TokenReceiver {
+    function onERC721Received(address, address, uint256, bytes calldata) external virtual returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+    }
+}
+
+abstract contract ERC721Omni {
+    using Strings for uint256;
+
+    event Approval(address indexed owner, address indexed spender, uint256 indexed id);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    event Transfer(address indexed from, address indexed to, uint256 indexed id);
+    event MessageFailed(uint16 _srcChainId, bytes _srcAddress, uint64 _nonce, bytes _payload);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    string public name;
+    string public symbol;
+    address public owner;
+    ILayerZeroEndpoint internal endpoint;
+
+    struct FailedMessages {
+        uint payloadLength;
+        bytes32 payloadHash;
+    }
+
+    struct addressData {
+        uint128 balance;
+        uint128 huntlistMinted;
+    }
+
+    struct tokenData {
+        address tokenHolder;
+        uint96 timestampHolder;
+    }
+
+    mapping(uint256 => tokenData) internal _ownerOf;
+    mapping(address => addressData) internal _addressData;
+    mapping(uint16 => mapping(bytes => mapping(uint => FailedMessages))) public failedMessages;
+    mapping(uint16 => bytes) public trustedRemoteLookup;
+    mapping(uint256 => address) public getApproved;
+    mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+        _transferOwnership(msg.sender);
+    }
+
+    error CallerNotOwner();
+    error NewOwnerAddressZero();
+
+    modifier onlyOwner() {
+        if (owner != msg.sender) revert CallerNotOwner();
+        _;
+    }
+
+    function ownerOf(uint256 id) public view virtual returns (address) {
+        require(_ownerOf[id].tokenHolder != address(0), "Nonexistent Token");
+        return _ownerOf[id].tokenHolder;
+    }
+
+    function balanceOf(address _owner) public view virtual returns (uint256) {
+        require(_owner != address(0), "Zero Address");
+        return _addressData[_owner].balance;
+    }
+
+    function durationTimestamp(uint256 tokenId) public view virtual returns (uint256) {
+        return _ownerOf[tokenId].timestampHolder;
+    }
+
+    function huntlistMinted(address _owner) public view virtual returns (uint256) {
+        require(_owner != address(0), "Zero Address");
+        return _addressData[_owner].huntlistMinted;
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public {
+        require(from == _ownerOf[tokenId].tokenHolder, "Non Owner");
+        require(to != address(0), "Zero Address");
+        require(
+            msg.sender == from || isApprovedForAll[from][msg.sender] || msg.sender == getApproved[tokenId],
+            "Lacks Permissions"
+        );
+        unchecked {
+            _addressData[from].balance--;
+            _addressData[to].balance++;
+        }
+        _ownerOf[tokenId].tokenHolder = to;
+        _ownerOf[tokenId].timestampHolder = uint96(block.timestamp);
+        delete getApproved[tokenId];
+        emit Transfer(from, to, tokenId);
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId) public {
+        transferFrom(from, to, tokenId);
+        require(
+            to.code.length == 0 ||
+            ERC721TokenReceiver(to).onERC721Received(msg.sender, from, tokenId, "") ==
+            ERC721TokenReceiver.onERC721Received.selector,
+            "Unsafe Transfer"
+        );
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata data) public {
+        transferFrom(from, to, tokenId);
+        require(
+            to.code.length == 0 ||
+            ERC721TokenReceiver(to).onERC721Received(msg.sender, from, tokenId, data) ==
+            ERC721TokenReceiver.onERC721Received.selector,
+            "Unsafe Transfer"
+        );
+    }
+
+    function setApprovalForAll(address operator, bool approved) public {
+        isApprovedForAll[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function approve(address spender, uint256 tokenId) public {
+        address _owner = _ownerOf[tokenId].tokenHolder;
+        require(msg.sender == _owner || isApprovedForAll[_owner][msg.sender], "Lacks Permissions");
+        getApproved[tokenId] = spender;
+        emit Approval(_owner, spender, tokenId);
+    }
+
+    function _mint(address to, uint256 tokenId) internal {
+        require(to != address(0), "Zero Address");
+        require(_ownerOf[tokenId].tokenHolder == address(0), "Already Exists");
+        unchecked {
+            _addressData[to].balance++;
+        }
+        _ownerOf[tokenId].tokenHolder = to;
+        _ownerOf[tokenId].timestampHolder = uint96(block.timestamp);
+        emit Transfer(address(0), to, tokenId);
+    }
+
+    function _safeMint(address to, uint256 tokenId) internal {
+        _mint(to, tokenId);
+        require(
+            to.code.length == 0 ||
+            ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), tokenId, "") ==
+            ERC721TokenReceiver.onERC721Received.selector,
+            "Unsafe Mint"
+        );
+    }
+
+    function _safeMint(address to, uint256 tokenId, bytes memory data) internal {
+        _mint(to, tokenId);
+        require(
+            to.code.length == 0 ||
+            ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), tokenId, data) ==
+            ERC721TokenReceiver.onERC721Received.selector,
+            "Unsafe Mint"
+        );
+    }
+
+    function _burn(uint256 tokenId) internal {
+        address _owner = _ownerOf[tokenId].tokenHolder;
+        require(_owner != address(0), "Nonexistent Token");
+        unchecked {
+            _addressData[_owner].balance--;
+        }
+        delete _ownerOf[tokenId];
+        delete getApproved[tokenId];
+        emit Transfer(_owner, address(0), tokenId);
+    }
+
+    function baseURI() public view virtual returns (string memory) {
+        return "";
+    }
+
+    function tokenURI(uint256 tokenId) public view returns (string memory) {
+        require(_ownerOf[tokenId].tokenHolder != address(0), "Nonexistent Token");
+        string memory _base = baseURI();
+        return bytes(_base).length > 0 ? string(abi.encodePacked(_base, tokenId.toString())) : "";
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual returns (bool) {
+        return
+            interfaceId == 0x01ffc9a7 || // ERC165
+            interfaceId == 0x80ac58cd || // ERC721
+            interfaceId == 0x5b5e139f;   // ERC721Metadata
+    }
+
+    function lzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) external {
+        require(msg.sender == address(endpoint), "NonblockingReceiver: invalid endpoint");
+        require(
+            _srcAddress.length == trustedRemoteLookup[_srcChainId].length &&
+            keccak256(_srcAddress) == keccak256(trustedRemoteLookup[_srcChainId]),
+            "NonblockingReceiver: invalid source"
+        );
+        try this.onLzReceive(_srcChainId, _srcAddress, _nonce, _payload) {
+        } catch {
+            failedMessages[_srcChainId][_srcAddress][_nonce] = FailedMessages(_payload.length, keccak256(_payload));
+            emit MessageFailed(_srcChainId, _srcAddress, _nonce, _payload);
+        }
+    }
+
+    function onLzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) public {
+        require(msg.sender == address(this), "NonblockingReceiver: caller must be Bridge");
+        _LzReceive(_srcChainId, _srcAddress, _nonce, _payload);
+    }
+
+    function _LzReceive(uint16, bytes memory, uint64, bytes memory) virtual internal;
+
+    function retryMessage(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes calldata _payload) external payable {
+        FailedMessages storage fm = failedMessages[_srcChainId][_srcAddress][_nonce];
+        require(fm.payloadHash != bytes32(0), "No stored message");
+        require(fm.payloadLength == _payload.length && fm.payloadHash == keccak256(_payload), "Invalid payload");
+        fm.payloadHash = bytes32(0);
+        fm.payloadLength = 0;
+        this.onLzReceive(_srcChainId, _srcAddress, _nonce, _payload);
+    }
+
+    function setTrustedRemote(uint16 _chainId, bytes calldata _trustedRemote) external onlyOwner {
+        trustedRemoteLookup[_chainId] = _trustedRemote;
+    }
+
+    function renounceOwnership() public onlyOwner {
+        _transferOwnership(address(0));
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        if (newOwner == address(0)) revert NewOwnerAddressZero();
+        _transferOwnership(newOwner);
+    }
+
+    function _transferOwnership(address newOwner) internal {
+        address old = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(old, newOwner);
+    }
+}
+
+contract Cyber is ERC721Omni {
+    string private _baseTokenURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Contract Caller");
+        _;
+    }
+
+    function donate() external payable {}
+
+    function traverseChains(uint16 _chainId, uint tokenId) public payable {
+        require(ownerOf(tokenId) == msg.sender, "Not token owner");
+        bytes memory remote = trustedRemoteLookup[_chainId];
+        require(remote.length != 0, "Chain not trusted");
+
+        // burn locally
+        _burn(tokenId);
+
+        // payload: sender + tokenId
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForLzReceive);
+
+        // estimate fees
+        (uint256 nativeFee, ) = endpoint.estimateFees(
+            _chainId,
+            address(this),
+            payload,
+            false,
+            adapterParams
+        );
+        require(msg.value >= nativeFee, "Insufficient fee");
+
+        // send message
+        endpoint.send{value: nativeFee}(
+            _chainId,
+            remote,
+            payload,
+            payable(msg.sender),
+            address(0),
+            adapterParams
+        );
+
+        // refund excess
+        if (msg.value > nativeFee) {
+            payable(msg.sender).transfer(msg.value - nativeFee);
+        }
+    }
+
+    function _LzReceive(
+        uint16,
+        bytes memory,
+        uint64,
+        bytes memory _payload
+    ) override internal {
+        (address to, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        totalSupply += 1;
+        _safeMint(to, tokenId);
+    }
+
+    function publicMint() external callerIsUser {
+        require(publicStatus, "Public mint closed");
+        require(totalSupply < maximumSupply, "Max supply reached");
+        require(publicMinted < publicMintedCap, "Public cap reached");
+
+        publicMinted += 1;
+        totalSupply += 1;
+        _safeMint(msg.sender, totalSupply);
+    }
+
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        require(huntlistStatus, "Huntlist mint closed");
+        require(_addressData[msg.sender].huntlistMinted == 0, "Already minted");
+        require(totalSupply + 2 <= maximumSupply, "Not enough supply");
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(verifyProof(_proof, merkleRoot, leaf), "Invalid proof");
+
+        _addressData[msg.sender].huntlistMinted = 2;
+        totalSupply += 1;
+        _safeMint(msg.sender, totalSupply);
+        totalSupply += 1;
+        _safeMint(msg.sender, totalSupply);
+    }
+
+    function verifyProof(bytes32[] memory proof, bytes32 root, bytes32 leaf)
+        internal
+        pure
+        returns (bool)
+    {
+        bytes32 computed = leaf;
+        for (uint i = 0; i < proof.length; i++) {
+            bytes32 p = proof[i];
+            if (computed <= p) {
+                computed = keccak256(abi.encodePacked(computed, p));
+            } else {
+                computed = keccak256(abi.encodePacked(p, computed));
+            }
+        }
+        return computed == root;
+    }
+
+    function burnHunter(uint256 tokenId) external {
+        require(ownerOf(tokenId) == msg.sender, "Not token owner");
+        _burn(tokenId);
+        totalSupply -= 1;
+    }
+
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        require(_supply <= maximumSupply, "Exceeds max supply");
+        publicMintedCap = _supply;
+    }
+
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Already deprecated");
+        depreciatedMint = true;
+        publicStatus = false;
+        huntlistStatus = false;
+        // mint 66 to owner
+        for (uint256 i = 0; i < 66; i++) {
+            totalSupply += 1;
+            _safeMint(owner, totalSupply);
+        }
+    }
+
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseTokenURI = _newURI;
+    }
+
+    function setGasForDestinationLzReceive(uint _newGasValue) external onlyOwner {
+        gasForLzReceive = _newGasValue;
+    }
+
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    function baseURI() override public view returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function withdrawDonations() external onlyOwner {
+        payable(owner).transfer(address(this).balance);
+    }
+}
+```

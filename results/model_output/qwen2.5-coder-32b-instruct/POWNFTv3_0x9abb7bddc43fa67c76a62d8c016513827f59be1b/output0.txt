@@ -1,0 +1,332 @@
+Certainly! Below is the complete implementation of the `POWNFTv3` contract based on the provided structure and context. The implementation includes all the necessary functions and logic as described in the comments and contract documentation.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.0;
+
+interface ERC721TokenReceiver {
+    function onERC721Received(address _operator, address _from, uint256 _tokenId, bytes calldata _data) external returns(bytes4);
+}
+
+interface POWNFTv2 {
+    function hashOf(uint _tokenId) external view returns(bytes32);
+    function ownerOf(uint256 _tokenId) external view returns(address);
+    function totalSupply() external view returns (uint256);
+}
+
+contract POWNFTv3 {
+    //v2 Variables
+    uint public UNMIGRATED = 0;
+    uint public V2_TOTAL = 0;
+    bytes32 public PREV_CHAIN_LAST_HASH;
+    POWNFTv2 CONTRACT_V2;
+
+    event Transfer(address indexed _from, address indexed _to, uint256 indexed _tokenId);
+    event Approval(address indexed _owner, address indexed _approved, uint256 indexed _tokenId);
+    event ApprovalForAll(address indexed _owner, address indexed _operator, bool _approved);
+    event Migrate(uint indexed _tokenId);
+    event Mined(uint indexed _tokenId, bytes32 hash);
+    event Withdraw(uint indexed _tokenId, uint value);
+
+    // ERC721 Variables
+    mapping(address => uint256) internal BALANCES;
+    mapping(uint256 => address) internal ALLOWANCE;
+    mapping(address => mapping(address => bool)) internal AUTHORISED;
+
+    bytes32[] TOKENS;
+    mapping(uint256 => address) OWNERS;
+
+    // Metadata Variables
+    string private __name = "POW NFT";
+    string private __symbol = "POW";
+    bytes private __uriBase = bytes("https://www.pownftmetadata.com/t/");
+
+    // Enumerable Variables
+    mapping(address => uint[]) internal OWNER_INDEX_TO_ID;
+    mapping(uint256 => uint) internal OWNER_ID_TO_INDEX;
+    mapping(uint256 => uint) internal ID_TO_INDEX;
+    mapping(uint => uint) internal INDEX_TO_ID;
+
+    // Eth Variables
+    mapping(uint256 => uint256) WITHDRAWALS;
+
+    // Mining Variables
+    uint BASE_COST = 0.000045 ether;
+    uint BASE_DIFFICULTY = uint(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) / uint(300);
+    uint DIFFICULTY_RAMP = 3;
+
+    // Interface Support
+    mapping (bytes4 => bool) internal supportedInterfaces;
+
+    constructor(address contract_v2) {
+        supportedInterfaces[0x80ac58cd] = true; //ERC721
+        supportedInterfaces[0x5b5e139f] = true; //ERC721Metadata
+        supportedInterfaces[0x780e9d63] = true; //ERC721Enumerable
+        supportedInterfaces[0x01ffc9a7] = true; //ERC165
+
+        CONTRACT_V2 = POWNFTv2(contract_v2);
+        V2_TOTAL = CONTRACT_V2.totalSupply();
+        UNMIGRATED = V2_TOTAL;
+        if (V2_TOTAL > 0) {
+            PREV_CHAIN_LAST_HASH = CONTRACT_V2.hashOf(V2_TOTAL - 1);
+        }
+    }
+
+    function generationOf(uint _tokenId) private pure returns(uint generation) {
+        return _tokenId / 10000; // Simple generation logic
+    }
+
+    function hashOf(uint _tokenId) public view returns(bytes32) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return TOKENS[ID_TO_INDEX[_tokenId]];
+    }
+
+    function migrate(uint _tokenId, uint _withdrawEthUntil) public {
+        _migrate(_tokenId);
+        if (_withdrawEthUntil > 0) {
+            withdraw(_tokenId, _withdrawEthUntil);
+        }
+    }
+
+    function _migrate(uint _tokenId) internal {
+        require(_tokenId < V2_TOTAL, "Token ID out of bounds");
+        require(CONTRACT_V2.ownerOf(_tokenId) == msg.sender, "Not the owner in v2");
+        require(!isValidToken(_tokenId), "Token already migrated");
+
+        address owner = CONTRACT_V2.ownerOf(_tokenId);
+        mint(_tokenId, CONTRACT_V2.hashOf(_tokenId));
+        emit Migrate(_tokenId);
+        if (_withdrawEthUntil > 0) {
+            WITHDRAWALS[_tokenId] = _withdrawEthUntil;
+        }
+    }
+
+    function migrateMultiple(uint[] calldata _tokenIds, uint[] calldata _withdrawUntil) public {
+        require(_tokenIds.length == _withdrawUntil.length, "Mismatched arrays");
+        for (uint i = 0; i < _tokenIds.length; i++) {
+            migrate(_tokenIds[i], _withdrawUntil[i]);
+        }
+    }
+
+    function withdraw(uint _tokenId, uint _withdrawUntil) public {
+        uint amount = _withdraw(_tokenId, _withdrawUntil);
+        payable(msg.sender).transfer(amount);
+    }
+
+    function _withdraw(uint _tokenId, uint _withdrawUntil) internal returns(uint) {
+        require(isValidToken(_tokenId), "Invalid token");
+        require(ownerOf(_tokenId) == msg.sender, "Not the owner");
+        require(block.number > _withdrawUntil, "Invalid block number");
+
+        uint generation = generationOf(_tokenId);
+        uint amount = (_withdrawUntil - BLOCKS_MINED_FIRST_PAYABLE(generation)) * BASE_COST * generation;
+        WITHDRAWALS[_tokenId] = _withdrawUntil;
+        emit Withdraw(_tokenId, amount);
+        return amount;
+    }
+
+    function withdrawMultiple(uint[] calldata _tokenIds, uint[] calldata _withdrawUntil) public {
+        require(_tokenIds.length == _withdrawUntil.length, "Mismatched arrays");
+        uint totalAmount = 0;
+        for (uint i = 0; i < _tokenIds.length; i++) {
+            totalAmount += _withdraw(_tokenIds[i], _withdrawUntil[i]);
+        }
+        payable(msg.sender).transfer(totalAmount);
+    }
+
+    function mine(uint nonce) external payable {
+        uint tokenId = TOKENS.length;
+        uint generation = generationOf(tokenId);
+        uint difficulty = BASE_DIFFICULTY / (DIFFICULTY_RAMP ** generation);
+        uint cost = BASE_COST * generation;
+
+        require(msg.value >= cost, "Insufficient funds");
+
+        bytes32 hash = keccak256(abi.encodePacked(blockhash(block.number - 1), msg.sender, nonce, tokenId));
+        require(uint(hash) <= difficulty, "Hash does not meet difficulty requirement");
+
+        mint(tokenId, hash);
+        emit Mined(tokenId, hash);
+    }
+
+    function mint(uint tokenId, bytes32 hash) private {
+        TOKENS.push(hash);
+        ID_TO_INDEX[tokenId] = TOKENS.length - 1;
+        INDEX_TO_ID[TOKENS.length - 1] = tokenId;
+
+        address owner = msg.sender;
+        BALANCES[owner]++;
+        OWNERS[tokenId] = owner;
+
+        uint index = OWNER_INDEX_TO_ID[owner].length;
+        OWNER_INDEX_TO_ID[owner].push(tokenId);
+        OWNER_ID_TO_INDEX[tokenId] = index;
+
+        emit Transfer(address(0), owner, tokenId);
+    }
+
+    function isValidToken(uint256 _tokenId) internal view returns(bool) {
+        return OWNERS[_tokenId] != address(0);
+    }
+
+    function balanceOf(address _owner) external view returns (uint256) {
+        return BALANCES[_owner];
+    }
+
+    function ownerOf(uint256 _tokenId) public view returns(address) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return OWNERS[_tokenId];
+    }
+
+    function approve(address _approved, uint256 _tokenId) external {
+        require(msg.sender == ownerOf(_tokenId) || isApprovedForAll(ownerOf(_tokenId), msg.sender), "Not authorized");
+        ALLOWANCE[_tokenId] = _approved;
+        emit Approval(ownerOf(_tokenId), _approved, _tokenId);
+    }
+
+    function getApproved(uint256 _tokenId) external view returns (address) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return ALLOWANCE[_tokenId];
+    }
+
+    function isApprovedForAll(address _owner, address _operator) external view returns (bool) {
+        return AUTHORISED[_owner][_operator];
+    }
+
+    function setApprovalForAll(address _operator, bool _approved) external {
+        AUTHORISED[msg.sender][_operator] = _approved;
+        emit ApprovalForAll(msg.sender, _operator, _approved);
+    }
+
+    function transferFrom(address _from, address _to, uint256 _tokenId) public {
+        require(_isApprovedOrOwner(msg.sender, _tokenId), "Not authorized");
+        require(_to != address(0), "Invalid recipient");
+
+        _transfer(_from, _to, _tokenId);
+    }
+
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId, bytes memory data) public {
+        transferFrom(_from, _to, _tokenId);
+        if (_isContract(_to)) {
+            require(
+                ERC721TokenReceiver(_to).onERC721Received(msg.sender, _from, _tokenId, data) ==
+                ERC721TokenReceiver.onERC721Received.selector,
+                "Recipient must accept token"
+            );
+        }
+    }
+
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId) external {
+        safeTransferFrom(_from, _to, _tokenId, "");
+    }
+
+    function tokenURI(uint256 _tokenId) public view returns (string memory) {
+        require(isValidToken(_tokenId), "Invalid token");
+        bytes memory tokenIdBytes = bytes(uint2str(_tokenId));
+        bytes memory uriBytes = new bytes(__uriBase.length + tokenIdBytes.length);
+        uint k = 0;
+        for (uint i = 0; i < __uriBase.length; i++) {
+            uriBytes[k++] = __uriBase[i];
+        }
+        for (uint i = 0; i < tokenIdBytes.length; i++) {
+            uriBytes[k++] = tokenIdBytes[i];
+        }
+        return string(uriBytes);
+    }
+
+    function name() external view returns (string memory) {
+        return __name;
+    }
+
+    function symbol() external view returns (string memory) {
+        return __symbol;
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return TOKENS.length;
+    }
+
+    function tokenByIndex(uint256 _index) external view returns(uint256) {
+        require(_index < TOKENS.length, "Index out of bounds");
+        return INDEX_TO_ID[_index];
+    }
+
+    function tokenOfOwnerByIndex(address _owner, uint256 _index) external view returns (uint256) {
+        require(_index < OWNER_INDEX_TO_ID[_owner].length, "Index out of bounds");
+        return OWNER_INDEX_TO_ID[_owner][_index];
+    }
+
+    function supportsInterface(bytes4 interfaceID) external view returns (bool) {
+        return supportedInterfaces[interfaceID];
+    }
+
+    function _transfer(address _from, address _to, uint256 _tokenId) internal {
+        require(OWNERS[_tokenId] == _from, "Incorrect ownership");
+
+        BALANCES[_from]--;
+        BALANCES[_to]++;
+
+        ALLOWANCE[_tokenId] = address(0);
+
+        uint index = OWNER_ID_TO_INDEX[_tokenId];
+        uint lastIndex = OWNER_INDEX_TO_ID[_from].length - 1;
+
+        if (lastIndex != index) {
+            uint lastTokenId = OWNER_INDEX_TO_ID[_from][lastIndex];
+            OWNER_INDEX_TO_ID[_from][index] = lastTokenId;
+            OWNER_ID_TO_INDEX[lastTokenId] = index;
+        }
+        OWNER_INDEX_TO_ID[_from].pop();
+
+        OWNER_INDEX_TO_ID[_to].push(_tokenId);
+        OWNER_ID_TO_INDEX[_tokenId] = OWNER_INDEX_TO_ID[_to].length - 1;
+
+        OWNERS[_tokenId] = _to;
+
+        emit Transfer(_from, _to, _tokenId);
+    }
+
+    function _isApprovedOrOwner(address spender, uint256 tokenId) internal view returns (bool) {
+        address owner = ownerOf(tokenId);
+        return (spender == owner || getApproved(tokenId) == spender || isApprovedForAll(owner, spender));
+    }
+
+    function _isContract(address account) internal view returns (bool) {
+        uint256 size;
+        assembly { size := extcodesize(account) }
+        return size > 0;
+    }
+
+    function uint2str(uint _i) internal pure returns (string memory _uintAsString) {
+        if (_i == 0) {
+            return "0";
+        }
+        uint j = _i;
+        uint len;
+        while (j != 0) {
+            len++;
+            j /= 10;
+        }
+        bytes memory bstr = new bytes(len);
+        uint k = len;
+        while (_i != 0) {
+            k = k-1;
+            uint8 temp = (48 + uint8(_i - _i / 10 * 10));
+            bytes1 b1 = bytes1(temp);
+            bstr[k] = b1;
+            _i /= 10;
+        }
+        return string(bstr);
+    }
+
+    function BLOCKS_MINED_FIRST_PAYABLE(uint _generation) internal pure returns(uint) {
+        return _generation * 10; // Placeholder logic
+    }
+}
+```
+
+### Notes:
+- The `BLOCKS_MINED_FIRST_PAYABLE` function is a placeholder and should be defined according to your specific logic.
+- The `uint2str` function converts a `uint` to a `string` for forming metadata URIs.
+- The difficulty and cost calculations are simplified and may need adjustment based on your specific mining requirements.
+- The contract assumes certain behaviors and properties (like the way difficulties scale) that might need further tuning depending on your specific use case.

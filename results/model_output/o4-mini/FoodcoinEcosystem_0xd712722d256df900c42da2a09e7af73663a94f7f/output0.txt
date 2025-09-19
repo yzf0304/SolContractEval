@@ -1,0 +1,76 @@
+pragma solidity ^0.4.16;
+
+contract Manager is SpecialManager {
+    // адрес менеджеров
+    mapping (address => bool) public managerAddressMap;
+    // соответствие адреса менеджера и его номера
+    mapping (address => uint256) public managerAddressNumberMap;
+    // список менеджеров
+    mapping (uint256 => address) public managerListMap;
+    // сколько всего менеджеров
+    uint256 public managerCountInt = 0;
+
+    /**
+     * @notice Modifier to restrict access to only the owner or a manager.
+     */
+    modifier isManagerOrOwner {
+        require(managerAddressMap[msg.sender] == true || ownerAddressMap[msg.sender] == true);
+        _;
+    }
+
+    /**
+     * @notice Enables or re-enables a manager address.
+     * @param _onManagerAddress The address of the manager to enable.
+     * @return retrnVal True if operation succeeded, false if already active.
+     */
+    function managerOn(address _onManagerAddress) external isOwner returns (bool retrnVal) {
+        require(_onManagerAddress != address(0));
+
+        // Если менеджер был создан ранее
+        if (managerAddressNumberMap[_onManagerAddress] > 0) {
+            // Если он сейчас отключен — включаем
+            if (!managerAddressMap[_onManagerAddress]) {
+                managerAddressMap[_onManagerAddress] = true;
+                ContractManagementUpdate("Manager", msg.sender, _onManagerAddress, true);
+                retrnVal = true;
+            } else {
+                // Уже включен
+                retrnVal = false;
+            }
+        } else {
+            // Новый менеджер
+            managerAddressMap[_onManagerAddress] = true;
+            managerAddressNumberMap[_onManagerAddress] = managerCountInt;
+            managerListMap[managerCountInt] = _onManagerAddress;
+            managerCountInt++;
+            ContractManagementUpdate("Manager", msg.sender, _onManagerAddress, true);
+            retrnVal = true;
+        }
+    }
+
+    /**
+     * @notice Disables a manager.
+     * @param _offManagerAddress The address of the manager to disable.
+     * @return retrnVal True if operation succeeded, false otherwise.
+     */
+    function managerOff(address _offManagerAddress) external isOwner returns (bool retrnVal) {
+        // Только если менеджер существует, не первый (номер > 0) и активен
+        if (managerAddressNumberMap[_offManagerAddress] > 0 && managerAddressMap[_offManagerAddress]) {
+            managerAddressMap[_offManagerAddress] = false;
+            ContractManagementUpdate("Manager", msg.sender, _offManagerAddress, false);
+            retrnVal = true;
+        } else {
+            retrnVal = false;
+        }
+    }
+
+    /**
+     * @notice Constructor: adds the deployer as the first manager.
+     */
+    function Manager() public {
+        managerAddressMap[msg.sender] = true;
+        managerAddressNumberMap[msg.sender] = managerCountInt;
+        managerListMap[managerCountInt] = msg.sender;
+        managerCountInt++;
+    }
+}

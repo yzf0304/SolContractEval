@@ -1,0 +1,134 @@
+Below is the complete implementation of the `DNCEQUITY` contract according to the provided requirements and context. The contract includes all necessary functions and modifiers as described in the comments.
+
+```solidity
+pragma solidity ^0.4.21;
+
+contract DNCAsset {
+    uint256 public totalSupply = 0;
+    event Transfer(address indexed from, address indexed to, uint value);
+}
+
+contract DNCReceivingContract {
+    function tokenFallback(address _from, uint _value, bytes _data);
+}
+
+library SafeMath {
+  function mul(uint a, uint b) internal pure returns (uint) {
+    uint c = a * b;
+    assert(a == 0 || c / a == b);
+    return c;
+  }
+  function div(uint a, uint b) internal pure returns (uint) {
+    assert(b > 0);
+    uint c = a / b;
+    assert(a == b * c + a % b);
+    return c;
+  }
+  function sub(uint a, uint b) internal pure returns (uint) {
+    assert(b <= a);
+    return a - b;
+  }
+  function add(uint a, uint b) internal pure returns (uint) {
+    uint c = a + b;
+    assert(c >= a);
+    return c;
+  }
+  function assert(bool assertion) internal pure {
+    if (!assertion) {
+      revert();
+    }
+  }
+}
+
+contract ERC223BasicToken is DNCAsset {
+    using SafeMath for uint256;
+
+    mapping(address => uint256) balances;
+
+    function transfer(address _to, uint _value) public returns (bool success) {
+        uint codeLength;
+        bytes memory empty;
+
+        assembly {
+            // Retrieve the size of the code on target address, this needs assembly .
+            codeLength := extcodesize(_to)
+        }
+        
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        if(codeLength>0) {
+            DNCReceivingContract receiver = DNCReceivingContract(_to);
+            receiver.tokenFallback(msg.sender, _value, empty);
+        }
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function balanceOf(address _owner) public view returns (uint balance) {
+        return balances[_owner];
+    }
+}
+
+contract DNCEQUITY is ERC223BasicToken {
+    address public admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping (address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    function DNCEQUITY() public {
+        admin = msg.sender;
+    }
+
+    modifier onlyadmin {
+        require(msg.sender == admin);
+        _;
+    }
+
+    function changeAdmin(address _newAdminAddr) public onlyadmin {
+        admin = _newAdminAddr;
+    }
+
+    function createNewMintableUser(address newAddr) public onlyadmin {
+        require(balances[newAddr] == 0);
+        mintable[newAddr] = true;
+    }
+
+    function deleteMintable(address addr) public onlyadmin {
+        mintable[addr] = false;
+    }
+
+    function adminTransfer(address from, address to, uint256 value) public onlyadmin {
+        require(mintable[from]);
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        emit Transfer(from, to, value);
+    }
+
+    function mintNewDNC(address user, uint256 quantity) public onlyadmin {
+        require(mintable[user]);
+        balances[user] = balances[user].add(quantity);
+        totalSupply = totalSupply.add(quantity);
+        emit Minted(user, quantity);
+        emit Transfer(0x0, user, quantity);
+    }
+
+    function burnDNC(address user, uint256 quantity) public onlyadmin {
+        require(mintable[user]);
+        balances[user] = balances[user].sub(quantity);
+        totalSupply = totalSupply.sub(quantity);
+        emit Burned(user, quantity);
+        emit Transfer(user, 0x0, quantity);
+    }
+}
+```
+
+### Key Points:
+- The contract includes the necessary imports and libraries.
+- All functions and events defined in the requirements have been implemented.
+- Proper use of the `SafeMath` library to prevent arithmetic over/underflows.
+- The `onlyadmin` modifier ensures that certain functions can only be called by the admin.
+- Events are emitted for minting, burning, and transferring of tokens to facilitate tracking.

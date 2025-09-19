@@ -1,0 +1,176 @@
+Here is the completed HalloweenMinter contract. It strictly follows the provided specification and uses only the given dependencies and compiler version 0.8.7.  
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+
+interface iNFTCollection {
+    function externalMint(address _address, uint256 _amount) external payable;
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address address_) external view returns (uint256);
+    function ownerOf(uint256 tokenId_) external view returns (address);
+    function tokensOfOwner(address _address) external view returns (uint256[] memory);
+}
+
+contract HalloweenMinter is Ownable {
+    using MerkleProof for bytes32[];
+
+    // The address to which all funds will be withdrawn
+    address public constant withdrawAddress = 0xdEcf4B112d4120B6998e5020a6B4819E490F7db6;
+
+    // External NFT collection contract
+    iNFTCollection public NFTCollection = iNFTCollection(0x2d3C8D1A84cA778A3bba0F4fC389330AB96AF3Be);
+
+    // Sale parameters
+    uint256 public cost = 0;
+    uint256 public maxSupply = 5000;
+    uint256 public maxMintAmountPerTransaction = 3;
+    uint256 public publicSaleMaxMintAmountPerAddress = 300;
+
+    bool public paused = true;
+    bool public onlyWhitelisted = true;
+    bool public mintCount = true;
+
+    bytes32 public merkleRoot;
+    bytes32 public constant AIRDROP_ROLE = keccak256("AIRDROP_ROLE");
+
+    // Tracks how many tokens an address has minted in whitelist and public sale
+    mapping(address => uint256) public whitelistMintedAmount;
+    mapping(address => uint256) public publicSaleMintedAmount;
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract.");
+        _;
+    }
+
+    constructor() {
+        // By default unpause and disable mint counting
+        pause(false);
+        setMintCount(false);
+    }
+
+    /**
+     * @notice Mint NFTs, respecting whitelist and public sale rules.
+     * @param _mintAmount Number of NFTs to mint this call.
+     * @param _maxMintAmount Maximum allowed mint amount (used only in whitelist phase for proof).
+     * @param _merkleProof Merkle proof that msg.sender is entitled to _maxMintAmount in whitelist.
+     */
+    function mint(
+        uint256 _mintAmount,
+        uint256 _maxMintAmount,
+        bytes32[] calldata _merkleProof
+    ) external payable callerIsUser {
+        require(!paused, "The contract is paused.");
+        require(_mintAmount > 0, "Must mint at least one.");
+        require(_mintAmount <= maxMintAmountPerTransaction, "Exceeds per-transaction limit.");
+
+        uint256 currentSupply = NFTCollection.totalSupply();
+        require(currentSupply + _mintAmount <= maxSupply, "Exceeds max supply.");
+
+        uint256 price = cost * _mintAmount;
+        require(msg.value >= price, "Insufficient ETH sent.");
+
+        if (onlyWhitelisted) {
+            // Whitelist phase
+            bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _maxMintAmount));
+            require(
+                MerkleProof.verify(_merkleProof, merkleRoot, leaf),
+                "Invalid Merkle proof."
+            );
+
+            if (mintCount) {
+                uint256 used = whitelistMintedAmount[msg.sender];
+                require(used + _mintAmount <= _maxMintAmount, "Whitelist allocation exceeded.");
+                whitelistMintedAmount[msg.sender] = used + _mintAmount;
+            }
+        } else {
+            // Public sale phase
+            if (mintCount) {
+                uint256 used = publicSaleMintedAmount[msg.sender];
+                require(
+                    used + _mintAmount <= publicSaleMaxMintAmountPerAddress,
+                    "Public sale allocation exceeded."
+                );
+                publicSaleMintedAmount[msg.sender] = used + _mintAmount;
+            }
+        }
+
+        // Forward the mint call and ETH to the NFT collection
+        NFTCollection.externalMint{value: msg.value}(msg.sender, _mintAmount);
+    }
+
+    /** ONLY OWNER **/
+
+    function setMaxSupply(uint256 _maxSupply) external onlyOwner {
+        require(_maxSupply >= NFTCollection.totalSupply(), "New max must be >= totalSupply.");
+        maxSupply = _maxSupply;
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return NFTCollection.totalSupply();
+    }
+
+    function setMerkleRoot(bytes32 _merkleRoot) external onlyOwner {
+        merkleRoot = _merkleRoot;
+    }
+
+    function setPublicSaleMaxMintAmountPerAddress(uint256 _amount) external onlyOwner {
+        publicSaleMaxMintAmountPerAddress = _amount;
+    }
+
+    function setCost(uint256 _newCost) external onlyOwner {
+        cost = _newCost;
+    }
+
+    function setOnlyWhitelisted(bool _state) external onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    function setMaxMintAmountPerTransaction(uint256 _maxMintAmountPerTransaction)
+        external
+        onlyOwner
+    {
+        maxMintAmountPerTransaction = _maxMintAmountPerTransaction;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function setMintCount(bool _state) public onlyOwner {
+        mintCount = _state;
+    }
+
+    function setNFTCollection(address _address) external onlyOwner {
+        require(_address != address(0), "Zero address");
+        NFTCollection = iNFTCollection(_address);
+    }
+
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No funds");
+        (bool success, ) = payable(withdrawAddress).call{value: balance}("");
+        require(success, "Transfer failed");
+    }
+}
+```
+
+Explanation of key points:
+
+1. **Mint Logic**  
+   - Checks pause state, per-tx and total-supply limits.  
+   - Verifies ETH payment against `cost`.  
+   - In whitelist phase, verifies a Merkle proof over `keccak256(abi.encodePacked(msg.sender, _maxMintAmount))` and enforces per-address limits if `mintCount` is true.  
+   - In public sale, enforces a separate per-address cap.  
+   - Calls `NFTCollection.externalMint{value: msg.value}(msg.sender, _mintAmount)`.  
+
+2. **Owner-Only Configuration**  
+   - Parameters (`cost`, `maxSupply`, `paused`, sale flags, caps, Merkle root, NFT collection address) are modifiable only by the contract owner.  
+
+3. **Withdrawals**  
+   - Owner can withdraw all ETH to the predefined `withdrawAddress`.  
+
+This satisfies all the requirements using compiler 0.8.7 without adding extra contracts or dependencies.

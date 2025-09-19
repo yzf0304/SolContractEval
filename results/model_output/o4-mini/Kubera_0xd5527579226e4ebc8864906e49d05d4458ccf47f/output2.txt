@@ -1,0 +1,109 @@
+contract Kubera is SafeMath {
+    /* Public variables of the token */
+    string public standard    = "ERC20";
+    string public name        = "Kubera token";
+    string public symbol      = "KBR";
+    uint8  public decimals    = 0;
+    uint256 public totalSupply;
+    address public owner;
+
+    uint   public tokensSoldToInvestors = 0;
+    uint   public maxGoalInICO          = 2100000000;
+    uint256 public startTime            = 1510325999;  // after this time, ICO is over
+
+    bool   public burned;                    // to prevent double‐burn
+    address public tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+
+    mapping(address => uint256)                     public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+    event Burned(uint256 amount);
+
+    /**
+     * @notice Initializes the contract with the full supply assigned to the owner.
+     */
+    function Kubera() {
+        owner = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        balanceOf[owner] = 2205000000;
+        totalSupply       = 2205000000;
+    }
+
+    /**
+     * @notice Transfer your own tokens to another address.
+     */
+    function transfer(address _to, uint256 _value) 
+        returns (bool success) 
+    {
+        return transferFrom(msg.sender, _to, _value);
+    }
+
+    /**
+     * @notice Approve another address to spend tokens on your behalf.
+     */
+    function approve(address _spender, uint256 _value) 
+        returns (bool success) 
+    {
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Transfer tokens, enforcing ICO rules.
+     * @dev Pre-ICO only owner may move tokens out of his balance and must
+     *      track the total sold so as not to exceed maxGoalInICO.  After ICO,
+     *      behaves like a normal ERC20 transfer.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) 
+        returns (bool success) 
+    {
+        require(_to != 0x0);
+        require(_value > 0);
+
+        // ICO period: only owner may sell, and never exceed maxGoalInICO
+        if (block.timestamp < startTime) {
+            require(_from == owner);
+            uint256 allowedToSell = safeSub(maxGoalInICO, tokensSoldToInvestors);
+            if (_value > allowedToSell) {
+                _value = allowedToSell;
+            }
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, _value);
+        }
+
+        // standard balance and allowance checks
+        require(balanceOf[_from] >= _value);
+        if (_from != msg.sender) {
+            require(allowance[_from][msg.sender] >= _value);
+            allowance[_from][msg.sender] = safeSub(allowance[_from][msg.sender], _value);
+        }
+
+        balanceOf[_from] = safeSub(balanceOf[_from], _value);
+        balanceOf[_to]   = safeAdd(balanceOf[_to], _value);
+
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice After ICO has ended, burn the remaining owner tokens by
+     *         transferring them into the designated tokensHolder wallet.
+     * @dev Can only be called once by the owner, after startTime.
+     */
+    function burn() {
+        require(msg.sender == owner);
+        require(block.timestamp > startTime);
+        require(!burned);
+
+        uint256 remaining = balanceOf[owner];
+        // move all leftover from owner to tokensHolder
+        balanceOf[tokensHolder] = safeAdd(balanceOf[tokensHolder], remaining);
+        balanceOf[owner]        = 0;
+
+        Transfer(owner, tokensHolder, remaining);
+        burned = true;
+
+        Burned(remaining);
+    }
+}

@@ -1,0 +1,153 @@
+pragma solidity ^0.4.19;
+
+contract ForeignToken {
+    function balanceOf(address _owner) public constant returns (uint256);
+    function transfer(address _to, uint256 _value) public returns (bool);
+}
+
+contract ERC20Basic {
+    uint256 public totalSupply;
+    function balanceOf(address who) public constant returns (uint256);
+    function transfer(address to, uint256 value) public returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+
+contract ERC20 is ERC20Basic {
+    function allowance(address owner, address spender) public constant returns (uint256);
+    function transferFrom(address from, address to, uint256 value) public returns (bool);
+    function approve(address spender, uint256 value) public returns (bool);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+contract FaithCoin is ERC20 {
+    address public owner = msg.sender;
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+    uint256 public totalSupply = 25000000 * 10**8;
+    bool public distributionFinished = false;
+
+    event DistrFinished();
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    modifier canDistr() {
+        require(!distributionFinished);
+        _;
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        assert(msg.data.length >= size + 4);
+        _;
+    }
+
+    function FaithCoin() public {
+        owner = msg.sender;
+        balances[owner] = totalSupply;
+    }
+
+    function name() public constant returns (string) {
+        return "FaithCoin";
+    }
+
+    function symbol() public constant returns (string) {
+        return "FAITH";
+    }
+
+    function decimals() public constant returns (uint8) {
+        return 8;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    function getEthBalance(address _addr) constant public returns (uint) {
+        return _addr.balance;
+    }
+
+    function distributeFAITH(address[] addresses, uint256 _value, uint256 _ethbal)
+        onlyOwner
+        canDistr
+        public
+    {
+        for (uint i = 0; i < addresses.length; i++) {
+            address recipient = addresses[i];
+            if (recipient != address(0)
+                && getEthBalance(recipient) >= _ethbal
+                && balances[owner] >= _value
+            ) {
+                balances[owner] -= _value;
+                balances[recipient] += _value;
+                Transfer(owner, recipient, _value);
+            }
+        }
+    }
+
+    function balanceOf(address _ownerAddr) constant public returns (uint256) {
+        return balances[_ownerAddr];
+    }
+
+    function transfer(address _to, uint256 _amount)
+        onlyPayloadSize(2 * 32)
+        public
+        returns (bool success)
+    {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _amount);
+
+        balances[msg.sender] -= _amount;
+        balances[_to] += _amount;
+        Transfer(msg.sender, _to, _amount);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _amount)
+        onlyPayloadSize(3 * 32)
+        public
+        returns (bool success)
+    {
+        require(_to != address(0));
+        require(balances[_from] >= _amount);
+        require(allowed[_from][msg.sender] >= _amount);
+
+        balances[_from] -= _amount;
+        balances[_to] += _amount;
+        allowed[_from][msg.sender] -= _amount;
+        Transfer(_from, _to, _amount);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        require(_spender != address(0));
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _ownerAddr, address _spender) constant public returns (uint256) {
+        return allowed[_ownerAddr][_spender];
+    }
+
+    function finishDistribution() onlyOwner public returns (bool) {
+        distributionFinished = true;
+        DistrFinished();
+        return true;
+    }
+
+    function withdrawForeignTokens(address _tokenContract)
+        public
+        onlyOwner
+        returns (bool)
+    {
+        ForeignToken token = ForeignToken(_tokenContract);
+        uint256 amount = token.balanceOf(this);
+        require(amount > 0);
+        return token.transfer(owner, amount);
+    }
+}

@@ -1,0 +1,156 @@
+pragma solidity ^0.4.21;
+
+/**
+ * @title OperationalControl
+ * @notice This contract facilitates access and control for a game, with defined roles for Game Managers and Banker.
+ *         The Game Managers (Primary/Secondary) have universal control over all game elements but cannot withdraw funds.
+ *         The Banker can withdraw funds and adjust fees or prices.
+ * @dev The contract includes pausable and error handling functionalities to manage the state of the game.
+ */
+contract OperationalControl {
+    /// @dev Emitted when the contract is upgraded.
+    event ContractUpgrade(address newContract);
+
+    /// @notice The primary Game Manager.
+    address public gameManagerPrimary;
+    /// @notice The secondary Game Manager.
+    address public gameManagerSecondary;
+    /// @notice The Banker.
+    address public bankManager;
+
+    /// @notice Indicates whether the contract is paused.
+    bool public paused = false;
+    /// @notice Indicates whether the contract is in an error state.
+    bool public error = false;
+
+    /// @dev Restricts function to either primary or secondary Game Manager.
+    modifier onlyGameManager() {
+        require(
+            msg.sender == gameManagerPrimary ||
+            msg.sender == gameManagerSecondary
+        );
+        _;
+    }
+
+    /// @dev Restricts function to the Banker.
+    modifier onlyBanker() {
+        require(msg.sender == bankManager);
+        _;
+    }
+
+    /// @dev Restricts function to any operator (either Game Manager or Banker).
+    modifier anyOperator() {
+        require(
+            msg.sender == gameManagerPrimary ||
+            msg.sender == gameManagerSecondary ||
+            msg.sender == bankManager
+        );
+        _;
+    }
+
+    /// @dev Allows actions only when the contract is not paused.
+    modifier whenNotPaused() {
+        require(!paused);
+        _;
+    }
+
+    /// @dev Allows actions only when the contract is paused.
+    modifier whenPaused() {
+        require(paused);
+        _;
+    }
+
+    /// @dev Allows actions only when the contract is in an error state.
+    modifier whenError() {
+        require(error);
+        _;
+    }
+
+    /**
+     * @dev Constructor to set initial roles.
+     * @param _primaryGM Address of the primary Game Manager.
+     * @param _secondaryGM Address of the secondary Game Manager.
+     * @param _banker Address of the Banker.
+     */
+    function OperationalControl(
+        address _primaryGM,
+        address _secondaryGM,
+        address _banker
+    )
+        public
+    {
+        require(_primaryGM != address(0));
+        require(_secondaryGM != address(0));
+        require(_banker != address(0));
+
+        gameManagerPrimary = _primaryGM;
+        gameManagerSecondary = _secondaryGM;
+        bankManager = _banker;
+    }
+
+    /// @notice Assigns a new primary Game Manager.
+    /// @param _newGM The address of the new primary Game Manager.
+    function setPrimaryGameManager(address _newGM)
+        external
+        onlyGameManager
+    {
+        require(_newGM != address(0));
+        gameManagerPrimary = _newGM;
+    }
+
+    /// @notice Assigns a new secondary Game Manager.
+    /// @param _newGM The address of the new secondary Game Manager.
+    function setSecondaryGameManager(address _newGM)
+        external
+        onlyGameManager
+    {
+        require(_newGM != address(0));
+        gameManagerSecondary = _newGM;
+    }
+
+    /// @notice Assigns a new Banker.
+    /// @param _newBK The address of the new Banker.
+    function setBanker(address _newBK)
+        external
+        onlyGameManager
+    {
+        require(_newBK != address(0));
+        bankManager = _newBK;
+    }
+
+    /// @notice Pauses the contract. Can be called by a Game Manager when not paused.
+    function pause()
+        external
+        onlyGameManager
+        whenNotPaused
+    {
+        paused = true;
+    }
+
+    /// @notice Unpauses the contract. Can be called by a Game Manager when paused.
+    function unpause()
+        public
+        onlyGameManager
+        whenPaused
+    {
+        paused = false;
+    }
+
+    /// @notice Marks the contract as errored. Can be called by a Game Manager when paused.
+    function hasError()
+        public
+        onlyGameManager
+        whenPaused
+    {
+        error = true;
+    }
+
+    /// @notice Clears the error state. Can be called by a Game Manager when paused.
+    function noError()
+        public
+        onlyGameManager
+        whenPaused
+    {
+        error = false;
+    }
+}

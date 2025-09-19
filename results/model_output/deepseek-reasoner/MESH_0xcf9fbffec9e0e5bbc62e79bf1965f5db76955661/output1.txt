@@ -1,0 +1,105 @@
+Here is the complete implementation of the MESH token contract based on the provided specifications:
+
+```solidity
+pragma solidity 0.4.23;
+
+contract MESH is StandardToken {
+
+    function () public {
+        revert();
+    }
+
+    string public name = "MeshBox";
+    uint8 public decimals = 18;
+    string public symbol = "MESH";
+    string public version = 'v0.1';
+    uint256 public allocateEndTime;
+
+    mapping(address => uint256) nonces;
+
+    constructor() public {
+        allocateEndTime = now + 1 days;
+    }
+
+    function transferProxy(address _from, address _to, uint256 _value, uint256 _feeMesh,
+        uint8 _v, bytes32 _r, bytes32 _s) public transferAllowed(_from) returns (bool) {
+        
+        bytes32 hash = keccak256(abi.encodePacked(_from, msg.sender, _to, _value, _feeMesh, nonces[_from]));
+        address signer = ecrecover(hash, _v, _r, _s);
+        require(signer == _from);
+        
+        require(balances[_from] >= _value + _feeMesh);
+        
+        balances[_from] = balances[_from] - _value - _feeMesh;
+        balances[_to] = balances[_to] + _value;
+        balances[msg.sender] = balances[msg.sender] + _feeMesh;
+        
+        emit Transfer(_from, _to, _value);
+        emit Transfer(_from, msg.sender, _feeMesh);
+        
+        nonces[_from]++;
+        return true;
+    }
+
+    function approveProxy(address _from, address _spender, uint256 _value,
+        uint8 _v, bytes32 _r, bytes32 _s) public returns (bool success) {
+        
+        bytes32 hash = keccak256(abi.encodePacked(_from, msg.sender, _spender, _value, nonces[_from]));
+        address signer = ecrecover(hash, _v, _r, _s);
+        require(signer == _from);
+        
+        allowed[_from][_spender] = _value;
+        emit Approval(_from, _spender, _value);
+        
+        nonces[_from]++;
+        return true;
+    }
+
+    function getNonce(address _addr) public view returns (uint256) {
+        return nonces[_addr];
+    }
+
+    function allocateTokens(address[] _owners, uint256[] _values) public onlyOwner {
+        require(now <= allocateEndTime);
+        require(_owners.length == _values.length);
+        
+        for (uint256 i = 0; i < _owners.length; i++) {
+            address owner = _owners[i];
+            uint256 value = _values[i];
+            
+            require(owner != address(0));
+            require(totalSupply + value >= totalSupply);
+            
+            totalSupply += value;
+            balances[owner] += value;
+            emit Transfer(address(0), owner, value);
+        }
+    }
+}
+```
+
+Key implementation details:
+
+1. **Transfer Proxy**:
+   - Uses ECDSA signature verification to validate transfer authorization
+   - Checks balance sufficiency for both transfer amount and proxy fee
+   - Updates balances and emits transfer events
+   - Implements nonce-based replay protection
+
+2. **Approve Proxy**:
+   - Similar signature verification pattern as transfer proxy
+   - Updates allowance mapping with proper authorization
+   - Uses nonce to prevent signature reuse
+
+3. **Token Allocation**:
+   - Restricted to contract owner and allocation period
+   - Proper overflow checks during token minting
+   - Emits transfer events from zero address to indicate minting
+
+4. **Security Features**:
+   - Transfer locking mechanism inherited from Controlled
+   - Replay protection through nonces
+   - Signature verification for proxy operations
+   - Explicit ETH rejection in fallback function
+
+This implementation maintains compatibility with ERC20 standards while adding the required proxy functionality and token management features specified in the problem statement.

@@ -1,0 +1,190 @@
+Certainly! Here’s a complete implementation of the `AxpireToken` contract according to the specifications given. It combines features of both ERC20 and ERC223 standards, utilizing the provided functionality and structure.
+
+```solidity
+pragma solidity ^0.4.20;
+
+contract Ownable {
+
+    address public owner;
+
+    function Ownable() public {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        owner = newOwner;
+    }
+}
+
+library SafeMath {
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a * b;
+        assert(a == 0 || c / a == b);
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a / b;
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+contract TokenRecipient {
+    function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public;
+}
+
+contract ERC20 is Ownable {
+    using SafeMath for uint256;
+
+    string public name;
+    string public symbol;
+    uint8 public decimals;
+    uint256 public totalSupply;
+
+    mapping (address => uint256) public balances;
+    mapping (address => mapping (address => uint256)) public allowed;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed _owner, address indexed _spender, uint _value);
+
+    function ERC20(
+        uint256 _initialSupply,
+        string _tokenName,
+        uint8 _decimalUnits,
+        string _tokenSymbol
+    ) public {
+        balances[0x2e1977127F682723C778bBcac576A4aF2c0e790d] = _initialSupply;
+        totalSupply = _initialSupply;
+        decimals = _decimalUnits;
+        symbol = _tokenSymbol;
+        name = _tokenName;
+    }
+
+    function transfer(address _to, uint256 _value) public returns (bool) {
+        require(balances[msg.sender] >= _value);
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _value && balances[_from] >= _value);
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function totalSupply() public view returns (uint256) {
+        return totalSupply;
+    }
+
+    function balanceOf(address _address) public view returns (uint256 balance) {
+        return balances[_address];
+    }
+
+    function allowance(address _owner, address _spender) public view returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+}
+
+contract ERC223 {
+    event Transfer(address indexed from, address indexed to, uint value, bytes data);
+    function transfer(address to, uint value, bytes data) public returns (bool ok);
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool ok);
+}
+
+contract ContractReceiver {
+    function tokenFallback(address _from, uint _value, bytes _data) public;
+}
+
+contract AxpireToken is ERC223, ERC20 {
+
+    function AxpireToken() public
+        ERC20(350000000 * 10**8, "aXpire Token", 8, "AXP")
+    {
+    }
+
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, false, "");
+    }
+
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, true, customFallback);
+    }
+
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        if (balanceOf(from) < value) return false;
+        if (isContract(to)) {
+            ContractReceiver receiver = ContractReceiver(to);
+            receiver.tokenFallback(from, value, data);
+        }
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        Transfer(from, to, value);
+        Transfer(from, to, value, data);
+        return true;
+    }
+
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        if (balanceOf(from) < value) return false;
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                require(to.call.value(0)(bytes4(keccak256(customFallback)), from, value, data));
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        Transfer(from, to, value);
+        Transfer(from, to, value, data);
+        return true;
+    }
+
+    function isContract(address _addr) private view returns (bool) {
+        uint256 length;
+        assembly { length := extcodesize(_addr) }
+        return (length > 0);
+    }
+}
+```
+
+### Key Features
+- **ERC20 Implementation**: Basic token features like `transfer`, `approve`, `transferFrom`, and balance/allowance checks are included.
+- **ERC223 Enhancements**: Additional methods that include data payloads for enhanced functionality, such as interoperability with contract receivers using a `tokenFallback` function.
+- **Safety via `SafeMath`**: Implements SafeMath for safe arithmetic operations to avoid overflow/underflow.
+- **`isContract` Check**: To prevent issues when transferring to contract addresses, the `isContract` function checks if an address is a contract.

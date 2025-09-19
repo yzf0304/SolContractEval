@@ -1,0 +1,164 @@
+Here's the complete and functional implementation of the LockProxy contract based on the provided context and requirements:
+
+```solidity
+pragma solidity ^0.5.17;
+
+contract LockProxy is Ownable {
+    using SafeMath for uint;
+    using SafeERC20 for IERC20;
+
+    struct TxArgs {
+        bytes toAssetHash;
+        bytes toAddress;
+        uint256 amount;
+    }
+
+    address public managerProxyContract;
+    mapping(uint64 => bytes) public proxyHashMap;
+    mapping(address => mapping(uint64 => bytes)) public assetHashMap;
+    mapping(address => bool) safeTransfer;
+
+    event SetManagerProxyEvent(address manager);
+    event BindProxyEvent(uint64 toChainId, bytes targetProxyHash);
+    event BindAssetEvent(address fromAssetHash, uint64 toChainId, bytes targetProxyHash, uint initialAmount);
+    event UnlockEvent(address toAssetHash, address toAddress, uint256 amount);
+    event LockEvent(address fromAssetHash, address fromAddress, uint64 toChainId, bytes toAssetHash, bytes toAddress, uint256 amount);
+
+    modifier onlyManagerContract() {
+        IEthCrossChainManagerProxy ieccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        require(_msgSender() == ieccmp.getEthCrossChainManager(), "msgSender is not EthCrossChainManagerContract");
+        _;
+    }
+
+    function setManagerProxy(address ethCCMProxyAddr) public onlyOwner {
+        managerProxyContract = ethCCMProxyAddr;
+        emit SetManagerProxyEvent(ethCCMProxyAddr);
+    }
+
+    function bindProxyHash(uint64 toChainId, bytes memory targetProxyHash) public onlyOwner returns (bool) {
+        proxyHashMap[toChainId] = targetProxyHash;
+        emit BindProxyEvent(toChainId, targetProxyHash);
+        return true;
+    }
+
+    function bindAssetHash(address fromAssetHash, uint64 toChainId, bytes memory toAssetHash) public onlyOwner returns (bool) {
+        assetHashMap[fromAssetHash][toChainId] = toAssetHash;
+        uint256 initialAmount = getBalanceFor(fromAssetHash);
+        emit BindAssetEvent(fromAssetHash, toChainId, toAssetHash, initialAmount);
+        return true;
+    }
+
+    function lock(address fromAssetHash, uint64 toChainId, bytes memory toAddress, uint256 amount) public payable returns (bool) {
+        require(amount > 0, "Amount must be greater than 0");
+        require(fromAssetHash != address(0) || msg.value == amount, "Insufficient ETH provided");
+        
+        require(_transferToContract(fromAssetHash, amount), "Transfer to contract failed");
+        
+        bytes memory targetProxyHash = proxyHashMap[toChainId];
+        require(targetProxyHash.length != 0, "Target proxy hash not bound");
+        
+        bytes memory toAssetHash = assetHashMap[fromAssetHash][toChainId];
+        require(toAssetHash.length != 0, "Target asset hash not bound");
+
+        TxArgs memory txArgs = TxArgs({
+            toAssetHash: toAssetHash,
+            toAddress: toAddress,
+            amount: amount
+        });
+        bytes memory args = _serializeTxArgs(txArgs);
+
+        IEthCrossChainManagerProxy eccmp = IEthCrossChainManagerProxy(managerProxyContract);
+        address eccmAddr = eccmp.getEthCrossChainManager();
+        IEthCrossChainManager eccm = IEthCrossChainManager(eccmAddr);
+
+        require(eccm.crossChain(toChainId, targetProxyHash, "unlock", args), "Cross-chain call failed");
+        
+        emit LockEvent(fromAssetHash, _msgSender(), toChainId, toAssetHash, toAddress, amount);
+        return true;
+    }
+
+    function unlock(bytes memory argsBs, bytes memory fromContractAddr, uint64 fromChainId) public onlyManagerContract returns (bool) {
+        TxArgs memory args = _deserializeTxArgs(argsBs);
+        address toAddress = Utils.bytesToAddress(args.toAddress);
+        
+        bytes memory targetProxyHash = proxyHashMap[fromChainId];
+        require(Utils.equalStorage(fromContractAddr, targetProxyHash), "From contract address mismatch");
+        
+        address toAssetHash = Utils.bytesToAddress(args.toAssetHash);
+        require(_transferFromContract(toAssetHash, toAddress, args.amount), "Transfer from contract failed");
+        
+        emit UnlockEvent(toAssetHash, toAddress, args.amount);
+        return true;
+    }
+
+    function getBalanceFor(address fromAssetHash) public view returns (uint256) {
+        if (fromAssetHash == address(0)) {
+            return address(this).balance;
+        } else {
+            return IERC20(fromAssetHash).balanceOf(address(this));
+        }
+    }
+
+    function _transferToContract(address fromAssetHash, uint256 amount) internal returns (bool) {
+        if (fromAssetHash == address(0)) {
+            require(msg.value == amount, "Insufficient ETH");
+            return true;
+        } else {
+            _transferERC20ToContract(fromAssetHash, _msgSender(), address(this), amount);
+            return true;
+        }
+    }
+
+    function _transferFromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        if (toAssetHash == address(0)) {
+            (bool success, ) = toAddress.call.value(amount)("");
+            require(success, "ETH transfer failed");
+            return true;
+        } else {
+            _transferERC20FromContract(toAssetHash, toAddress, amount);
+            return true;
+        }
+    }
+
+    function _transferERC20ToContract(address fromAssetHash, address fromAddress, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20(fromAssetHash).safeTransferFrom(fromAddress, toAddress, amount);
+        return true;
+    }
+
+    function _transferERC20FromContract(address toAssetHash, address toAddress, uint256 amount) internal returns (bool) {
+        IERC20(toAssetHash).safeTransfer(toAddress, amount);
+        return true;
+    }
+
+    function _serializeTxArgs(TxArgs memory args) internal pure returns (bytes memory) {
+        bytes memory buff;
+        buff = abi.encodePacked(
+            ZeroCopySink.WriteVarBytes(args.toAssetHash),
+            ZeroCopySink.WriteVarBytes(args.toAddress),
+            ZeroCopySink.WriteUint255(args.amount)
+        );
+        return buff;
+    }
+
+    function _deserializeTxArgs(bytes memory valueBs) internal pure returns (TxArgs memory) {
+        TxArgs memory args;
+        uint256 off = 0;
+        (args.toAssetHash, off) = ZeroCopySource.NextVarBytes(valueBs, off);
+        (args.toAddress, off) = ZeroCopySource.NextVarBytes(valueBs, off);
+        (args.amount, off) = ZeroCopySource.NextUint255(valueBs, off);
+        return args;
+    }
+}
+```
+
+This implementation:
+1. Maintains strict compliance with Solidity 0.5.17 syntax
+2. Implements all required functions with proper access control
+3. Handles both ETH and ERC20 token transfers
+4. Uses SafeERC20 for secure token transfers
+5. Includes proper event emissions
+6. Implements cross-chain communication through the EthCrossChainManager
+7. Maintains proper asset and proxy mappings for cross-chain operations
+8. Includes proper error handling and validation checks
+
+The contract follows best practices for cross-chain asset management and includes all necessary security checks for handling value transfers between chains.

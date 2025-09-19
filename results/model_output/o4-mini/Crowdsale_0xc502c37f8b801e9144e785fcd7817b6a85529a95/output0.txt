@@ -1,0 +1,158 @@
+pragma solidity ^0.4.18;
+
+contract Crowdsale is Ownable {
+  using SafeMath for uint256;
+
+  // The token being sold
+  DragonToken public token;
+
+  // Address of token reserves
+  address public tokenReserve;
+
+  // Crowdsale start and end timestamps (inclusive)
+  uint256 public startTime;
+  uint256 public endTime;
+
+  // Address where collected funds will be forwarded
+  address public wallet;
+
+  // Token price in wei (wei per token unit)
+  uint256 public rate;
+
+  // Amount of wei raised
+  uint256 public weiRaised;
+
+  // Total tokens sold
+  uint256 public tokensSold;
+
+  // Purchaser => token balance locked
+  mapping(address => uint256) balances;
+  // Purchaser => unlock timestamp
+  mapping(address => uint256) releaseTime;
+
+  event TokenPurchase(
+    address indexed purchaser,
+    address indexed beneficiary,
+    uint256 value,
+    uint256 amount,
+    uint256 releaseTime
+  );
+
+  event EndTimeUpdated(uint256 previousEndTime, uint256 newEndTime);
+  event DragonPriceUpdated(uint256 previousRate, uint256 newRate);
+  event TokenReleased(address indexed holder, uint256 amount);
+
+  function Crowdsale() public {
+    // Override owner to predefined address
+    owner = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    startTime = now;
+    endTime = 1521187200;
+    rate = 5000000000000000;        // wei per token
+    wallet = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    token = DragonToken(0x814F67fA286f7572B041D041b1D99b432c9155Ee);
+    tokenReserve = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+  }
+
+  // Fallback: buy tokens for sender
+  function () external payable {
+    buyTokens(msg.sender);
+  }
+
+  // Purchase tokens for beneficiary
+  function buyTokens(address beneficiary) public payable {
+    require(beneficiary != address(0));
+    require(validPurchase());
+
+    uint256 weiAmount = msg.value;
+    // calculate token amount to assign
+    uint256 tokenAmount = getTokenAmount(weiAmount);
+
+    // update state
+    weiRaised = weiRaised.add(weiAmount);
+    tokensSold = tokensSold.add(tokenAmount);
+
+    // assign tokens and set lock
+    uint256 lockedUntil = assignTokens(beneficiary, tokenAmount);
+
+    TokenPurchase(msg.sender, beneficiary, weiAmount, tokenAmount, lockedUntil);
+
+    // forward Ether to wallet
+    forwardFunds();
+  }
+
+  // Has crowdsale ended?
+  function hasEnded() public view returns (bool) {
+    return now > endTime;
+  }
+
+  // Calculate token amount based on wei sent
+  function getTokenAmount(uint256 weiAmount) internal view returns (uint256) {
+    return weiAmount.div(rate);
+  }
+
+  // Send collected funds to wallet
+  function forwardFunds() internal {
+    wallet.transfer(msg.value);
+  }
+
+  // Check if purchase is valid
+  function validPurchase() internal view returns (bool) {
+    bool withinPeriod = now >= startTime && now <= endTime;
+    bool nonZeroPurchase = msg.value != 0;
+    return withinPeriod && nonZeroPurchase;
+  }
+
+  // Owner can update endTime (must be in future and greater than current)
+  function updateEndTime(uint256 newTime) onlyOwner external {
+    require(newTime > endTime);
+    require(newTime >= now);
+    uint256 previous = endTime;
+    endTime = newTime;
+    EndTimeUpdated(previous, newTime);
+  }
+
+  // Owner can update token price
+  function updateDragonPrice(uint256 weiAmount) onlyOwner external {
+    require(weiAmount > 0);
+    uint256 previous = rate;
+    rate = weiAmount;
+    DragonPriceUpdated(previous, weiAmount);
+  }
+
+  // Internal: assign tokens to beneficiary and set release time
+  function assignTokens(address beneficiary, uint256 amount) private returns (uint256) {
+    // accumulate balance
+    balances[beneficiary] = balances[beneficiary].add(amount);
+    // set the lock to endTime (no tokens released before sale end)
+    releaseTime[beneficiary] = endTime;
+    return endTime;
+  }
+
+  // View locked token balance of an address
+  function balanceOf(address _owner) public view returns (uint256) {
+    return balances[_owner];
+  }
+
+  // View unlock timestamp of an address
+  function unlockTime(address _owner) public view returns (uint256) {
+    return releaseTime[_owner];
+  }
+
+  // Release vested tokens after lock period
+  function releaseDragonTokens() public {
+    uint256 lockedUntil = releaseTime[msg.sender];
+    require(lockedUntil > 0);
+    require(now >= lockedUntil);
+
+    uint256 amount = balances[msg.sender];
+    require(amount > 0);
+
+    // zero balance before transfer to prevent re-entrancy
+    balances[msg.sender] = 0;
+
+    // transfer tokens from reserve
+    require(token.transferFrom(tokenReserve, msg.sender, amount));
+
+    TokenReleased(msg.sender, amount);
+  }
+}

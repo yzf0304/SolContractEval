@@ -1,0 +1,210 @@
+```solidity
+pragma solidity ^0.4.26;
+
+contract ERC223Interface {
+    uint public totalSupply_;
+    function balanceOf(address who) public view returns (uint);
+    function transfer(address to, uint value) public returns (bool);
+    function transfer(address to, uint value, bytes data) public returns (bool);
+    event Transfer(address indexed from, address indexed to, uint value, bytes data);
+}
+
+contract ContractReceiver {
+    function tokenFallback(address _from, uint _value, bytes _data) public {
+        // default implementation does nothing
+    }
+}
+
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) { return 0; }
+        uint256 c = a * b;
+        require(c / a == b, "mul overflow");
+        return c;
+    }
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "div zero");
+        return a / b;
+    }
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "sub underflow");
+        return a - b;
+    }
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "add overflow");
+        return c;
+    }
+}
+
+contract GCUToken is ERC223Interface {
+    using SafeMath for uint256;
+
+    /* Contract Constants */
+    string public constant _name = "Global Currency Unit";
+    string public constant _symbol = "GCU";
+    uint8 public constant _decimals = 18;
+
+    /* Contract Variables */
+    address public owner;
+    uint256 public totalSupply_;
+
+    mapping(address => uint256) public balances;
+    mapping(address => mapping (address => uint256)) public allowed;
+
+    /*88 888 888 000*/
+    /* Constructor initializes the owner's balance and the supply  */
+    constructor (uint256 _amount, address _initialWallet) public {
+        owner = _initialWallet;
+        totalSupply_ = _amount.mul(uint256(10) ** _decimals);
+        balances[_initialWallet] = totalSupply_;
+
+        emit Transfer(address(0), _initialWallet, totalSupply_);
+    }
+
+    /* ERC20 Events */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed from, address indexed to, uint256 value);
+
+    /* ERC223 Events (re-declared) */
+    event Transfer(address indexed from, address indexed to, uint value, bytes data);
+
+    /**
+     * @notice Returns the total number of tokens in existence.
+     */
+    function totalSupply() public view returns (uint256) {
+        return totalSupply_;
+    }
+
+    /**
+     * @notice Returns the balance of the specified address.
+     */
+    function balanceOf(address _address) public view returns (uint256 balance) {
+        return balances[_address];
+    }
+
+    /**
+     * @notice Transfers tokens (ERC20-style) without data.
+     */
+    function transfer(address _to, uint _value) public returns (bool success) {
+        bytes memory empty;
+        empty = "";
+        if (isContract(_to)) {
+            return transferToContract(_to, _value, empty);
+        } else {
+            return transferToAddress(_to, _value, empty);
+        }
+    }
+
+    /**
+     * @notice Transfers tokens on behalf of another address.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_value <= balances[_from], "insufficient balance");
+        require(_value <= allowed[_from][msg.sender], "allowance exceeded");
+
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to]   = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Approves the passed address to spend the specified amount on behalf of msg.sender.
+     */
+    function approve(address _spender, uint256 _allowance) public returns (bool success) {
+        allowed[msg.sender][_spender] = _allowance;
+        emit Approval(msg.sender, _spender, _allowance);
+        return true;
+    }
+
+    /**
+     * @notice Returns the remaining number of tokens that spender can spend on behalf of owner.
+     */
+    function allowance(address _owner, address _spender) public view returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    /**
+     * @notice Returns the token name.
+     */
+    function name() public view returns (string) {
+        return _name;
+    }
+
+    /**
+     * @notice Returns the token symbol.
+     */
+    function symbol() public view returns (string) {
+        return _symbol;
+    }
+
+    /**
+     * @notice Returns the number of decimals.
+     */
+    function decimals() public view returns (uint8) {
+        return _decimals;
+    }
+
+    /**
+     * @notice Transfers tokens (ERC223-style) with data.
+     */
+    function transfer(address _to, uint _value, bytes _data) public returns (bool success) {
+        if (isContract(_to)) {
+            return transferToContract(_to, _value, _data);
+        } else {
+            return transferToAddress(_to, _value, _data);
+        }
+    }
+
+    /**
+     * @dev Internal: transfer to a normal address.
+     */
+    function transferToAddress(address _to, uint _value, bytes _data) internal returns (bool success) {
+        require(_value <= balances[msg.sender], "insufficient balance");
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to]        = balances[_to].add(_value);
+
+        // ERC20-style event
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @dev Internal: transfer to a contract address, invoke tokenFallback.
+     */
+    function transferToContract(address _to, uint _value, bytes _data) internal returns (bool success) {
+        require(_value <= balances[msg.sender], "insufficient balance");
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to]        = balances[_to].add(_value);
+
+        // notify receiver
+        ContractReceiver receiver = ContractReceiver(_to);
+        receiver.tokenFallback(msg.sender, _value, _data);
+
+        // ERC223-style event with data
+        emit Transfer(msg.sender, _to, _value, _data);
+        return true;
+    }
+
+    /**
+     * @dev Internal: check if address is a contract.
+     */
+    function isContract(address _address) internal view returns (bool is_contract) {
+        uint256 length;
+        assembly { length := extcodesize(_address) }
+        return (length > 0);
+    }
+
+    /**
+     * @dev Prevents sending Ether to this contract.
+     */
+    function () public {
+        // no payable => reject any ETH
+    }
+}
+```

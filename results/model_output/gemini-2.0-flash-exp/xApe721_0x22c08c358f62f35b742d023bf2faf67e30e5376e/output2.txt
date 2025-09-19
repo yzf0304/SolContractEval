@@ -1,0 +1,851 @@
+```solidity
+pragma solidity ^0.8.10;
+
+// Below are some contexts potentially relevant to contract code generation.
+
+/**
+ *Submitted for verification at Etherscan.io on 2022-01-15
+*/
+// SPDX-License-Identifier: AGPL-3.0-only
+/// @notice Modern, minimalist, and gas efficient ERC-721 implementation.
+/// @author Solmate (https://github.com/Rari-Capital/solmate/blob/main/src/tokens/ERC721.sol)
+/// @dev Note that balanceOf does not revert if passed the zero address, in defiance of the ERC.
+
+abstract contract ERC721 {
+    /*///////////////////////////////////////////////////////////////
+                                 EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event Transfer(address indexed from, address indexed to, uint256 indexed id);
+
+    event Approval(address indexed owner, address indexed spender, uint256 indexed id);
+
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+    /*///////////////////////////////////////////////////////////////
+                          METADATA STORAGE/LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    string public name;
+
+    string public symbol;
+
+    function tokenURI(uint256 id) public view virtual returns (string memory);
+
+    /*///////////////////////////////////////////////////////////////
+                            ERC721 STORAGE                        
+    //////////////////////////////////////////////////////////////*/
+
+    mapping(address => uint256) public balanceOf;
+
+    mapping(uint256 => address) public ownerOf;
+
+    mapping(uint256 => address) public getApproved;
+
+    mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    /*///////////////////////////////////////////////////////////////
+                              CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                              ERC721 LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function approve(address spender, uint256 id) public virtual {
+        address owner = ownerOf[id];
+
+        require(msg.sender == owner || isApprovedForAll[owner][msg.sender], "NOT_AUTHORIZED");
+
+        getApproved[id] = spender;
+
+        emit Approval(owner, spender, id);
+    }
+
+    function setApprovalForAll(address operator, bool approved) public virtual {
+        isApprovedForAll[msg.sender][operator] = approved;
+
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 id
+    ) public virtual {
+        require(from == ownerOf[id], "WRONG_FROM");
+
+        require(to != address(0), "INVALID_RECIPIENT");
+
+        require(
+            msg.sender == from || msg.sender == getApproved[id] || isApprovedForAll[from][msg.sender],
+            "NOT_AUTHORIZED"
+        );
+
+        // Underflow of the sender's balance is impossible because we check for
+        // ownership above and the recipient's balance can't realistically overflow.
+        unchecked {
+            balanceOf[from]--;
+
+            balanceOf[to]++;
+        }
+
+        ownerOf[id] = to;
+
+        delete getApproved[id];
+
+        emit Transfer(from, to, id);
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id
+    ) public virtual {
+        transferFrom(from, to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, from, id, "") ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id,
+        bytes memory data
+    ) public virtual {
+        transferFrom(from, to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, from, id, data) ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                              ERC165 LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function supportsInterface(bytes4 interfaceId) public pure virtual returns (bool) {
+        return
+            interfaceId == 0x01ffc9a7 || // ERC165 Interface ID for ERC165
+            interfaceId == 0x80ac58cd || // ERC165 Interface ID for ERC721
+            interfaceId == 0x5b5e139f; // ERC165 Interface ID for ERC721Metadata
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                       INTERNAL MINT/BURN LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function _mint(address to, uint256 id) internal virtual {
+        require(to != address(0), "INVALID_RECIPIENT");
+
+        require(ownerOf[id] == address(0), "ALREADY_MINTED");
+
+        // Counter overflow is incredibly unrealistic.
+        unchecked {
+            balanceOf[to]++;
+        }
+
+        ownerOf[id] = to;
+
+        emit Transfer(address(0), to, id);
+    }
+
+    function _burn(uint256 id) internal virtual {
+        address owner = ownerOf[id];
+
+        require(ownerOf[id] != address(0), "NOT_MINTED");
+
+        // Ownership check above ensures no underflow.
+        unchecked {
+            balanceOf[owner]--;
+        }
+
+        delete ownerOf[id];
+
+        delete getApproved[id];
+
+        emit Transfer(owner, address(0), id);
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                       INTERNAL SAFE MINT LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function _safeMint(address to, uint256 id) internal virtual {
+        _mint(to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), id, "") ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    function _safeMint(
+        address to,
+        uint256 id,
+        bytes memory data
+    ) internal virtual {
+        _mint(to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), id, data) ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+}
+
+/// @notice A generic interface for a contract which properly accepts ERC721 tokens.
+/// @author Solmate (https://github.com/Rari-Capital/solmate/blob/main/src/tokens/ERC721.sol)
+
+interface ERC721TokenReceiver {
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 id,
+        bytes calldata data
+    ) external returns (bytes4);
+}
+
+// File @rari-capital/solmate/src/utils/[email protected]
+/// @notice Safe ETH and ERC20 transfer library that gracefully handles missing return values.
+/// @author Solmate (https://github.com/Rari-Capital/solmate/blob/main/src/utils/SafeTransferLib.sol)
+/// @author Modified from Gnosis (https://github.com/gnosis/gp-v2-contracts/blob/main/src/contracts/libraries/GPv2SafeERC20.sol)
+/// @dev Use with caution! Some functions in this library knowingly create dirty bits at the destination of the free memory pointer.
+
+library SafeTransferLib {
+    /*///////////////////////////////////////////////////////////////
+                            ETH OPERATIONS
+    //////////////////////////////////////////////////////////////*/
+
+    function safeTransferETH(address to, uint256 amount) internal {
+        bool callStatus;
+
+        assembly {
+            // Transfer the ETH and store if it succeeded or not.
+            callStatus := call(gas(), to, amount, 0, 0, 0, 0)
+        }
+
+        require(callStatus, "ETH_TRANSFER_FAILED");
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                           ERC20 OPERATIONS
+    //////////////////////////////////////////////////////////////*/
+
+    function safeTransferFrom(
+        ERC20 token,
+        address from,
+        address to,
+        uint256 amount
+    ) internal {
+        bool callStatus;
+
+        assembly {
+            // Get a pointer to some free memory.
+            let freeMemoryPointer := mload(0x40)
+
+            // Write the abi-encoded calldata to memory piece by piece:
+            mstore(freeMemoryPointer, 0x23b872dd00000000000000000000000000000000000000000000000000000000) // Begin with the function selector.
+            mstore(add(freeMemoryPointer, 4), and(from, 0xffffffffffffffffffffffffffffffffffffffff)) // Mask and append the "from" argument.
+            mstore(add(freeMemoryPointer, 36), and(to, 0xffffffffffffffffffffffffffffffffffffffff)) // Mask and append the "to" argument.
+            mstore(add(freeMemoryPointer, 68), amount) // Finally append the "amount" argument. No mask as it's a full 32 byte value.
+
+            // Call the token and store if it succeeded or not.
+            // We use 100 because the calldata length is 4 + 32 * 3.
+            callStatus := call(gas(), token, 0, freeMemoryPointer, 100, 0, 0)
+        }
+
+        require(didLastOptionalReturnCallSucceed(callStatus), "TRANSFER_FROM_FAILED");
+    }
+
+    function safeTransfer(
+        ERC20 token,
+        address to,
+        uint256 amount
+    ) internal {
+        bool callStatus;
+
+        assembly {
+            // Get a pointer to some free memory.
+            let freeMemoryPointer := mload(0x40)
+
+            // Write the abi-encoded calldata to memory piece by piece:
+            mstore(freeMemoryPointer, 0xa9059cbb00000000000000000000000000000000000000000000000000000000) // Begin with the function selector.
+            mstore(add(freeMemoryPointer, 4), and(to, 0xffffffffffffffffffffffffffffffffffffffff)) // Mask and append the "to" argument.
+            mstore(add(freeMemoryPointer, 36), amount) // Finally append the "amount" argument. No mask as it's a full 32 byte value.
+
+            // Call the token and store if it succeeded or not.
+            // We use 68 because the calldata length is 4 + 32 * 2.
+            callStatus := call(gas(), token, 0, freeMemoryPointer, 68, 0, 0)
+        }
+
+        require(didLastOptionalReturnCallSucceed(callStatus), "TRANSFER_FAILED");
+    }
+
+    function safeApprove(
+        ERC20 token,
+        address to,
+        uint256 amount
+    ) internal {
+        bool callStatus;
+
+        assembly {
+            // Get a pointer to some free memory.
+            let freeMemoryPointer := mload(0x40)
+
+            // Write the abi-encoded calldata to memory piece by piece:
+            mstore(freeMemoryPointer, 0x095ea7b300000000000000000000000000000000000000000000000000000000) // Begin with the function selector.
+            mstore(add(freeMemoryPointer, 4), and(to, 0xffffffffffffffffffffffffffffffffffffffff)) // Mask and append the "to" argument.
+            mstore(add(freeMemoryPointer, 36), amount) // Finally append the "amount" argument. No mask as it's a full 32 byte value.
+
+            // Call the token and store if it succeeded or not.
+            // We use 68 because the calldata length is 4 + 32 * 2.
+            callStatus := call(gas(), token, 0, freeMemoryPointer, 68, 0, 0)
+        }
+
+        require(didLastOptionalReturnCallSucceed(callStatus), "APPROVE_FAILED");
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                         INTERNAL HELPER LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function didLastOptionalReturnCallSucceed(bool callStatus) private pure returns (bool success) {
+        assembly {
+            // Get how many bytes the call returned.
+            let returnDataSize := returndatasize()
+
+            // If the call reverted:
+            if iszero(callStatus) {
+                // Copy the revert message into memory.
+                returndatacopy(0, 0, returnDataSize)
+
+                // Revert with the same message.
+                revert(0, returnDataSize)
+            }
+
+            switch returnDataSize
+            case 32 {
+                // Copy the return data into memory.
+                returndatacopy(0, 0, returnDataSize)
+
+                // Set success to whether it returned true.
+                success := iszero(iszero(mload(0)))
+            }
+            case 0 {
+                // There was no return data.
+                success := 1
+            }
+            default {
+                // It returned some malformed input.
+                success := 0
+            }
+        }
+    }
+}
+
+// File contracts/Ownable.sol
+
+abstract contract Ownable {
+  address internal _owner;
+
+  event OwnershipTransferred(
+    address indexed previousOwner,
+    address indexed newOwner
+  );
+
+  constructor() {
+    _owner = msg.sender;
+  }
+
+  function owner() external view returns (address) {
+    return _owner;
+  }
+
+  function transferOwnership(address _newOwner) external {
+    if (msg.sender != _owner) revert NotOwner();
+
+    _owner = _newOwner;
+    emit OwnershipTransferred(_owner, _newOwner);
+  }
+
+  function renounceOwnership() public {
+    if (msg.sender != _owner) revert NotOwner();
+
+    _owner = address(0);
+    emit OwnershipTransferred(_owner, address(0));
+  }
+
+  error NotOwner();
+}
+
+// File contracts/IERC721.sol
+/**
+ * @dev Required interface of an ERC721 compliant contract.
+ */
+
+interface IERC721 {
+  /**
+   * @dev Emitted when `tokenId` token is transferred from `from` to `to`.
+   */
+  event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+
+  /**
+   * @dev Emitted when `owner` enables `approved` to manage the `tokenId` token.
+   */
+  event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+
+  /**
+   * @dev Emitted when `owner` enables or disables (`approved`) `operator` to manage all of its assets.
+   */
+  event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+  /**
+   * @dev Returns the number of tokens in ``owner``'s account.
+   */
+  function balanceOf(address owner) external view returns (uint256 balance);
+
+  /**
+   * @dev Returns the owner of the `tokenId` token.
+   *
+   * Requirements:
+   *
+   * - `tokenId` must exist.
+   */
+  function ownerOf(uint256 tokenId) external view returns (address owner);
+
+  /**
+   * @dev Safely transfers `tokenId` token from `from` to `to`, checking first that contract recipients
+   * are aware of the ERC721 protocol to prevent tokens from being forever locked.
+   *
+   * Requirements:
+   *
+   * - `from` cannot be the zero address.
+   * - `to` cannot be the zero address.
+   * - `tokenId` token must exist and be owned by `from`.
+   * - If the caller is not `from`, it must be have been allowed to move this token by either {approve} or {setApprovalForAll}.
+   * - If `to` refers to a smart contract, it must implement {IERC721Receiver-onERC721Received}, which is called upon a safe transfer.
+   *
+   * Emits a {Transfer} event.
+   */
+  function safeTransferFrom(
+    address from,
+    address to,
+    uint256 tokenId
+  ) external;
+
+  /**
+   * @dev Transfers `tokenId` token from `from` to `to`.
+   *
+   * WARNING: Usage of this method is discouraged, use {safeTransferFrom} whenever possible.
+   *
+   * Requirements:
+   *
+   * - `from` cannot be the zero address.
+   * - `to` cannot be the zero address.
+   * - `tokenId` token must be owned by `from`.
+   * - If the caller is not `from`, it must be approved to move this token by either {approve} or {setApprovalForAll}.
+   *
+   * Emits a {Transfer} event.
+   */
+  function transferFrom(
+    address from,
+    address to,
+    uint256 tokenId
+  ) external;
+
+  /**
+   * @dev Gives permission to `to` to transfer `tokenId` token to another account.
+   * The approval is cleared when the token is transferred.
+   *
+   * Only a single account can be approved at a time, so approving the zero address clears previous approvals.
+   *
+   * Requirements:
+   *
+   * - The caller must own the token or be an approved operator.
+   * - `tokenId` must exist.
+   *
+   * Emits an {Approval} event.
+   */
+  function approve(address to, uint256 tokenId) external;
+
+  /**
+   * @dev Returns the account approved for `tokenId` token.
+   *
+   * Requirements:
+   *
+   * - `tokenId` must exist.
+   */
+  function getApproved(uint256 tokenId) external view returns (address operator);
+
+  /**
+   * @dev Approve or remove `operator` as an operator for the caller.
+   * Operators can call {transferFrom} or {safeTransferFrom} for any token owned by the caller.
+   *
+   * Requirements:
+   *
+   * - The `operator` cannot be the caller.
+   *
+   * Emits an {ApprovalForAll} event.
+   */
+  function setApprovalForAll(address operator, bool _approved) external;
+
+  /**
+   * @dev Returns if the `operator` is allowed to manage all of the assets of `owner`.
+   *
+   * See {setApprovalForAll}
+   */
+  function isApprovedForAll(address owner, address operator) external view returns (bool);
+
+  /**
+   * @dev Safely transfers `tokenId` token from `from` to `to`.
+   *
+   * Requirements:
+   *
+   * - `from` cannot be the zero address.
+   * - `to` cannot be the zero address.
+   * - `tokenId` token must exist and be owned by `from`.
+   * - If the caller is not `from`, it must be approved to move this token by either {approve} or {setApprovalForAll}.
+   * - If `to` refers to a smart contract, it must implement {IERC721Receiver-onERC721Received}, which is called upon a safe transfer.
+   *
+   * Emits a {Transfer} event.
+   */
+  function safeTransferFrom(
+    address from,
+    address to,
+    uint256 tokenId,
+    bytes calldata data
+  ) external;
+
+  // Original 0xApes contract specifc
+  function getPhunksBelongingToOwner(address _owner) external view returns (uint256[] memory);
+}
+
+// File contracts/Strings.sol
+
+library Strings {
+    /**
+     * @dev Converts a `uint256` to its ASCII `string` decimal representation.
+     */
+    function toString(uint256 value) internal pure returns (string memory) {
+        // Inspired by OraclizeAPI's implementation - MIT licence
+        // https://github.com/oraclize/ethereum-api/blob/b42146b063c7d6ee1358846c198246239e9360e8/oraclizeAPI_0.4.25.sol
+
+        if (value == 0) {
+            return "0";
+        }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+}
+
+
+
+// You task is to complete the smart contract xApe721 strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.8.10, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @title xApe721
+ * @notice This contract is an ERC721 token contract that allows for minting, claiming, and managing a collection of 10,000 unique tokens.
+ * @dev The contract includes functionalities to claim tokens from an old contract, mint new tokens, and manage the minting process.
+ */
+contract xApe721 is Ownable, ERC721 {
+  using Strings for uint256;
+
+  /**
+   * @notice Total supply of tokens in the contract.
+   * @dev This constant defines the total number of tokens that can be minted.
+   */
+  uint256 public constant TOTAL_SUPPLY = 10_000;
+
+  /**
+   * @notice Price per token in ether.
+   * @dev This constant defines the price required to mint one token.
+   */
+  uint256 public constant PRICE_PER_MINT = 0.05 ether;
+
+  /**
+   * @notice Maximum number of tokens that can be minted in a single transaction.
+   * @dev This constant defines the maximum number of tokens a user can mint in one transaction.
+   */
+  uint256 public constant MAX_MINT_PER_TX = 20;
+
+  /**
+   * @notice Flag to indicate whether minting is active.
+   * @dev This boolean flag controls whether users can mint new tokens.
+   */
+  bool public mintActive;
+
+  /**
+   * @notice Current total supply of minted tokens.
+   * @dev This variable keeps track of the total number of tokens that have been minted.
+   */
+  uint256 public totalSupply;
+
+  /**
+   * @notice ID of the next token to be minted.
+   * @dev This internal variable keeps track of the next available token ID for minting.
+   */
+  uint256 internal nextMintableId = 10038; // IDs start at 10038
+
+  /**
+   * @notice Base URI for token metadata.
+   * @dev This string is used to construct the token URI for each token.
+   */
+  string public baseURI;
+
+  /**
+   * @notice Reference to the old ERC721 contract.
+   * @dev This interface is used to interact with the old contract for claiming tokens.
+   */
+  IERC721 public oldContract = IERC721(0x090b1DE324fEA5f0A0B4226101Db645819102629);
+
+  /**
+   * @notice Address of the team wallet.
+   * @dev This address is used to receive funds when the withdraw function is called.
+   */
+  address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+  /**
+   * @notice Constructor to initialize the contract with initial parameters.
+   * @param name The name of the token.
+   * @param symbol The symbol of the token.
+   * @param _baseURI The base URI for token metadata.
+   * @param _oldContract The address of the old contract.
+   * @param recipients Array of addresses to airdrop tokens to.
+   * @param tokens Array of token IDs to airdrop.
+   */
+  constructor(
+    string memory name,
+    string memory symbol,
+    string memory _baseURI,
+    address _oldContract,
+    address[] memory recipients,
+    uint256[] memory tokens
+  ) payable ERC721(name, symbol) {
+    require(recipients.length == tokens.length, "Airdrop lengths");
+    baseURI = _baseURI;
+
+    if (_oldContract != address(0)) {
+      oldContract = IERC721(_oldContract);
+    }
+
+    uint256 length = tokens.length;
+
+    for (uint i; i < length; ++i) {
+      _mint(recipients[i], tokens[i]);
+      totalSupply++;
+    }
+  }
+
+  /**
+   * @notice Modifier to restrict function calls to the team wallet.
+   * @dev This modifier ensures that only the team wallet can call the function.
+   */
+  modifier onlyTeamWallet() {
+    require(msg.sender == teamWallet, "Not callable except by team wallet");
+    _;
+  }
+
+  error MintNotActive();
+  error InsufficientFunds();
+  error ExceedsMaxMint();
+  error SupplyExhausted();
+  error AlreadyMinted();
+  error NotOwnerOfOld();
+
+  /**
+   * @notice Function to mint new tokens.
+   * @param amount The number of tokens to mint.
+   * @dev This function allows users to mint new tokens, subject to certain conditions.
+   */
+  function mint(uint16 amount) external payable {
+    require(mintActive, "Mint not active");
+    require(msg.value >= amount * PRICE_PER_MINT, "Insufficient funds");
+    require(amount <= MAX_MINT_PER_TX, "Exceeds max mint");
+    require(totalSupply + amount <= TOTAL_SUPPLY, "Supply exhausted");
+
+    for (uint256 i = 0; i < amount; i++) {
+      require(ownerOf[nextMintableId] == address(0), "Already minted");
+      _mint(msg.sender, nextMintableId);
+      nextMintableId++;
+      totalSupply++;
+    }
+  }
+
+  /**
+   * @notice Function to claim a token from the old contract.
+   * @param tokenId The ID of the token to claim.
+   * @dev This function allows users to claim a token from the old contract and mint it in the new contract.
+   */
+  function claim(uint256 tokenId) external payable {
+    require(_ownsOldToken(msg.sender, tokenId), "Not owner of old");
+    require(ownerOf[tokenId] == address(0), "Already minted");
+
+    // Transfer the token from the old contract to this contract, using safeTransferFrom
+    oldContract.safeTransferFrom(msg.sender, address(this), tokenId);
+    // Mint the token to the claimant
+    _mint(msg.sender, tokenId);
+    totalSupply++;
+  }
+
+  /**
+   * @notice Function to claim all tokens from the old contract.
+   * @dev This function allows users to claim all their tokens from the old contract and mint them in the new contract.
+   */
+  function claimAll() external payable {
+    uint256[] memory tokenIds = oldContract.getPhunksBelongingToOwner(msg.sender);
+    uint256 length = tokenIds.length;
+
+    for (uint256 i = 0; i < length; i++) {
+      uint256 tokenId = tokenIds[i];
+      if (_ownsOldToken(msg.sender, tokenId) && ownerOf[tokenId] == address(0)) {
+          // Transfer the token from the old contract to this contract, using safeTransferFrom
+          oldContract.safeTransferFrom(msg.sender, address(this), tokenId);
+          // Mint the token to the claimant
+          _mint(msg.sender, tokenId);
+          totalSupply++;
+      }
+    }
+  }
+
+  /**
+   * @notice Internal function to check if an account owns a token in the old contract.
+   * @param account The address of the account to check.
+   * @param tokenId The ID of the token to check.
+   * @return A boolean indicating whether the account owns the token.
+   * @dev This function checks if an account owns a specific token in the old contract.
+   */
+  function _ownsOldToken(address account, uint256 tokenId) internal view returns (bool) {
+      try {
+          return oldContract.ownerOf(tokenId) == account;
+      } catch (bytes memory reason) {
+          return false;
+      }
+  }
+
+  /**
+   * @notice Internal function to get the next unused token ID.
+   * @return The next available token ID.
+   * @dev This function finds the next available token ID that is not owned in either the old or new contract.
+   */
+  function _getNextUnusedID() internal returns (uint256) {
+      while (nextMintableId <= TOTAL_SUPPLY) {
+          if (ownerOf[nextMintableId] == address(0) && !_ownsOldToken(address(this), nextMintableId)) {
+              return nextMintableId;
+          }
+          nextMintableId++;
+      }
+      return 0; // Indicate no more IDs available
+  }
+
+  /**
+   * @notice Function to get the token URI for a given token ID.
+   * @param id The ID of the token.
+   * @return The token URI.
+   * @dev This function constructs the token URI for a given token ID.
+   */
+  function tokenURI(uint256 id) public view override returns (string memory) {
+    require(ownerOf[id] != address(0), "NOT_MINTED");
+    return string(abi.encodePacked(baseURI, id.toString(), ".json"));
+  }
+
+  /**
+   * @notice Function to withdraw funds to the team wallet.
+   * @dev This function allows the team wallet to withdraw the contract's balance.
+   */
+  function withdraw() external onlyTeamWallet() {
+    uint256 balance = address(this).balance;
+    (bool success, ) = teamWallet.call{value: balance}("");
+    require(success, "Withdrawal failed");
+  }
+
+  /**
+   * @notice Function to pause minting.
+   * @dev This function allows the owner to pause the minting process.
+   */
+  function pauseMint() external onlyOwner() {
+    mintActive = false;
+  }
+
+  /**
+   * @notice Function to start minting.
+   * @dev This function allows the owner to start the minting process.
+   */
+  function startMint() external onlyOwner() {
+    mintActive = true;
+  }
+
+  /**
+   * @notice Function to set the base URI for token metadata.
+   * @param _baseURI The new base URI.
+   * @dev This function allows the owner to set the base URI for token metadata.
+   */
+  function setBaseURI(string memory _baseURI) external onlyOwner() {
+    baseURI = _baseURI;
+  }
+
+  /**
+   * @notice Function to check if the contract supports a specific interface.
+   * @param interfaceId The ID of the interface to check.
+   * @return A boolean indicating whether the contract supports the interface.
+   * @dev This function checks if the contract supports a specific interface.
+   */
+  function supportsInterface(bytes4 interfaceId)
+    public
+    pure
+    override
+    returns (bool)
+  {
+    return
+      interfaceId == 0x01ffc9a7 || // ERC165 Interface ID for ERC165
+      interfaceId == 0x80ac58cd || // ERC165 Interface ID for ERC721
+      interfaceId == 0x5b5e139f; // ERC165 Interface ID for ERC721Metadata
+  }
+
+  /**
+   * @notice Function to handle the receipt of an ERC721 token.
+   * @param operator The address which called `safeTransferFrom` to transfer the token.
+   * @param from The address which previously owned the token.
+   * @param tokenId The ID of the token being transferred.
+   * @param data Additional data with no specified format.
+   * @return A magic value indicating that the token was received.
+   * @dev This function is called when an ERC721 token is received.
+   */
+  function onERC721Received(
+      address operator,
+      address from,
+      uint256 tokenId,
+      bytes calldata data
+  ) external returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+  }
+}
+```

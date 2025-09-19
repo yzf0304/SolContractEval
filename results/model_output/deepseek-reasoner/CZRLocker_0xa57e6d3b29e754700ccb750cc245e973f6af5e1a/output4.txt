@@ -1,0 +1,74 @@
+```solidity
+contract CZRLocker is owned {
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+    event RemoveLock(address addr, uint index);
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    address public tokenAddr;
+    address public unlocker;
+
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length);
+        delete lockedCZRMap[addr][index];
+        emit RemoveLock(addr, index);
+    }
+
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        if (startLockTime == 0) {
+            startLockTime = now;
+        }
+        lockedCZRMap[addr].push(LockedCZR(startLockTime, lockMonth, amount, 0));
+        emit AddLock(addr, lockedCZRMap[addr].length - 1, startLockTime, lockMonth, amount);
+    }
+
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker);
+        require(lockedCZRMap[addr].length > 0);
+
+        token t = token(tokenAddr);
+        uint processed = 0;
+        for (uint i = 0; i < lockedCZRMap[addr].length; i++) {
+            LockedCZR storage lock = lockedCZRMap[addr][i];
+            if (lock.lockedAmount == 0 || lock.unlockedAmount >= lock.lockedAmount) {
+                continue;
+            }
+
+            uint monthsPassed = (now - lock.startLockTime) / 2592000;
+            uint unlockableMonths = monthsPassed < lock.lockMonth ? monthsPassed : lock.lockMonth;
+            uint totalUnlocked = (lock.lockedAmount * unlockableMonths) / lock.lockMonth;
+            uint availableToUnlock = totalUnlocked - lock.unlockedAmount;
+
+            if (availableToUnlock > 0) {
+                lock.unlockedAmount += availableToUnlock;
+                require(t.transferFrom(owner, addr, availableToUnlock));
+                emit Unlock(addr, i, availableToUnlock);
+                processed++;
+            }
+
+            if (limit > 0 && processed >= limit) {
+                break;
+            }
+        }
+    }
+
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        to.transfer(value);
+    }
+
+    function() payable public {}
+}
+```

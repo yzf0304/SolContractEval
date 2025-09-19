@@ -1,0 +1,155 @@
+Here is the complete implementation of the `OdinToken` contract based on the provided context and description, strictly adhering to the requirements and using Solidity 0.4.21.
+
+```solidity
+pragma solidity ^0.4.21;
+
+import "./SafeMath.sol";
+
+contract OdinToken is ERC20Interface, Owned {
+
+    using SafeMath for uint256;
+
+    string public symbol;
+    string public name;
+    uint8 public decimals;
+    uint private _totalSupply;
+    bool private _whitelistAll;
+
+    struct balanceData {  
+        bool locked;
+        uint balance;
+        uint airDropQty;
+    }
+
+    mapping(address => balanceData) balances;
+    mapping(address => mapping(address => uint)) allowed;
+
+    function OdinToken() public {
+        owner = msg.sender;
+        symbol = "ODIN";
+        name = "ODIN Token";
+        decimals = 18;
+        _whitelistAll = false;
+        _totalSupply = 100000000000000000000000;
+        balances[owner].balance = _totalSupply;
+
+        emit Transfer(address(0), msg.sender, _totalSupply);
+    }
+
+    function totalSupply() public constant returns (uint256 totalSupply) {
+        return _totalSupply;
+    }
+
+    function whitelistAddress(address to) onlyOwner public returns (bool) {
+        require(to != address(0));
+        balances[to].airDropQty = 0;
+        return true;
+    }
+
+    function whitelistAllAddresses() onlyOwner public returns (bool) {
+        _whitelistAll = true;
+        return true;
+    }
+
+    function balanceOf(address tokenOwner) public constant returns (uint balance) {
+        return balances[tokenOwner].balance;
+    }
+
+    function transfer(address to, uint tokens) public returns (bool success) {
+        require(to != address(0));
+        require(to != msg.sender);
+        require(balances[msg.sender].balance >= tokens);
+
+        uint airDropLimit = 0;
+
+        if (!_whitelistAll && msg.sender != owner) {
+            uint airDropBalance = balances[msg.sender].airDropQty;
+            uint currentTime = now;
+
+            if (currentTime < 1535760000) {
+                // Before Sep 1 2018
+                require(airDropBalance == 0 || tokens <= balances[msg.sender].balance.sub(airDropBalance));
+            } else if (currentTime < 1538352000) {
+                // Sep 1 2018 - Sep 30 2018
+                airDropLimit = airDropBalance.mul(10).div(100);
+            } else if (currentTime < 1546300800) {
+                // Oct 1 2018 - Dec 31 2018
+                airDropLimit = airDropBalance.mul(25).div(100);
+            } else if (currentTime < 1554076800) {
+                // Jan 1 2019 - Mar 31 2019
+                airDropLimit = airDropBalance.mul(50).div(100);
+            } else if (currentTime < 1561939200) {
+                // Apr 1 2019 - Jun 30 2019
+                airDropLimit = airDropBalance.mul(75).div(100);
+            }
+
+            if (airDropLimit > 0) {
+                require(tokens <= balances[msg.sender].balance.sub(airDropBalance.sub(airDropLimit)));
+            }
+        }
+
+        balances[msg.sender].balance = balances[msg.sender].balance.sub(tokens);
+        balances[to].balance = balances[to].balance.add(tokens);
+
+        emit Transfer(msg.sender, to, tokens);
+        return true;
+    }
+
+    function approve(address spender, uint tokens) public returns (bool success) {
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint tokens) public returns (bool success) {
+        require(to != address(0));
+        require(tokens <= balances[from].balance);
+        require(tokens <= allowed[from][msg.sender]);
+
+        balances[from].balance = balances[from].balance.sub(tokens);
+        allowed[from][msg.sender] = allowed[from][msg.sender].sub(tokens);
+        balances[to].balance = balances[to].balance.add(tokens);
+
+        emit Transfer(from, to, tokens);
+        return true;
+    }
+
+    function allowance(address tokenOwner, address spender) public constant returns (uint remaining) {
+        return allowed[tokenOwner][spender];
+    }
+
+    function approveAndCall(address spender, uint tokens, bytes data) public returns (bool success) {
+        require(approve(spender, tokens));
+        require(spender.call(bytes4(keccak256("receiveApproval(address,uint256,address,bytes)")), msg.sender, tokens, this, data));
+        return true;
+    }
+
+    function burn(uint256 tokens) onlyOwner public returns (bool) {
+        require(tokens <= balances[owner].balance);
+        balances[owner].balance = balances[owner].balance.sub(tokens);
+        _totalSupply = _totalSupply.sub(tokens);
+        emit Burn(tokens);
+        return true;
+    }
+
+    function () public {
+        revert(); // Revert any ether sent to the contract
+    }
+}
+```
+
+### Explanation:
+
+1. **Initialization**: The contract sets the `symbol`, `name`, `decimals`, `_totalSupply`, and assigns all initial tokens to the `owner`.
+
+2. **Airdrop Restrictions**: Implemented based on the described time-based restrictions for air-dropped tokens. Airdrop limits are computed and enforced during the `transfer` function based on timestamps.
+
+3. **Whitelist Management**: Functions `whitelistAddress` and `whitelistAllAddresses` allow the owner to control airdrop restrictions.
+
+4. **ERC20 Compatibility**: Implements all mandatory ERC20 functions (`transfer`, `approve`, `transferFrom`, `allowance`) and events (`Transfer`, `Approval`).
+
+5. **Burn Functionality**: Allows the owner to burn tokens, reducing the total supply.
+
+6. **Fallback Function**: Rejects any direct ether transfers to the contract.
+
+This implementation is functional, adheres to the provided constraints, and is compatible with Solidity 0.4.21.

@@ -1,0 +1,136 @@
+```solidity
+pragma solidity ^0.8.13;
+
+/**
+ * @notice HEXToken contract is designed to manage the staking, transferring, and approval of HEX tokens.
+ * @dev This contract includes functions for staking, unstaking, transferring, and approving HEX tokens. 
+ * It also provides a way to check the current day and the number of stakes for a given address.
+ */
+contract HEXToken {
+  mapping(address => uint256) public balances;
+  mapping(address => mapping(address => uint256)) public allowances;
+
+  struct Stake {
+    uint256 stakedHearts;
+    uint256 stakedDays;
+    uint256 stakeStartDay;
+    bool isEnded;
+  }
+
+  mapping(address => Stake[]) public stakes;
+  mapping(address => uint256) public stakeCountByAddress;
+
+
+  uint256 public currentDayGlobal; // Just for demonstration purposes.
+
+  /**
+   * @notice Returns the current day in the context of the contract.
+   * @dev This function is useful for determining the current day, which can be used for various calculations within the contract.
+   * @return uint256 The current day.
+   */
+  function currentDay() external view returns (uint256){
+    return currentDayGlobal;
+  }
+
+  /**
+   * @notice Starts a new stake with a specified amount of HEX and duration.
+   * @dev This function allows users to stake their HEX tokens for a certain number of days. The staked amount and duration are recorded.
+   * @param newStakedHearts The amount of HEX to be staked.
+   * @param newStakedDays The number of days for which the HEX will be staked.
+   */
+  function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+    require(balances[msg.sender] >= newStakedHearts, "Insufficient balance");
+    require(newStakedDays > 0, "Stake duration must be greater than 0");
+
+    balances[msg.sender] -= newStakedHearts;
+
+    stakes[msg.sender].push(Stake(newStakedHearts, newStakedDays, currentDayGlobal, false));
+    stakeCountByAddress[msg.sender]++;
+  }
+
+  /**
+   * @notice Approves a spender to transfer a specified amount of HEX on behalf of the message sender.
+   * @dev This function sets the allowance for a spender, allowing them to transfer up to the specified amount of HEX.
+   * @param spender The address that will be allowed to spend the HEX.
+   * @param amount The amount of HEX that the spender is allowed to transfer.
+   * @return bool True if the approval was successful, otherwise false.
+   */
+  function approve(address spender, uint256 amount) external returns (bool) {
+    allowances[msg.sender][spender] = amount;
+    return true;
+  }
+
+  /**
+   * @notice Transfers a specified amount of HEX to a recipient.
+   * @dev This function transfers HEX from the message sender to the recipient. It checks for sufficient balance and updates the balances accordingly.
+   * @param recipient The address to which the HEX will be transferred.
+   * @param amount The amount of HEX to be transferred.
+   * @return bool True if the transfer was successful, otherwise false.
+   */
+  function transfer(address recipient, uint256 amount) public returns (bool) {
+    require(balances[msg.sender] >= amount, "Insufficient balance");
+
+    balances[msg.sender] -= amount;
+    balances[recipient] += amount;
+    return true;
+  }
+
+   /**
+     * @notice Transfers a specified amount of HEX from one address to another address using the allowance mechanism.
+     * @dev This function transfers HEX from sender to recipient, only if `msg.sender` is allowed to spend on behalf of sender.
+     * @param sender The address from which the HEX will be transferred.
+     * @param recipient The address to which the HEX will be transferred.
+     * @param amount The amount of HEX to be transferred.
+     * @return bool True if the transfer was successful, otherwise false.
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) public returns (bool) {
+        require(allowances[sender][msg.sender] >= amount, "Insufficient allowance");
+        require(balances[recipient] + amount >= balances[recipient], "Possible overflow");
+
+        balances[sender] -= amount;
+        balances[recipient] += amount;
+        allowances[sender][msg.sender] -= amount;
+        return true;
+    }
+
+
+  /**
+   * @notice Ends a stake by specifying the stake index and stake ID.
+   * @dev This function allows users to end a specific stake, releasing the staked HEX back to the user's balance.
+   * @param stakeIndex The index of the stake to be ended.
+   * @param stakeIdParam The ID of the stake to be ended.
+   */
+  function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+    require(stakeIndex < stakes[msg.sender].length, "Invalid stake index");
+
+    Stake storage stake = stakes[msg.sender][stakeIndex];
+
+    require(!stake.isEnded, "Stake already ended");
+
+    // In a real implementation, there would be logic related to stakeIdParam and potentially penalties for early unstaking.
+    // For this simplified example, we're just checking the stakeIndex.
+
+    stake.isEnded = true;
+    balances[msg.sender] += stake.stakedHearts; // Return the staked HEX
+  }
+
+  /**
+   * @notice Returns the number of stakes for a given address.
+   * @dev This function is useful for querying the number of active stakes for a specific address.
+   * @param stakerAddr The address for which to count the stakes.
+   * @return uint256 The number of stakes for the given address.
+   */
+  function stakeCount(address stakerAddr) external view returns (uint256) {
+    return stakeCountByAddress[stakerAddr];
+  }
+
+    function mint(address account, uint256 amount) external {
+        balances[account] += amount;
+    }
+
+  //For test purpose only
+  function setCurrentDay(uint256 _currentDay) external {
+    currentDayGlobal = _currentDay;
+  }
+}
+```

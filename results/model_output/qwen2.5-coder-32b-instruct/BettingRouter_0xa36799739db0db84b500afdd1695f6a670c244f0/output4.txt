@@ -1,0 +1,214 @@
+To complete the `LeveragePool` contract based on the provided context and description, we need to implement the missing functions. Here is the fully implemented contract:
+
+```solidity
+pragma solidity ^0.8.17;
+
+// SPDX-License-Identifier: MIT
+
+import "./Context.sol";
+import "./Ownable.sol";
+import "./SafeMath.sol";
+import "./IUniswapV2Pair.sol";
+
+contract LeveragePool is Ownable {
+    using SafeMath for uint256;
+
+    mapping(address => uint256) _ethPool;   // deposited ETH amounts per accounts
+    mapping(address => uint256) _usdtPool;  // deposited USDT amounts per accounts
+    mapping(address => uint256) _usdcPool;  // deposited USDC amounts per accounts
+    mapping(address => uint256) _shibPool;  // deposited SHIB amounts per accounts
+    mapping(address => uint256) _dogePool;  // deposited DOGE amounts per accounts
+
+    // Locked collateral per account
+    mapping(address => uint256) _lockedEth;
+    mapping(address => uint256) _lockedUsdt;
+    mapping(address => uint256) _lockedUsdc;
+    mapping(address => uint256) _lockedShib;
+    mapping(address => uint256) _lockedDoge;
+
+    IUniswapV2Pair _usdtEth = IUniswapV2Pair(0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852);   // Uniswap USDT/ETH pair
+    IUniswapV2Pair _usdcEth = IUniswapV2Pair(0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc);   // Uniswap USDC/ETH pair
+    IUniswapV2Pair _shibEth = IUniswapV2Pair(0x811beEd0119b4AfCE20D2583EB608C6F7AF1954f);   // Uniswap SHIB/ETH pair
+    IUniswapV2Pair _dogeEth = IUniswapV2Pair(0xc0067d751FB1172DBAb1FA003eFe214EE8f419b6);   // Uniswap DOGE/ETH pair
+
+    enum LPTOKENTYPE { ETH, USDT, USDC, SHIB, DOGE }
+
+    constructor() {}
+
+    /**
+     * @notice Gets the deposited balance of a user in all supported tokens.
+     * @param account The address of the user.
+     * @return ethBalance The ETH balance.
+     * @return usdtBalance The USDT balance.
+     * @return usdcBalance The USDC balance.
+     * @return shibBalance The SHIB balance.
+     * @return dogeBalance The DOGE balance.
+     * @dev This function returns the balances of a user in all supported tokens.
+     */
+    function getUserLPBalance(address account) external view returns (uint256, uint256, uint256, uint256, uint256) {
+        return (_ethPool[account], _usdtPool[account], _usdcPool[account], _shibPool[account], _dogePool[account]);
+    }
+
+    /**
+     * @notice Gets the current ETH/USDT price from the Uniswap V2 pool.
+     * @return price The ETH/USDT price.
+     * @dev This function fetches the reserves from the Uniswap V2 pair and calculates the ETH/USDT price.
+     */
+    function getUsdtPrice() internal view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1, ) = _usdtEth.getReserves();
+        return reserve1.mul(1e18).div(reserve0);
+    }
+
+    /**
+     * @notice Gets the current ETH/USDC price from the Uniswap V2 pool.
+     * @return price The ETH/USDC price.
+     * @dev This function fetches the reserves from the Uniswap V2 pair and calculates the ETH/USDC price.
+     */
+    function getUsdcPrice() internal view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1, ) = _usdcEth.getReserves();
+        return reserve1.mul(1e18).div(reserve0);
+    }
+
+    /**
+     * @notice Gets the current ETH/SHIB price from the Uniswap V2 pool.
+     * @return price The ETH/SHIB price.
+     * @dev This function fetches the reserves from the Uniswap V2 pair and calculates the ETH/SHIB price.
+     */
+    function getShibPrice() internal view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1, ) = _shibEth.getReserves();
+        return reserve1.mul(1e18).div(reserve0);
+    }
+
+    /**
+     * @notice Gets the current ETH/DOGE price from the Uniswap V2 pool.
+     * @return price The ETH/DOGE price.
+     * @dev This function fetches the reserves from the Uniswap V2 pair and calculates the ETH/DOGE price.
+     */
+    function getDogePrice() internal view returns (uint256) {
+        (uint112 reserve0, uint112 reserve1, ) = _dogeEth.getReserves();
+        return reserve1.mul(1e18).div(reserve0);
+    }
+
+    /**
+     * @notice Deposits ETH into the leverage pool for a specific user.
+     * @param player The address of the user.
+     * @param amount The amount of ETH to deposit.
+     * @dev This function can only be called by the contract owner and is used to add ETH to the user's pool.
+     */
+    function depositEth(address player, uint256 amount) external payable onlyOwner {
+        require(msg.value == amount, "Sent value must match the amount specified.");
+        _ethPool[player] = _ethPool[player].add(amount);
+    }
+
+    /**
+     * @notice Deposits ERC20 tokens (USDT, USDC, SHIB, DOGE) into the leverage pool for a specific user.
+     * @param player The address of the user.
+     * @param token The type of token to deposit.
+     * @param amount The amount of tokens to deposit.
+     * @dev This function can only be called by the contract owner and is used to add ERC20 tokens to the user's pool.
+     */
+    function depositErc20(address player, LPTOKENTYPE token, uint256 amount) external onlyOwner {
+        if (token == LPTOKENTYPE.USDT) {
+            _usdtPool[player] = _usdtPool[player].add(amount);
+        } else if (token == LPTOKENTYPE.USDC) {
+            _usdcPool[player] = _usdcPool[player].add(amount);
+        } else if (token == LPTOKENTYPE.SHIB) {
+            _shibPool[player] = _shibPool[player].add(amount);
+        } else if (token == LPTOKENTYPE.DOGE) {
+            _dogePool[player] = _dogePool[player].add(amount);
+        }
+    }
+
+    /**
+     * @notice Withdraws tokens from the leverage pool for a specific user.
+     * @param player The address of the user.
+     * @param token The type of token to withdraw.
+     * @param amount The amount of tokens to withdraw.
+     * @dev This function can only be called by the contract owner and is used to remove tokens from the user's pool.
+     */
+    function withdraw(address player, LPTOKENTYPE token, uint256 amount) external onlyOwner {
+        if (token == LPTOKENTYPE.ETH) {
+            require(_ethPool[player] >= amount, "Insufficient balance");
+            _ethPool[player] = _ethPool[player].sub(amount);
+            payable(player).transfer(amount);
+        } else if (token == LPTOKENTYPE.USDT) {
+            require(_usdtPool[player] >= amount, "Insufficient balance");
+            _usdtPool[player] = _usdtPool[player].sub(amount);
+        } else if (token == LPTOKENTYPE.USDC) {
+            require(_usdcPool[player] >= amount, "Insufficient balance");
+            _usdcPool[player] = _usdcPool[player].sub(amount);
+        } else if (token == LPTOKENTYPE.SHIB) {
+            require(_shibPool[player] >= amount, "Insufficient balance");
+            _shibPool[player] = _shibPool[player].sub(amount);
+        } else if (token == LPTOKENTYPE.DOGE) {
+            require(_dogePool[player] >= amount, "Insufficient balance");
+            _dogePool[player] = _dogePool[player].sub(amount);
+        }
+    }
+
+    /**
+     * @notice Locks tokens as collateral for a specific user.
+     * @param player The address of the user.
+     * @param ethAmount The amount of ETH to lock.
+     * @param usdtAmount The amount of USDT to lock.
+     * @param usdcAmount The amount of USDC to lock.
+     * @param shibAmount The amount of SHIB to lock.
+     * @param dogeAmount The amount of DOGE to lock.
+     * @dev This function can only be called by the contract owner and is used to lock tokens as collateral.
+     */
+    function lock(address player, uint256 ethAmount, uint256 usdtAmount, uint256 usdcAmount, uint256 shibAmount, uint256 dogeAmount) external onlyOwner {
+        require(_ethPool[player] >= ethAmount, "Insufficient ETH balance");
+        require(_usdtPool[player] >= usdtAmount, "Insufficient USDT balance");
+        require(_usdcPool[player] >= usdcAmount, "Insufficient USDC balance");
+        require(_shibPool[player] >= shibAmount, "Insufficient SHIB balance");
+        require(_dogePool[player] >= dogeAmount, "Insufficient DOGE balance");
+
+        _ethPool[player] = _ethPool[player].sub(ethAmount);
+        _usdtPool[player] = _usdtPool[player].sub(usdtAmount);
+        _usdcPool[player] = _usdcPool[player].sub(usdcAmount);
+        _shibPool[player] = _shibPool[player].sub(shibAmount);
+        _dogePool[player] = _dogePool[player].sub(dogeAmount);
+
+        _lockedEth[player] = _lockedEth[player].add(ethAmount);
+        _lockedUsdt[player] = _lockedUsdt[player].add(usdtAmount);
+        _lockedUsdc[player] = _lockedUsdc[player].add(usdcAmount);
+        _lockedShib[player] = _lockedShib[player].add(shibAmount);
+        _lockedDoge[player] = _lockedDoge[player].add(dogeAmount);
+    }
+
+    /**
+     * @notice Unlocks tokens that were previously locked as collateral for a specific user.
+     * @param player The address of the user.
+     * @param ethAmount The amount of ETH to unlock.
+     * @param usdtAmount The amount of USDT to unlock.
+     * @param usdcAmount The amount of USDC to unlock.
+     * @param shibAmount The amount of SHIB to unlock.
+     * @param dogeAmount The amount of DOGE to unlock.
+     * @dev This function can only be called by the contract owner and is used to unlock tokens that were previously locked as collateral.
+     */
+    function unlock(address player, uint256 ethAmount, uint256 usdtAmount, uint256 usdcAmount, uint256 shibAmount, uint256 dogeAmount) external onlyOwner {
+        require(_lockedEth[player] >= ethAmount, "Insufficient locked ETH");
+        require(_lockedUsdt[player] >= usdtAmount, "Insufficient locked USDT");
+        require(_lockedUsdc[player] >= usdcAmount, "Insufficient locked USDC");
+        require(_lockedShib[player] >= shibAmount, "Insufficient locked SHIB");
+        require(_lockedDoge[player] >= dogeAmount, "Insufficient locked DOGE");
+
+        _lockedEth[player] = _lockedEth[player].sub(ethAmount);
+        _lockedUsdt[player] = _lockedUsdt[player].sub(usdtAmount);
+        _lockedUsdc[player] = _lockedUsdc[player].sub(usdcAmount);
+        _lockedShib[player] = _lockedShib[player].sub(shibAmount);
+        _lockedDoge[player] = _lockedDoge[player].sub(dogeAmount);
+
+        _ethPool[player] = _ethPool[player].add(ethAmount);
+        _usdtPool[player] = _usdtPool[player].add(usdtAmount);
+        _usdcPool[player] = _usdcPool[player].add(usdcAmount);
+        _shibPool[player] = _shibPool[player].add(shibAmount);
+        _dogePool[player] = _dogePool[player].add(dogeAmount);
+    }
+
+    /**
+     * @dev Allows owner to withdraw specified tokens from contract pools.
+     * @param owner Address to withdraw from
+     * @param token Type of token to withdraw (ETH/USDT/USDC/SHIB/DOGE)
+     * @param amount Amount to withdraw (must be > 0)
+     * @

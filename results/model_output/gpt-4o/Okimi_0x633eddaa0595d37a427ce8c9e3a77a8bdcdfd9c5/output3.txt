@@ -1,0 +1,157 @@
+Below is the complete and functional implementation of the `Okimi` contract strictly according to the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "erc721a/contracts/ERC721A.sol";
+
+/**
+ * @title Okimi NFT Contract
+ * @notice This contract implements an ERC721A NFT collection with a public sale mechanism, minting limits, and owner controls.
+ * @dev Inherits from Ownable, ERC721A, and ReentrancyGuard to provide ownership, NFT, and reentrancy protection functionalities.
+ */
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    uint256 public immutable maxPerAddressDuringMint;
+    uint256 public immutable amountForDevs;
+    uint256 public immutable amountForSaleAndDev;
+    uint256 internal immutable collectionSize;
+    uint256 internal immutable maxBatchSize;
+
+    struct SaleConfig {
+        uint32 publicSaleStartTime;
+        uint64 publicPriceWei;
+    }
+
+    SaleConfig public saleConfig;
+
+    string private _baseTokenURI;
+
+    constructor() ERC721A("Okimi", "OKM") {
+        maxPerAddressDuringMint = 5;
+        maxBatchSize = 5;
+        collectionSize = 1500;
+        amountForDevs = 150;
+        amountForSaleAndDev = 1500;
+
+        saleConfig.publicPriceWei = 5 ether / 1000; // 0.005 ETH
+        saleConfig.publicSaleStartTime = uint32(block.timestamp);
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function mint(uint256 quantity) external payable callerIsUser {
+        require(isSaleOn(saleConfig.publicPriceWei, saleConfig.publicSaleStartTime), "Public sale has not started");
+        require(totalSupply() + quantity <= collectionSize, "Exceeds max supply");
+        require(numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint, "Exceeds max mints per address");
+        require(msg.value >= quantity * saleConfig.publicPriceWei, "Insufficient Ether");
+
+        _safeMint(msg.sender, quantity);
+        refundIfOver(quantity * saleConfig.publicPriceWei);
+    }
+
+    function refundIfOver(uint256 price) private {
+        require(msg.value >= price, "Insufficient Ether");
+        if (msg.value > price) {
+            payable(msg.sender).transfer(msg.value - price);
+        }
+    }
+
+    function isSaleOn(uint256 _price, uint256 _startTime) public view returns (bool) {
+        return _price != 0 && block.timestamp >= _startTime;
+    }
+
+    function getPrice() public view returns (uint256) {
+        return uint256(saleConfig.publicPriceWei);
+    }
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price) external onlyOwner {
+        saleConfig.publicSaleStartTime = timestamp;
+        saleConfig.publicPriceWei = price;
+    }
+
+    function reserve(uint256 quantity) external onlyOwner {
+        require(totalSupply() + quantity <= amountForDevs, "Exceeds reserved supply");
+        uint256 numBatches = quantity / maxBatchSize;
+        for (uint256 i = 0; i < numBatches; i++) {
+            _safeMint(msg.sender, maxBatchSize);
+        }
+        uint256 remaining = quantity % maxBatchSize;
+        if (remaining > 0) {
+            _safeMint(msg.sender, remaining);
+        }
+    }
+
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        (bool success, ) = msg.sender.call{value: address(this).balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted() public view returns (uint256) {
+        return _totalMinted();
+    }
+
+    receive() external payable {}
+}
+```
+
+### Explanation of the Implementation:
+1. **Constants and Variables**:
+   - `maxPerAddressDuringMint`: Limits the number of NFTs a single address can mint during the public sale.
+   - `amountForDevs`: Reserved NFTs for the developer or owner.
+   - `amountForSaleAndDev`: The total supply of the collection (includes both public and reserved NFTs).
+   - `collectionSize`: The maximum size of the NFT collection.
+   - `maxBatchSize`: Controls the maximum number of tokens minted in a single batch.
+
+2. **Public Sale**:
+   - Users can mint during the public sale via the `mint` function. It checks for sale activation, max supply limits, and ensures users adhere to the max-per-address rule.
+
+3. **Refund Overpaid ETH**:
+   - The `refundIfOver` function ensures that users are refunded the excess ETH if they send more than the required minting price.
+
+4. **Sale Configuration**:
+   - The owner can configure the sale start time and price via `setPublicSaleConfig`.
+
+5. **NFT Reservation**:
+   - The `reserve` function allows the owner to mint reserved NFTs for the team or other purposes. It ensures that these reserved mints do not exceed the pre-allocated amount.
+
+6. **Base URI**:
+   - The base URI can be set or updated using `setBaseURI`. This URI is used to determine the metadata location for the NFTs.
+
+7. **Withdraw Funds**:
+   - The `withdraw` function allows the owner to withdraw the contract balance safely.
+
+8. **Utility Functions**:
+   - `numberMinted`: Tracks how many tokens an address has minted.
+   - `getOwnershipData`: Retrieves ownership details for a specific token ID.
+   - `totalMinted`: Tracks the total number of tokens minted.
+
+9. **Security**:
+   - The `callerIsUser` modifier ensures only externally owned accounts (EOAs) can call certain functions.
+   - The `nonReentrant` modifier protects the `withdraw` function against reentrancy attacks.
+
+10. **Default Function**:
+   - The `receive` function allows the contract to accept ETH directly. This ensures the contract doesn't revert when receiving ETH.
+
+This implementation is strictly based on the provided context and meets all requirements.

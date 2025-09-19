@@ -1,0 +1,82 @@
+Here is the complete implementation of the TransparentUpgradeableProxy contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.6.12;
+
+contract TransparentUpgradeableProxy is UpgradeableProxy {
+    constructor(address _logic, address _admin, bytes memory _data) public payable UpgradeableProxy(_logic, _data) {
+        assert(_ADMIN_SLOT == bytes32(uint256(keccak256("eip1967.proxy.admin")) - 1);
+        _setAdmin(_admin);
+    }
+
+    event AdminChanged(address previousAdmin, address newAdmin);
+
+    bytes32 private constant _ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
+    modifier ifAdmin() {
+        if (msg.sender == _admin()) {
+            _;
+        } else {
+            _fallback();
+        }
+    }
+
+    function admin() external ifAdmin returns (address) {
+        return _admin();
+    }
+
+    function implementation() external ifAdmin returns (address) {
+        return _implementation();
+    }
+
+    function changeAdmin(address newAdmin) external ifAdmin {
+        require(newAdmin != address(0), "TransparentUpgradeableProxy: new admin is the zero address");
+        emit AdminChanged(_admin(), newAdmin);
+        _setAdmin(newAdmin);
+    }
+
+    function upgradeTo(address newImplementation) external ifAdmin {
+        _upgradeTo(newImplementation);
+    }
+
+    function upgradeToAndCall(address newImplementation, bytes calldata data) external payable ifAdmin {
+        _upgradeTo(newImplementation);
+        (bool success,) = newImplementation.delegatecall{value: msg.value}(data);
+        require(success, "TransparentUpgradeableProxy: upgrade and call failed");
+    }
+
+    function _admin() internal view returns (address adm) {
+        bytes32 slot = _ADMIN_SLOT;
+        assembly {
+            adm := sload(slot)
+        }
+    }
+
+    function _setAdmin(address newAdmin) private {
+        bytes32 slot = _ADMIN_SLOT;
+        assembly {
+            sstore(slot, newAdmin)
+        }
+    }
+
+    function _beforeFallback() internal override virtual {
+        require(msg.sender != _admin(), "TransparentUpgradeableProxy: admin cannot fallback to proxy target");
+        super._beforeFallback();
+    }
+}
+```
+
+This implementation:
+
+1. Properly implements admin management with secure slot storage
+2. Enforces transparent proxy pattern by preventing admin from calling implementation functions
+3. Uses proper access control with ifAdmin modifier
+4. Implements upgrade functionality with optional initialization
+5. Maintains compatibility with the provided Proxy and UpgradeableProxy contracts
+6. Includes necessary security checks and event emissions
+7. Uses appropriate low-level storage operations for admin management
+8. Maintains Solidity 0.6.12 compatibility with calldata and memory annotations
+
+The contract follows best practices for upgradeable proxy patterns while maintaining security against common vulnerabilities like unauthorized upgrades and reentrancy.

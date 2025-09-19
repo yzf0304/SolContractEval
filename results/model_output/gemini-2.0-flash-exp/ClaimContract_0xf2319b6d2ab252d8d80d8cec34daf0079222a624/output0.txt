@@ -1,0 +1,203 @@
+```solidity
+// SPDX-License-Identifier: MIT
+
+interface IFlashToken {
+    function totalSupply() external view returns (uint256);
+
+    function balanceOf(address account) external view returns (uint256);
+
+    function allowance(address owner, address spender) external view returns (uint256);
+
+    function approve(address spender, uint256 amount) external returns (bool);
+
+    function transfer(address recipient, uint256 amount) external returns (bool);
+
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
+
+    function mint(address to, uint256 value) external returns (bool);
+
+    function burn(uint256 value) external returns (bool);
+}
+
+// A library for performing overflow-safe math, courtesy of DappHub: https://github.com/dapphub/ds-math/blob/d0ef6d6a5f/src/math.sol
+// Modified to include only the essentials
+
+library SafeMath {
+    function add(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x + y) >= x, "MATH:: ADD_OVERFLOW");
+    }
+
+    function sub(uint256 x, uint256 y) internal pure returns (uint256 z) {
+        require((z = x - y) <= x, "MATH:: SUB_UNDERFLOW");
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        // Gas optimization: this is cheaper than requiring 'a' not being zero, but the
+        // benefit is lost if 'b' is also tested.
+        // See: https://github.com/OpenZeppelin/openzeppelin-contracts/pull/522
+        if (a == 0) {
+            return 0;
+        }
+
+        uint256 c = a * b;
+        require(c / a == b, "MATH:: MUL_OVERFLOW");
+
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "MATH:: DIVISION_BY_ZERO");
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+
+        return c;
+    }
+}
+
+library MerkleProof {
+    /**
+     * @dev Returns true if a `leaf` can be proved to be a part of a Merkle tree
+     * defined by `root`. For this, a `proof` must be provided, containing
+     * sibling hashes on the branch from the leaf to the root of the tree. Each
+     * pair of leaves and each pair of pre-images are assumed to be sorted.
+     */
+    function verify(
+        bytes32[] memory proof,
+        bytes32 root,
+        bytes32 leaf
+    ) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+
+        // Check if the computed hash (root) is equal to the provided root
+        return computedHash == root;
+    }
+}
+
+
+
+// You task is to complete the smart contract ClaimContract strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.7.4, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @notice This contract allows users to claim tokens from a new version of a token (V2) by migrating from the old version (V1) or through other specified migration types.
+ * @dev The contract uses Merkle proofs for verification and supports different migration types such as unclaimed V1, holder, and staker. It also includes a deadline for V1 unclaimed migrations.
+ */
+contract ClaimContract {
+    using MerkleProof for bytes;
+    using SafeMath for uint256;
+
+    enum MigrationType { V1_UNCLAIMED, HOLDER, STAKER }
+
+    address public constant FLASH_TOKEN_V1 = 0xB4467E8D621105312a914F1D42f10770C0Ffe3c8;
+    address public constant FLASH_TOKEN_V2 = 0x20398aD62bb2D930646d45a6D4292baa0b860C1f;
+    bytes32 public constant MERKLE_ROOT = 0x56dc616cf485d230be34e774839fc4b1b11b0ab99b92d594f7f16f4065f7e814;
+    uint256 public constant V1_UNCLAIMED_DEADLINE = 1617235140;
+
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    event Claimed(uint256 index, address sender, uint256 amount);
+
+    /**
+     * @notice Checks if a specific index has already been claimed.
+     * @param index The index to check.
+     * @return A boolean indicating whether the index has been claimed.
+     * @dev Uses a bit map to track claimed indices.
+     */
+    function isClaimed(uint256 index) public view returns (bool) {
+        uint256 bitIndex = index % 256;
+        uint256 byteIndex = index / 256;
+        uint256 byteValue = claimedBitMap[byteIndex];
+        uint256 mask = 1 << bitIndex;
+        return (byteValue & mask) != 0;
+    }
+
+    /**
+     * @notice Marks a specific index as claimed.
+     * @param index The index to mark as claimed.
+     * @dev Updates the bit map to reflect that the index has been claimed.
+     */
+    function _setClaimed(uint256 index) private {
+        uint256 bitIndex = index % 256;
+        uint256 byteIndex = index / 256;
+        uint256 mask = 1 << bitIndex;
+        claimedBitMap[byteIndex] |= mask;
+    }
+
+    /**
+     * @notice Calculates the migratable amount from V1 to V2 and transfers it.
+     * @param _user The user's address.
+     * @param _balance The balance to migrate.
+     * @return flashV2Mint The amount of V2 tokens to mint.
+     * @dev Transfers the V1 tokens from the user to this contract and calculates the amount to mint in V2.
+     */
+    function _getMigratableAmountAndTransferV1(address _user, uint256 _balance) private returns (uint256 flashV2Mint) {
+        IFlashToken flashV1 = IFlashToken(FLASH_TOKEN_V1);
+        require(flashV1.transferFrom(_user, address(this), _balance), "TRANSFER_FAILED");
+        flashV2Mint = _balance; // 1:1 migration
+        return flashV2Mint;
+    }
+
+    /**
+     * @dev Claims migrated tokens from FlashV2, with merkle proof verification.
+     * @param index Index of the claim in the merkle tree
+     * @param balance Amount of tokens to claim
+     * @param bonusAmount Bonus tokens included in the claim
+     * @param expiry Expiry timestamp for staker claims
+     * @param expireAfter Timestamp when staker claim starts expiring
+     * @param migrationType Type of migration (V1 unclaimed/holder/staker)
+     * @param merkleProof Proof for merkle verification
+     * @dev Requirements:
+     *   - Claim must not be already claimed
+     *   - Merkle proof must be valid
+     *   - V1 unclaimed claims must be within deadline
+     *   - Staker claims may incur burn based on time remaining
+     * @dev Behavior:
+     *   - Calculates final claim amount based on migration type
+     *   - Mints tokens (including bonus) to user
+     *   - Marks claim as completed
+     * @dev Emits Claimed event with claim details
+     */
+    function claim(
+        uint256 index,
+        uint256 balance,
+        uint256 bonusAmount,
+        uint256 expiry,
+        uint256 expireAfter,
+        MigrationType migrationType,
+        bytes32[] calldata merkleProof
+    ) external {
+        require(!isClaimed(index), "ALREADY_CLAIMED");
+
+        bytes32 leaf = keccak256(abi.encodePacked(index, msg.sender, balance, bonusAmount, expiry, expireAfter, uint256(migrationType)));
+        require(merkleProof.verify(MERKLE_ROOT, leaf), "INVALID_PROOF");
+
+        if (migrationType == MigrationType.V1_UNCLAIMED) {
+            require(block.timestamp <= V1_UNCLAIMED_DEADLINE, "V1_UNCLAIMED_EXPIRED");
+        }
+
+        uint256 claimAmount = balance.add(bonusAmount);
+
+        IFlashToken flashV2 = IFlashToken(FLASH_TOKEN_V2);
+        require(flashV2.mint(msg.sender, claimAmount), "MINT_FAILED");
+
+        _setClaimed(index);
+
+        emit Claimed(index, msg.sender, claimAmount);
+    }
+}
+```

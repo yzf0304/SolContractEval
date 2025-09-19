@@ -1,0 +1,135 @@
+```solidity
+pragma solidity ^0.4.20;
+
+contract AxpireToken is ERC223, ERC20 {
+    using SafeMath for uint256;
+
+    uint256 initialSupply = 350000000 * 10**8;
+    string  tokenName     = "aXpire Token";
+    string  tokenSymbol   = "AXP";
+    uint8   decimalUnits  = 8;
+
+    // Constructor
+    function AxpireToken() public
+        ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        balances[owner] = initialSupply;
+        totalSupply      = initialSupply;
+    }
+
+    // ERC223 transfer with data
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        if (isContract(to)) {
+            return transferInternal(msg.sender, to, value, data, false, "");
+        } else {
+            // EOA: use ERC20.transfer and still emit ERC223 event
+            bool ok = super.transfer(to, value);
+            Transfer(msg.sender, to, value, data);
+            return ok;
+        }
+    }
+
+    // ERC223 transfer with data + custom fallback
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool success) {
+        if (isContract(to)) {
+            return transferInternal(msg.sender, to, value, data, true, customFallback);
+        } else {
+            bool ok = super.transfer(to, value);
+            Transfer(msg.sender, to, value, data);
+            return ok;
+        }
+    }
+
+    // Override ERC20.transferFrom to support ERC223 data‐style event
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        bytes memory empty;
+        if (isContract(_to)) {
+            bool ok = super.transferFrom(_from, _to, _value);
+            if (!ok) return false;
+            Transfer(_from, _to, _value, empty);
+            ContractReceiver receiver = ContractReceiver(_to);
+            receiver.tokenFallback(_from, _value, empty);
+            return true;
+        } else {
+            bool ok = super.transferFrom(_from, _to, _value);
+            Transfer(_from, _to, _value, empty);
+            return ok;
+        }
+    }
+
+    // Default data‐transfer calls into the detailed internal
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        return transferInternal(from, to, value, data, false, "");
+    }
+
+    // Core ERC223 internal transfer
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    )
+        internal
+        returns (bool success)
+    {
+        // zero‐value transfers are allowed
+        if (value == 0) {
+            Transfer(from, to, value, data);
+            if (isContract(to)) {
+                if (useCustomFallback) {
+                    // low‐level call to custom fallback
+                    require(to.call(
+                        bytes4(keccak256(customFallback)),
+                        from, value, data
+                    ));
+                } else {
+                    ContractReceiver receiver = ContractReceiver(to);
+                    receiver.tokenFallback(from, value, data);
+                }
+            }
+            return true;
+        }
+
+        // balance checks
+        if (balances[from] < value) {
+            return false;
+        }
+
+        // move tokens
+        balances[from] = balances[from].sub(value);
+        balances[to]   = balances[to].add(value);
+
+        // notify contract
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                require(to.call(
+                    bytes4(keccak256(customFallback)),
+                    from, value, data
+                ));
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+
+        // emit ERC223 event
+        Transfer(from, to, value, data);
+        return true;
+    }
+
+    // Expose the original, no‐data transferInternal
+    function transferInternal(address from, address to, uint256 value) internal returns (bool success) {
+        return super.transferInternal(from, to, value);
+    }
+
+    // utility to detect a contract
+    function isContract(address _addr) private view returns (bool) {
+        uint256 length;
+        assembly { length := extcodesize(_addr) }
+        return (length > 0);
+    }
+}
+```

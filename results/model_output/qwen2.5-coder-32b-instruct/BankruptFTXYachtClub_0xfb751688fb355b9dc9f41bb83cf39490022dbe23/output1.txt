@@ -1,0 +1,142 @@
+Certainly! Below is the completed implementation of the `BankruptFTXYachtClub` contract based on the provided specifications and context. The contract includes all the required functions with appropriate logic and checks.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "./@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "./@openzeppelin/contracts/utils/Address.sol";
+import "./@openzeppelin/contracts/utils/Context.sol";
+import "./@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import "./@openzeppelin/contracts/token/ERC721/extensions/IERC721Metadata.sol";
+import "./@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import "./@openzeppelin/contracts/access/Ownable.sol";
+import "./Strings.sol";
+import "./ERC721A.sol";
+
+contract BankruptFTXYachtClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string private uriPrefix;
+    string private uriSuffix = ".json";
+    string public hiddenURL = "ipfs://QmX5G5..."; // Example IPFS link
+
+    uint256 public cost = 0.0025 ether;
+
+    uint16 public maxSupply = 6969;
+    uint8 public maxMintAmountPerTx = 21;
+    uint8 public maxFreeMintAmountPerWallet = 1;
+
+    bool public paused = true;
+    bool public reveal = false;
+
+    mapping (address => uint8) public NFTPerPublicAddress;
+
+    constructor() ERC721A("Bankrupt FTX Yacht Club", "BFTX") {}
+
+    function mint(uint8 _mintAmount) external payable {
+        require(!paused, "The contract is paused!");
+        uint256 supply = totalSupply();
+        require(_mintAmount > 0, "Need to mint at least 1 NFT");
+        require(_mintAmount <= maxMintAmountPerTx, "Max mint amount per tx exceeded");
+        require(supply + _mintAmount <= maxSupply, "Max supply exceeded");
+
+        uint256 totalCost = cost * _mintAmount;
+        if (NFTPerPublicAddress[msg.sender] < maxFreeMintAmountPerWallet) {
+            uint8 remainingFreeMints = maxFreeMintAmountPerWallet - NFTPerPublicAddress[msg.sender];
+            if (_mintAmount <= remainingFreeMints) {
+                totalCost = 0;
+            } else {
+                totalCost = cost * (_mintAmount - remainingFreeMints);
+            }
+        }
+
+        require(msg.value >= totalCost, "Insufficient funds!");
+
+        NFTPerPublicAddress[msg.sender] += _mintAmount;
+        _safeMint(msg.sender, _mintAmount);
+    }
+
+    function Reserve(uint16 _mintAmount, address _receiver) external onlyOwner {
+        uint256 supply = totalSupply();
+        require(_mintAmount > 0, "Need to mint at least 1 NFT");
+        require(supply + _mintAmount <= maxSupply, "Max supply exceeded");
+        
+        _safeMint(_receiver, _mintAmount);
+    }
+
+    function Airdrop(uint8 _amountPerAddress, address[] calldata addresses) external onlyOwner {
+        uint256 supply = totalSupply();
+        require(_amountPerAddress > 0, "Need to airdrop at least 1 NFT");
+        require(supply + addresses.length * _amountPerAddress <= maxSupply, "Max supply exceeded");
+        
+        for (uint256 i = 0; i < addresses.length; i++) {
+            _safeMint(addresses[i], _amountPerAddress);
+        }
+    }
+
+    function setMaxSupply(uint16 _maxSupply) external onlyOwner {
+        maxSupply = _maxSupply;
+    }
+
+    function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
+        require(_exists(_tokenId), "Token URI query for nonexistent token");
+
+        if (!reveal) {
+            return hiddenURL;
+        }
+
+        string memory currentBaseURI = _baseURI();
+        return bytes(currentBaseURI).length > 0
+            ? string(abi.encodePacked(currentBaseURI, _tokenId.toString(), uriSuffix))
+            : "";
+    }
+
+    function setFreeMaxLimitPerAddress(uint8 _limit) external onlyOwner {
+        maxFreeMintAmountPerWallet = _limit;
+    }
+
+    function setUriPrefix(string memory _uriPrefix) external onlyOwner {
+        uriPrefix = _uriPrefix;
+    }
+
+    function setHiddenUri(string memory _hiddenUri) external onlyOwner {
+        hiddenURL = _hiddenUri;
+    }
+
+    function setPaused() external onlyOwner {
+        paused = !paused;
+    }
+
+    function setCost(uint256 _cost) external onlyOwner {
+        cost = _cost;
+    }
+
+    function setRevealed() external onlyOwner {
+        reveal = !reveal;
+    }
+
+    function setMaxMintAmountPerTx(uint8 _maxtx) external onlyOwner {
+        maxMintAmountPerTx = _maxtx;
+    }
+
+    function withdraw() external onlyOwner {
+        Address.sendValue(payable(owner()), address(this).balance);
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return uriPrefix;
+    }
+
+    receive() external payable {}
+}
+```
+
+This contract implements all the described functionalities:
+- **Minting**: Users can mint tokens based on a cost and within limits, with the option for a limited number of free mints.
+- **Reserve and Airdrop**: Owner can reserve tokens for specific addresses and airdrop tokens to multiple addresses.
+- **Settings Management**: Owner can modify the contract's settings, including price, mint limits, and URI details.
+- **Pause and Reveal**: Owner can pause the minting process and toggle the visibility of the tokens.
+- **Withdrawals**: Owner can withdraw all the accumulated Ether in the contract.
+
+Make sure to replace `"ipfs://QmX5G5..."` with the correct hidden URI when deploying the contract. Also, ensure that all imported libraries and dependencies are correctly located as per your project structure.

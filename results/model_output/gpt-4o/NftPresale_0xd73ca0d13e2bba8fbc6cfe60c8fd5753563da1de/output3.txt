@@ -1,0 +1,122 @@
+Here's the complete and functional `NftPresale` contract strictly following the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "./Context.sol";
+import "./Ownable.sol";
+
+contract NftPresale is INftPresale, Ownable {
+    uint public constant START_TIME = 1634929200; // Oct 22, 2021 15:00 UTC
+    uint public constant FINISH_TIME = 1635015600; // Oct 23, 2021 15:00 UTC
+    uint public constant PRE_SALE_PRICE = 0.2 ether;
+
+    INFT public nft;
+    address public verifyAddress = 0x142581fda5769fe7f8d3b50794dBda454DA4F3ac;
+    mapping(address => bool) public buyers;
+
+    address payable public receiver;
+
+    /**
+     * @notice Initializes the contract with the NFT contract address and the receiver's address.
+     * @param _nftAddress The address of the NFT contract.
+     * @param _receiverAddress The address to receive the funds from the presale.
+     */
+    constructor(address _nftAddress, address payable _receiverAddress) {
+        nft = INFT(_nftAddress);
+        receiver = _receiverAddress;
+    }
+
+    /**
+     * @notice Allows a user to buy one NFT during the presale period.
+     * @dev Ensures that the purchase is within the presale time, the correct amount is paid, and the signature is valid.
+     * @param _amount The number of tokens to buy (must be 1).
+     * @param _signature The signed message from the verifyAddress.
+     */
+    function buy(uint _amount, bytes memory _signature) external override payable {
+        require(block.timestamp >= START_TIME && block.timestamp <= FINISH_TIME, "Presale: Not in presale time window");
+        require(_amount == 1, "Presale: Only 1 token can be bought per transaction");
+        require(msg.value == PRE_SALE_PRICE, "Presale: Incorrect value sent");
+        require(!buyers[msg.sender], "Presale: Already purchased");
+        require(verify(_signature), "Presale: Invalid signature");
+
+        buyers[msg.sender] = true;
+        nft.mint(msg.sender);
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all ETH from the contract.
+     * @dev Only the owner can call this function.
+     * @param _to The address to send the ETH to.
+     */
+    function cashOut(address _to) public onlyOwner {
+        require(_to != address(0), "Presale: Invalid recipient address");
+        (bool success, ) = _to.call{value: address(this).balance}("");
+        require(success, "Presale: CashOut failed");
+    }
+
+    /**
+     * @notice Verifies the signature against the verifyAddress.
+     * @dev Uses the prefixed hash and ecrecover to validate the signature.
+     * @param _signature The signature to verify.
+     * @return bool True if the signature is valid, false otherwise.
+     */
+    function verify(bytes memory _signature) internal view returns (bool) {
+        bytes32 message = prefixed(keccak256(abi.encodePacked(msg.sender)));
+        return recoverSigner(message, _signature) == verifyAddress;
+    }
+
+    /**
+     * @notice Recovers the signer from the message and signature.
+     * @dev Decodes the signature and uses ecrecover to find the signer.
+     * @param message The message hash.
+     * @param sig The signature.
+     * @return address The recovered signer.
+     */
+    function recoverSigner(bytes32 message, bytes memory sig)
+        internal
+        pure
+        returns (address)
+    {
+        require(sig.length == 65, "Presale: Invalid signature length");
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+
+        // Extract r, s, v from the signature
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+
+        // Version of signature should be 27 or 28
+        require(v == 27 || v == 28, "Presale: Invalid signature version");
+
+        return ecrecover(message, v, r, s);
+    }
+
+    /**
+     * @dev Prepends the Ethereum signed message prefix to a hash and returns the resulting hash.
+     * @param hash The original hash value to be prefixed.
+     * @return bytes32 The resulting hash after prepending the Ethereum prefix.
+     */
+    function prefixed(bytes32 hash) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+    }
+}
+```
+
+### Key Points:
+1. **Presale Time**: The contract enforces the presale window using `START_TIME` and `FINISH_TIME`.
+2. **Signature Validation**: The signature is validated using `verify` and `recoverSigner`, ensuring only authorized buyers can participate.
+3. **Purchase Limit**: Each user can buy only one NFT during the presale, enforced via the `buyers` mapping.
+4. **CashOut**: The owner can withdraw all ETH from the contract to the specified address.
+5. **Security**: The contract uses `require` statements for validation and proper error handling.
+
+### Notes:
+- All specified context has been followed.
+- The contract is functional and adheres to Solidity 0.8.7, which includes built-in overflow/underflow protection.
+- Ensure `verifyAddress` has signed the relevant messages for whitelist users.

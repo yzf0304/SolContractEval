@@ -1,0 +1,242 @@
+The following is the completed OdinToken contract.  It implements all of the missing ERC-20 functions, the owner‐only whitelist API, the burn logic, and the time-based airdrop‐transfer restrictions exactly as described.  No other contracts, libraries or dependencies have been added beyond what you provided in context.
+
+```solidity
+contract OdinToken is ERC20Interface, Owned {
+    using SafeMath for uint256;
+
+    string  public symbol;
+    string  public name;
+    uint8   public decimals;
+    uint    private _totalSupply;
+    bool    private _whitelistAll;
+
+    struct balanceData {
+        bool locked;        // unused, reserved
+        uint balance;       // total token balance
+        uint airDropQty;    // how many of those were airdropped
+    }
+
+    mapping(address => balanceData)            balances;
+    mapping(address => mapping(address => uint)) allowed;
+
+    /**
+     * @dev Constructor: set owner, token details, and mint all supply to owner.
+     */
+    function OdinToken() public {
+        owner         = msg.sender;
+        symbol        = "ODIN";
+        name          = "ODIN Token";
+        decimals      = 18;
+        _whitelistAll = false;
+        _totalSupply  = 100000000000000000000000;  // 100,000 ODIN with 18 decimals
+        balances[owner].balance = _totalSupply;
+        emit Transfer(address(0), owner, _totalSupply);
+    }
+
+    /**
+     * @notice Get total token supply
+     */
+    function totalSupply() public constant returns (uint256) {
+        return _totalSupply;
+    }
+
+    /**
+     * @notice Whitelist a single address: zero out any airdrop‐lock on it
+     */
+    function whitelistAddress(address to) onlyOwner public returns (bool) {
+        balances[to].airDropQty = 0;
+        return true;
+    }
+
+    /**
+     * @notice Disable all airdrop transfer restrictions for everyone
+     */
+    function whitelistAllAddresses() onlyOwner public returns (bool) {
+        _whitelistAll = true;
+        return true;
+    }
+
+    /**
+     * @notice Get balance of any account
+     */
+    function balanceOf(address tokenOwner) public constant returns (uint) {
+        return balances[tokenOwner].balance;
+    }
+
+    /**
+     * @notice Standard ERC20 transfer, with special airdrop‐unlock rules
+     */
+    function transfer(address to, uint tokens) public returns (bool success) {
+        require(to != address(0) && to != msg.sender);
+        require(tokens <= balances[msg.sender].balance);
+
+        // Owner transfers become airdrops to the recipient
+        if (msg.sender == owner) {
+            balances[msg.sender].balance = balances[msg.sender].balance.sub(tokens);
+            balances[to].balance         = balances[to].balance.add(tokens);
+            balances[to].airDropQty       = balances[to].airDropQty.add(tokens);
+            emit Transfer(msg.sender, to, tokens);
+            return true;
+        }
+
+        // Enforce time‐based lock on airdropped portion, unless globally whitelisted
+        if (!_whitelistAll && balances[msg.sender].airDropQty > 0) {
+            uint nonAirdrop = balances[msg.sender].balance.sub(balances[msg.sender].airDropQty);
+            uint maxAirTx;
+            uint t = now;
+
+            if (t < 1535760000) {
+                // before Sep 1 2018
+                maxAirTx = 0;
+            } else if (t < 1538352000) {
+                // Sep 1–Sep 30 2018: 10%
+                maxAirTx = balances[msg.sender].airDropQty.mul(10).div(100);
+            } else if (t < 1546300800) {
+                // Oct 1–Dec 31 2018: 25%
+                maxAirTx = balances[msg.sender].airDropQty.mul(25).div(100);
+            } else if (t < 1554076800) {
+                // Jan 1–Mar 31 2019: 50%
+                maxAirTx = balances[msg.sender].airDropQty.mul(50).div(100);
+            } else if (t < 1561939200) {
+                // Apr 1–Jun 30 2019: 75%
+                maxAirTx = balances[msg.sender].airDropQty.mul(75).div(100);
+            } else {
+                // After Jun 30 2019: 100%
+                maxAirTx = balances[msg.sender].airDropQty;
+            }
+
+            uint allowedTransfer = nonAirdrop.add(maxAirTx);
+            require(tokens <= allowedTransfer);
+
+            // If we are dipping into the airdropped portion, burn that lock
+            if (tokens > nonAirdrop) {
+                uint usedAir = tokens.sub(nonAirdrop);
+                balances[msg.sender].airDropQty = balances[msg.sender].airDropQty.sub(usedAir);
+            }
+        }
+
+        // Perform the transfer
+        balances[msg.sender].balance = balances[msg.sender].balance.sub(tokens);
+        balances[to].balance         = balances[to].balance.add(tokens);
+        emit Transfer(msg.sender, to, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Standard ERC20 approve
+     */
+    function approve(address spender, uint tokens) public returns (bool success) {
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Standard ERC20 transferFrom, with same airdrop rules on `from`
+     */
+    function transferFrom(address from, address to, uint tokens) public returns (bool success) {
+        require(to != address(0) && to != from);
+        require(tokens <= balances[from].balance);
+        require(tokens <= allowed[from][msg.sender]);
+
+        // Owner as source => airdrop
+        if (from == owner) {
+            balances[from].balance         = balances[from].balance.sub(tokens);
+            balances[to].balance           = balances[to].balance.add(tokens);
+            balances[to].airDropQty         = balances[to].airDropQty.add(tokens);
+            allowed[from][msg.sender]      = allowed[from][msg.sender].sub(tokens);
+            emit Transfer(from, to, tokens);
+            return true;
+        }
+
+        // Lock logic for non‐owner
+        if (!_whitelistAll && balances[from].airDropQty > 0) {
+            uint nonAirdrop = balances[from].balance.sub(balances[from].airDropQty);
+            uint maxAirTx;
+            uint t = now;
+
+            if (t < 1535760000) {
+                maxAirTx = 0;
+            } else if (t < 1538352000) {
+                maxAirTx = balances[from].airDropQty.mul(10).div(100);
+            } else if (t < 1546300800) {
+                maxAirTx = balances[from].airDropQty.mul(25).div(100);
+            } else if (t < 1554076800) {
+                maxAirTx = balances[from].airDropQty.mul(50).div(100);
+            } else if (t < 1561939200) {
+                maxAirTx = balances[from].airDropQty.mul(75).div(100);
+            } else {
+                maxAirTx = balances[from].airDropQty;
+            }
+
+            uint allowedTransfer = nonAirdrop.add(maxAirTx);
+            require(tokens <= allowedTransfer);
+
+            if (tokens > nonAirdrop) {
+                uint usedAir = tokens.sub(nonAirdrop);
+                balances[from].airDropQty = balances[from].airDropQty.sub(usedAir);
+            }
+        }
+
+        // Execute
+        balances[from].balance       = balances[from].balance.sub(tokens);
+        balances[to].balance         = balances[to].balance.add(tokens);
+        allowed[from][msg.sender]    = allowed[from][msg.sender].sub(tokens);
+        emit Transfer(from, to, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Check remaining allowance
+     */
+    function allowance(address tokenOwner, address spender) public constant returns (uint remaining) {
+        return allowed[tokenOwner][spender];
+    }
+
+    /**
+     * @notice Approve + call contract in one step
+     * @dev Uses the standard `receiveApproval(address,uint256,address,bytes)` callback signature
+     */
+    function approveAndCall(address spender, uint tokens, bytes data) public returns (bool success) {
+        approve(spender, tokens);
+        require(
+            spender.call(
+                bytes4(keccak256("receiveApproval(address,uint256,address,bytes)")),
+                msg.sender,
+                tokens,
+                this,
+                data
+            )
+        );
+        return true;
+    }
+
+    /**
+     * @notice Burn tokens from owner's balance, reducing totalSupply
+     */
+    function burn(uint256 tokens) onlyOwner public returns (bool success) {
+        require(tokens <= balances[owner].balance);
+        balances[owner].balance = balances[owner].balance.sub(tokens);
+        _totalSupply           = _totalSupply.sub(tokens);
+        emit Burn(tokens);
+        emit Transfer(owner, address(0), tokens);
+        return true;
+    }
+
+    /**
+     * @notice Reject any incoming ETH
+     */
+    function() public payable {
+        revert();
+    }
+}
+```
+
+Explanation of key points:
+
+1. All missing ERC-20 methods are now implemented (`totalSupply`, `balanceOf`, `transfer`, `approve`, `transferFrom`, `allowance`, `approveAndCall`).
+2. Owner‐only methods `whitelistAddress` and `whitelistAllAddresses` clear or disable the airdrop locks.
+3. `transfer` and `transferFrom` enforce the time-based lock on airdropped tokens (0% until 9/1/2018, 10% until 10/1, 25% until 1/1/2019, 50% until 4/1/2019, 75% until 7/1/2019, then 100%).  
+4. Any tokens the owner sends are treated as “airdrops” to the recipient (their `airDropQty` is increased).
+5. `burn` allows the owner to permanently destroy tokens and lower `totalSupply`.  
+6. The fallback rejects any ETH sent.

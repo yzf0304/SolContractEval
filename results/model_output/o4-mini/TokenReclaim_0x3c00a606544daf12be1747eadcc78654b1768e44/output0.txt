@@ -1,0 +1,131 @@
+pragma solidity 0.4.23;
+
+contract TokenReclaim {
+    mapping(address => string) internal _ethToSphtx;
+    mapping(string => string) internal _accountToPubKey;
+
+    event AccountRegister(
+        address ethAccount,
+        string sphtxAccount,
+        string pubKey
+    );
+
+    /**
+     * @notice Registers an SPHTX name and associates it with a public key for the caller.
+     */
+    function register(string memory name, string memory pubKey) public {
+        // 1. Validate name length and format
+        require(_validName(name), "Invalid SPHTX name");
+
+        // 2. Validate public key length
+        bytes memory pubKeyBytes = bytes(pubKey);
+        require(
+            pubKeyBytes.length >= 50 && pubKeyBytes.length <= 64,
+            "Invalid public key length"
+        );
+
+        // 3. Ensure caller's address is not already registered
+        require(
+            keccak256(abi.encodePacked(_ethToSphtx[msg.sender])) ==
+                keccak256(abi.encodePacked("")),
+            "Address already registered"
+        );
+
+        // 4. Ensure the SPHTX name is not already in use
+        require(
+            keccak256(abi.encodePacked(_accountToPubKey[name])) ==
+                keccak256(abi.encodePacked("")),
+            "Name already in use"
+        );
+
+        // Store mappings
+        _accountToPubKey[name] = pubKey;
+        _ethToSphtx[msg.sender] = name;
+
+        emit AccountRegister(msg.sender, name, pubKey);
+    }
+
+    /**
+     * @notice Returns the SPHTX name associated with the given Ethereum address.
+     */
+    function account(address addr) public view returns (string memory) {
+        return _ethToSphtx[addr];
+    }
+
+    /**
+     * @notice Returns the public key associated with the SPHTX name of the given address.
+     */
+    function keys(address addr) public view returns (string memory) {
+        string memory name = _ethToSphtx[addr];
+        // If not registered, return empty string
+        if (
+            keccak256(abi.encodePacked(name)) ==
+            keccak256(abi.encodePacked(""))
+        ) {
+            return "";
+        }
+        return _accountToPubKey[name];
+    }
+
+    /**
+     * @notice Checks if a SPHTX name is available for registration.
+     */
+    function nameAvailable(string memory name)
+        public
+        view
+        returns (bool)
+    {
+        // Validate format & length
+        if (!_validName(name)) {
+            return false;
+        }
+        // Must not already be in use
+        if (
+            keccak256(abi.encodePacked(_accountToPubKey[name])) !=
+            keccak256(abi.encodePacked(""))
+        ) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * @dev Internal helper to validate SPHTX name format.
+     */
+    function _validName(string memory name)
+        internal
+        pure
+        returns (bool)
+    {
+        bytes memory b = bytes(name);
+        uint len = b.length;
+
+        // Length between 3 and 16
+        if (len < 3 || len > 16) {
+            return false;
+        }
+
+        // First character: a-z or 0-9
+        bytes1 c = b[0];
+        if (
+            !((c >= 0x61 && c <= 0x7A) || (c >= 0x30 && c <= 0x39))
+        ) {
+            return false;
+        }
+
+        // Subsequent characters: a-z, 0-9, '-' (0x2D), or '.' (0x2E)
+        for (uint i = 1; i < len; i++) {
+            c = b[i];
+            if (
+                !((c >= 0x61 && c <= 0x7A) ||
+                  (c >= 0x30 && c <= 0x39) ||
+                  c == 0x2D ||
+                  c == 0x2E)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}

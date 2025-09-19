@@ -1,0 +1,200 @@
+Here is the completed and functional `Crowdsale` contract strictly adhering to the provided context and descriptions:
+
+```solidity
+pragma solidity ^0.4.18;
+
+import "./SafeMath.sol";
+import "./Ownable.sol";
+
+contract DragonToken {
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+}
+
+contract Crowdsale is Ownable {
+    using SafeMath for uint256;
+
+    // The token being sold
+    DragonToken public token;
+
+    // Token reserve address
+    address public tokenReserve;
+
+    // Crowdsale start and end time
+    uint256 public startTime;
+    uint256 public endTime;
+
+    // Address where collected funds are sent
+    address public wallet;
+
+    // Token price in wei
+    uint256 public rate;
+
+    // Amount of raised funds
+    uint256 public weiRaised;
+
+    // Amount of tokens sold
+    uint256 public tokensSold;
+
+    // Token lock balances and unlock times
+    mapping(address => uint256) public balances;
+    mapping(address => uint256) public releaseTime;
+
+    /**
+     * @dev Event for token purchase logging
+     * @param purchaser The address purchasing the tokens
+     * @param beneficiary The address receiving the tokens
+     * @param value Amount of wei paid for the purchase
+     * @param amount Amount of tokens purchased
+     * @param releaseTime Timestamp for token release
+     */
+    event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amount, uint256 releaseTime);
+
+    /**
+     * @dev Event for end time updates
+     */
+    event EndTimeUpdated();
+
+    /**
+     * @dev Event for token price updates
+     */
+    event DragonPriceUpdated();
+
+    /**
+     * @dev Event for token release
+     */
+    event TokenReleased(address indexed holder, uint256 amount);
+
+    /**
+     * @dev Constructor initializing the Crowdsale contract
+     */
+    function Crowdsale() public {
+        owner = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e; // overriding owner
+        startTime = now;
+        endTime = 1521187200;
+        rate = 5000000000000000; // price in wei
+        wallet = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+        token = DragonToken(0x814F67fA286f7572B041D041b1D99b432c9155Ee);
+        tokenReserve = 0xF615Ac471E066b5ae4BD211CC5044c7a31E89C4e;
+    }
+
+    /**
+     * @dev Fallback function for receiving Ether
+     */
+    function() external payable {
+        buyTokens(msg.sender);
+    }
+
+    /**
+     * @dev Function to buy tokens
+     * @param beneficiary Address that will receive the tokens
+     */
+    function buyTokens(address beneficiary) public payable {
+        require(beneficiary != address(0));
+        require(validPurchase());
+
+        uint256 weiAmount = msg.value;
+        uint256 tokens = getTokenAmount(weiAmount);
+
+        weiRaised = weiRaised.add(weiAmount);
+        tokensSold = tokensSold.add(tokens);
+
+        uint256 releaseTimeStamp = assignTokens(beneficiary, tokens);
+
+        TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, releaseTimeStamp);
+
+        forwardFunds();
+    }
+
+    /**
+     * @dev Function to check if crowdsale has ended
+     */
+    function hasEnded() public view returns (bool) {
+        return now > endTime;
+    }
+
+    /**
+     * @dev Function to calculate token amount
+     */
+    function getTokenAmount(uint256 weiAmount) internal view returns (uint256) {
+        return weiAmount.div(rate);
+    }
+
+    /**
+     * @dev Function to forward collected funds to wallet
+     */
+    function forwardFunds() internal {
+        wallet.transfer(msg.value);
+    }
+
+    /**
+     * @dev Function to validate a purchase
+     */
+    function validPurchase() internal view returns (bool) {
+        bool withinPeriod = now >= startTime && now <= endTime;
+        bool nonZeroPurchase = msg.value > 0;
+        return withinPeriod && nonZeroPurchase;
+    }
+
+    /**
+     * @dev Function to update crowdsale end time
+     */
+    function updateEndTime(uint256 newTime) external onlyOwner {
+        require(newTime > now);
+        endTime = newTime;
+        EndTimeUpdated();
+    }
+
+    /**
+     * @dev Function to update token price
+     */
+    function updateDragonPrice(uint256 weiAmount) external onlyOwner {
+        require(weiAmount > 0);
+        rate = weiAmount;
+        DragonPriceUpdated();
+    }
+
+    /**
+     * @dev Function to assign tokens to beneficiary and set release time
+     */
+    function assignTokens(address beneficiary, uint256 amount) private returns (uint256 lockedFor) {
+        balances[beneficiary] = balances[beneficiary].add(amount);
+        releaseTime[beneficiary] = now + 30 days; // Tokens locked for 30 days
+        return releaseTime[beneficiary];
+    }
+
+    /**
+     * @dev Function to get balance of an address
+     */
+    function balanceOf(address _owner) public view returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    /**
+     * @dev Function to get unlock time of an address
+     */
+    function unlockTime(address _owner) public view returns (uint256 time) {
+        return releaseTime[_owner];
+    }
+
+    /**
+     * @dev Function to release tokens held by timelock
+     */
+    function releaseDragonTokens() public {
+        require(now >= releaseTime[msg.sender]);
+        uint256 amount = balances[msg.sender];
+        require(amount > 0);
+
+        balances[msg.sender] = 0;
+        releaseTime[msg.sender] = 0;
+
+        require(token.transferFrom(tokenReserve, msg.sender, amount));
+
+        TokenReleased(msg.sender, amount);
+    }
+}
+```
+
+### Notes:
+- The contract strictly adheres to the descriptions provided in the context.
+- It ensures all required functionalities are included: token purchases, locked tokens, adjustable end time and rate, and token release mechanism.
+- Solidity version `0.4.18` is used for compatibility as specified in the instructions.

@@ -1,0 +1,129 @@
+Here's the complete implementation of the `UniqlyPresale4` contract based on the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: Unlicense
+pragma solidity ^0.8.2;
+
+abstract contract IERC20 {
+    function balanceOf(address _owner) external virtual returns (uint256 balance);
+
+    function transfer(address _to, uint256 _value) external virtual;
+}
+
+contract UniqlyPresale4 {
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+    uint256 constant failSafeTime = 2 weeks;
+
+    address public owner;
+    address public newOwner;
+
+    bool presaleEnded;
+    bool presaleFailed;
+    bool presaleStarted;
+
+    mapping(address => uint256) private balances;
+
+    constructor(
+        uint256 _presaleLimit, 
+        uint256 _minPerUser, 
+        uint256 _maxPerUser, 
+        uint256 _presaleEnd, 
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 amount = msg.value + balances[msg.sender];
+        require(amount >= minPerUser, "Below buy-in");
+        require(amount <= maxPerUser, "Over buy-in");
+        balances[msg.sender] = amount;
+
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    function start() external {
+        require(msg.sender == owner, "Not the owner");
+        require(!presaleStarted, "Presale already started");
+        presaleStarted = true;
+    }
+
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    function withdraw() external returns (bool) {
+        if (!presaleEnded && block.timestamp > presaleEnd + failSafeTime) {
+            presaleFailed = true;
+        }
+
+        if (!presaleEnded || presaleFailed) {
+            if (balances[msg.sender] > 0) {
+                uint256 amount = balances[msg.sender];
+                balances[msg.sender] = 0;
+                send(msg.sender, amount);
+                return true;
+            }
+            return false;
+        } else if (msg.sender == owner) {
+            uint256 contractBalance = address(this).balance;
+            send(owner, contractBalance);
+            return true;
+        }
+        return false;
+    }
+
+    function send(address user, uint256 amount) private {
+        (bool success, ) = user.call{value: amount}("");
+        require(success, "Transfer failed");
+    }
+
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Not the owner");
+        uint256 balance = token.balanceOf(address(this));
+        token.transfer(owner, balance);
+    }
+
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Not the owner");
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Not the new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+```
+
+### Explanation:
+- **Initialization**: Presale parameters are set as immutable values during the constructor execution, ensuring they're set once and cannot be changed.
+- **Receive function**: Handles incoming ETH while checking constraints like presale limits, time, and per-user contribution rules.
+- **Start function**: Ensures only the owner can start the presale.
+- **Balance functions**: Allow users and external callers to query their presale contributions.
+- **Withdraw function**: Handles different presale states and ensures withdrawals are made correctly, including fail-safe actions.
+- **Send function**: Utilizes low-level `call` to send ETH to users and owner securely.
+- **WithdrawAnyERC20 function**: Provides a mechanism for the owner to recover any ERC20 tokens accidentally sent to the contract.
+- **Ownership transfer functions**: Facilitate ownership changes in a secure two-step process.

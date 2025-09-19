@@ -1,0 +1,54 @@
+contract DNCEQUITY is ERC223BasicToken {
+    address admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping (address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    function DNCEQUITY() {
+        admin = msg.sender;
+    }
+
+    modifier onlyadmin { if (msg.sender == admin) _; }
+
+    function changeAdmin(address _newAdminAddr) onlyadmin {
+        admin = _newAdminAddr;
+    }
+
+    function createNewMintableUser(address newAddr) onlyadmin {
+        require(balances[newAddr] == 0);
+        mintable[newAddr] = true;
+    }
+
+    function deleteMintable(address addr) onlyadmin {
+        mintable[addr] = false;
+    }
+
+    function adminTransfer(address from, address to, uint256 value) onlyadmin {
+        require(mintable[from]);
+        require(balances[from] >= value);
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        Transfer(from, to, value);
+    }
+
+    function mintNewDNC(address user, uint256 quantity) onlyadmin {
+        require(mintable[user]);
+        balances[user] = balances[user].add(quantity);
+        totalSupply = totalSupply.add(quantity);
+        Minted(user, quantity);
+        Transfer(address(0), user, quantity);
+    }
+
+    function burnDNC(address user, uint256 quantity) onlyadmin {
+        require(mintable[user]);
+        require(balances[user] >= quantity);
+        balances[user] = balances[user].sub(quantity);
+        totalSupply = totalSupply.sub(quantity);
+        Burned(user, quantity);
+        Transfer(user, address(0), quantity);
+    }
+}

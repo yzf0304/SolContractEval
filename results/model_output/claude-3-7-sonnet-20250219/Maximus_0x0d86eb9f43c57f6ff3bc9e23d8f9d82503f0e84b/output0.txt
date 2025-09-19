@@ -1,0 +1,208 @@
+I'll complete the HEXToken contract based on the provided context and description:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+/**
+ * @notice HEXToken contract is designed to manage the staking, transferring, and approval of HEX tokens.
+ * @dev This contract includes functions for staking, unstaking, transferring, and approving HEX tokens. 
+ * It also provides a way to check the current day and the number of stakes for a given address.
+ */
+contract HEXToken {
+  // Events
+  event Transfer(address indexed from, address indexed to, uint256 value);
+  event Approval(address indexed owner, address indexed spender, uint256 value);
+  event StakeStart(address indexed stakerAddr, uint256 stakedHearts, uint256 stakedDays, uint40 stakeId);
+  event StakeEnd(address indexed stakerAddr, uint256 stakedHearts, uint256 stakedDays, uint40 stakeId);
+
+  // State variables
+  uint256 private _totalSupply;
+  mapping(address => uint256) private _balances;
+  mapping(address => mapping(address => uint256)) private _allowances;
+  
+  // Staking related structures and variables
+  struct Stake {
+    uint256 stakedHearts;
+    uint256 stakedDays;
+    uint40 stakeId;
+    uint256 startDay;
+    bool active;
+  }
+  
+  mapping(address => Stake[]) private _stakes;
+  uint256 private _launchTime;
+  uint40 private _nextStakeId;
+  
+  constructor() {
+    _launchTime = block.timestamp;
+    _nextStakeId = 1;
+  }
+  
+  /**
+   * @notice Returns the current day in the context of the contract.
+   * @dev This function is useful for determining the current day, which can be used for various calculations within the contract.
+   * @return uint256 The current day.
+   */
+  function currentDay() external view returns (uint256) {
+    return (block.timestamp - _launchTime) / 1 days;
+  }
+
+  /**
+   * @notice Starts a new stake with a specified amount of HEX and duration.
+   * @dev This function allows users to stake their HEX tokens for a certain number of days. The staked amount and duration are recorded.
+   * @param newStakedHearts The amount of HEX to be staked.
+   * @param newStakedDays The number of days for which the HEX will be staked.
+   */
+  function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+    require(newStakedHearts > 0, "Cannot stake zero hearts");
+    require(newStakedDays > 0, "Cannot stake for zero days");
+    require(_balances[msg.sender] >= newStakedHearts, "Insufficient balance");
+    
+    // Update balance
+    _balances[msg.sender] -= newStakedHearts;
+    
+    // Create new stake
+    uint40 stakeId = _nextStakeId++;
+    Stake memory newStake = Stake({
+      stakedHearts: newStakedHearts,
+      stakedDays: newStakedDays,
+      stakeId: stakeId,
+      startDay: (block.timestamp - _launchTime) / 1 days,
+      active: true
+    });
+    
+    // Add to user's stakes
+    _stakes[msg.sender].push(newStake);
+    
+    emit StakeStart(msg.sender, newStakedHearts, newStakedDays, stakeId);
+  }
+
+  /**
+   * @notice Approves a spender to transfer a specified amount of HEX on behalf of the message sender.
+   * @dev This function sets the allowance for a spender, allowing them to transfer up to the specified amount of HEX.
+   * @param spender The address that will be allowed to spend the HEX.
+   * @param amount The amount of HEX that the spender is allowed to transfer.
+   * @return bool True if the approval was successful, otherwise false.
+   */
+  function approve(address spender, uint256 amount) external returns (bool) {
+    require(spender != address(0), "Cannot approve to zero address");
+    
+    _allowances[msg.sender][spender] = amount;
+    emit Approval(msg.sender, spender, amount);
+    return true;
+  }
+
+  /**
+   * @notice Transfers a specified amount of HEX to a recipient.
+   * @dev This function transfers HEX from the message sender to the recipient. It checks for sufficient balance and updates the balances accordingly.
+   * @param recipient The address to which the HEX will be transferred.
+   * @param amount The amount of HEX to be transferred.
+   * @return bool True if the transfer was successful, otherwise false.
+   */
+  function transfer(address recipient, uint256 amount) public returns (bool) {
+    require(recipient != address(0), "Cannot transfer to zero address");
+    require(_balances[msg.sender] >= amount, "Insufficient balance");
+    
+    _balances[msg.sender] -= amount;
+    _balances[recipient] += amount;
+    
+    emit Transfer(msg.sender, recipient, amount);
+    return true;
+  }
+
+  /**
+   * @notice Ends a stake by specifying the stake index and stake ID.
+   * @dev This function allows users to end a specific stake, releasing the staked HEX back to the user's balance.
+   * @param stakeIndex The index of the stake to be ended.
+   * @param stakeIdParam The ID of the stake to be ended.
+   */
+  function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+    require(stakeIndex < _stakes[msg.sender].length, "Invalid stake index");
+    require(_stakes[msg.sender][stakeIndex].stakeId == stakeIdParam, "Stake ID mismatch");
+    require(_stakes[msg.sender][stakeIndex].active, "Stake not active");
+    
+    uint256 currentStakeDay = (block.timestamp - _launchTime) / 1 days;
+    uint256 stakeStartDay = _stakes[msg.sender][stakeIndex].startDay;
+    uint256 stakeDuration = _stakes[msg.sender][stakeIndex].stakedDays;
+    
+    require(currentStakeDay >= stakeStartDay + stakeDuration, "Stake still in progress");
+    
+    // Calculate stake amount to return (could include rewards in a real implementation)
+    uint256 stakeAmount = _stakes[msg.sender][stakeIndex].stakedHearts;
+    
+    // Mark stake as ended
+    _stakes[msg.sender][stakeIndex].active = false;
+    
+    // Return staked hearts to user's balance
+    _balances[msg.sender] += stakeAmount;
+    
+    emit StakeEnd(
+      msg.sender, 
+      _stakes[msg.sender][stakeIndex].stakedHearts, 
+      _stakes[msg.sender][stakeIndex].stakedDays, 
+      stakeIdParam
+    );
+  }
+
+  /**
+   * @notice Returns the number of stakes for a given address.
+   * @dev This function is useful for querying the number of active stakes for a specific address.
+   * @param stakerAddr The address for which to count the stakes.
+   * @return uint256 The number of stakes for the given address.
+   */
+  function stakeCount(address stakerAddr) external view returns (uint256) {
+    return _stakes[stakerAddr].length;
+  }
+  
+  /**
+   * @notice Get the balance of a specific address
+   * @param account The address to query the balance of
+   * @return The token balance of the given address
+   */
+  function balanceOf(address account) external view returns (uint256) {
+    return _balances[account];
+  }
+  
+  /**
+   * @notice Get the allowance of a spender for a specific owner
+   * @param owner The address that owns the tokens
+   * @param spender The address that can spend the tokens
+   * @return The amount of tokens approved for the spender
+   */
+  function allowance(address owner, address spender) external view returns (uint256) {
+    return _allowances[owner][spender];
+  }
+  
+  /**
+   * @notice Transfer tokens from one address to another
+   * @param sender The address to transfer from
+   * @param recipient The address to transfer to
+   * @param amount The amount to transfer
+   * @return True if the operation was successful
+   */
+  function transferFrom(address sender, address recipient, uint256 amount) external returns (bool) {
+    require(sender != address(0), "Cannot transfer from zero address");
+    require(recipient != address(0), "Cannot transfer to zero address");
+    require(_balances[sender] >= amount, "Insufficient balance");
+    require(_allowances[sender][msg.sender] >= amount, "Insufficient allowance");
+    
+    _balances[sender] -= amount;
+    _balances[recipient] += amount;
+    _allowances[sender][msg.sender] -= amount;
+    
+    emit Transfer(sender, recipient, amount);
+    return true;
+  }
+}
+```
+
+This implementation includes:
+1. Basic ERC20 functionality for transfers and approvals
+2. Staking functionality allowing users to stake tokens for a specified period
+3. The ability to end stakes once the staking period is complete
+4. Functions to query the current day and stake count
+5. Proper event emissions for all state-changing operations
+6. Standard balance and allowance checking
+
+The contract handles the core functionality described in the requirements while maintaining appropriate security checks throughout.

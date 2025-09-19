@@ -1,0 +1,86 @@
+Below is the complete and functional `standardToken` contract based on the provided context and descriptions, using Solidity compiler version 0.4.18. The contract includes all necessary functions and events, adhering to the ERC20 standard while incorporating the additional features like the `approveAndCall` function and the `FoundationAccountNeedFreezeOneYear` modifier:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract tokenRecipient {
+    function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public;
+}
+
+contract ERC20Token {
+    uint256 public totalSupply;
+
+    function balanceOf(address _owner) constant public returns (uint256 balance);
+    function transfer(address _to, uint256 _value) public returns (bool success);
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+    function approve(address _spender, uint256 _value) public returns (bool success);
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining);
+
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+}
+
+contract limitedFactor {
+    uint256 public FoundationAddressFreezeTime;
+    address public FoundationAddress;
+    address public TeamAddress;
+
+    modifier FoundationAccountNeedFreezeOneYear(address _address) {
+        if(_address == FoundationAddress) {
+            require(now >= FoundationAddressFreezeTime + 1 years);
+        }
+        _;
+    }
+}
+
+contract standardToken is ERC20Token, limitedFactor {
+    mapping (address => uint256) balances;
+    mapping (address => mapping (address => uint256)) allowances;
+
+    function balanceOf(address _owner) constant public returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _value) public FoundationAccountNeedFreezeOneYear(msg.sender) returns (bool success) {
+        require(_to != address(0)); // Prevent transfer to 0x0 address.
+        require(_value <= balances[msg.sender]); // Check if the sender has enough balance.
+        
+        balances[msg.sender] = balances[msg.sender] - _value; // Subtract from the sender's balance.
+        balances[_to] = balances[_to] + _value; // Add the same to the recipient's balance.
+        Transfer(msg.sender, _to, _value); // Emit Transfer event.
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowances[msg.sender][_spender] = _value; // Set the allowance.
+        Approval(msg.sender, _spender, _value); // Emit Approval event.
+        return true;
+    }
+
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        tokenRecipient spender = tokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0)); // Prevent transfer to 0x0 address.
+        require(_value <= balances[_from]); // Check if the sender has enough balance.
+        require(_value <= allowances[_from][msg.sender]); // Check allowance.
+
+        balances[_from] = balances[_from] - _value; // Subtract from the sender's balance.
+        allowances[_from][msg.sender] = allowances[_from][msg.sender] - _value; // Decrease allowance.
+        balances[_to] = balances[_to] + _value; // Add the same to the recipient's balance.
+        Transfer(_from, _to, _value); // Emit Transfer event.
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) constant public returns (uint256 remaining) {
+        return allowances[_owner][_spender]; // Return the allowance.
+    }
+}
+```
+
+This code defines a `standardToken` contract that complies with the ERC20 standard and includes the additional functionality for approving and calling another contract (`approveAndCall`). It also uses the `FoundationAccountNeedFreezeOneYear` modifier to ensure that any actions by the FoundationAddress are restricted until one year has passed since `FoundationAddressFreezeTime`.

@@ -1,0 +1,102 @@
+Here is the completed SolarDaoToken contract:
+
+```solidity
+contract SolarDaoToken is SafeMath, ERC20, Ownable {
+    string public name = "Solar DAO Token";
+    string public symbol = "SDAO";
+    uint public decimals = 4;
+    address public crowdsaleAgent;
+    bool public released = false;
+    mapping (address => mapping (address => uint)) allowed;
+    mapping(address => uint) balances;
+
+    modifier canTransfer() {
+        require(released || msg.sender == crowdsaleAgent);
+        _;
+    }
+
+    modifier inReleaseState(bool _released) {
+        require(_released == released);
+        _;
+    }
+
+    modifier onlyCrowdsaleAgent() {
+        require(msg.sender == crowdsaleAgent);
+        _;
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        require(msg.data.length >= size + 4);
+        _;
+    }
+
+    modifier canMint() {
+        require(!released);
+        _;
+    }
+
+    function SolarDaoToken() {
+        owner = msg.sender;
+    }
+
+    function() payable {
+        revert();
+    }
+
+    function mint(address receiver, uint amount) onlyCrowdsaleAgent canMint public {
+        totalSupply = safeAdd(totalSupply, amount);
+        balances[receiver] = safeAdd(balances[receiver], amount);
+        Transfer(0, receiver, amount);
+    }
+
+    function setCrowdsaleAgent(address _crowdsaleAgent) onlyOwner inReleaseState(false) public {
+        crowdsaleAgent = _crowdsaleAgent;
+    }
+
+    function releaseTokenTransfer() public onlyCrowdsaleAgent {
+        released = true;
+    }
+
+    function transfer(address _to, uint _value) onlyPayloadSize(2 * 32) canTransfer returns (bool) {
+        balances[msg.sender] = safeSub(balances[msg.sender], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint _value) onlyPayloadSize(3 * 32) canTransfer returns (bool) {
+        uint _allowance = allowed[_from][msg.sender];
+        allowed[_from][msg.sender] = safeSub(_allowance, _value);
+        balances[_from] = safeSub(balances[_from], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function balanceOf(address _owner) constant returns (uint) {
+        return balances[_owner];
+    }
+
+    function approve(address _spender, uint _value) returns (bool) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) constant returns (uint) {
+        return allowed[_owner][_spender];
+    }
+}
+```
+
+This implementation:
+1. Uses SafeMath for all arithmetic operations
+2. Properly implements ERC20 functions with required modifiers
+3. Enforces transfer restrictions before release
+4. Includes crowdsale agent functionality for minting
+5. Prevents short address attacks with payload size checks
+6. Emits proper ERC20 events
+7. Maintains ownership control through Ownable pattern
+8. Includes emergency fallback to prevent ETH deposits
+
+The contract maintains compatibility with Solidity 0.4.16 and includes all specified security features and functionality requirements.

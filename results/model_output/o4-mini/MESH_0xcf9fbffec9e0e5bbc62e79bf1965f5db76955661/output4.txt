@@ -1,0 +1,142 @@
+pragma solidity ^0.4.23;
+
+contract MESH is StandardToken {
+
+    // Token metadata
+    string public name = "MeshBox";
+    string public symbol = "MESH";
+    uint8  public decimals = 18;
+    string public version = "v0.1";
+
+    // Allocation cutoff
+    uint256 public allocateEndTime;
+
+    // Nonce tracking for replay protection
+    mapping(address => uint256) public nonces;
+
+    // Prevent direct ETH transfers
+    function () public {
+        revert();
+    }
+
+    constructor() public {
+        allocateEndTime = now + 1 days;
+    }
+
+    /**
+     * @notice Returns the current nonce for `_addr`.
+     */
+    function getNonce(address _addr) public view returns (uint256) {
+        return nonces[_addr];
+    }
+
+    /**
+     * @notice Owner‐only batch allocation of tokens before `allocateEndTime`.
+     */
+    function allocateTokens(address[] _owners, uint256[] _values)
+        public
+        onlyOwner
+    {
+        require(now <= allocateEndTime);
+        require(_owners.length == _values.length);
+
+        for (uint256 i = 0; i < _owners.length; i++) {
+            address to = _owners[i];
+            uint256 val = _values[i];
+            require(to != address(0));
+            require(val > 0);
+
+            balances[to] += val;
+            totalSupply    += val;
+            emit Transfer(address(0), to, val);
+        }
+    }
+
+    /**
+     * @notice Proxy transfer using an off‐chain signature.
+     */
+    function transferProxy(
+        address _from,
+        address _to,
+        uint256 _value,
+        uint256 _feeMesh,
+        uint8   _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        public
+        transferAllowed(_from)
+        returns (bool)
+    {
+        require(_from != address(0));
+        require(_to   != address(0));
+        // prepare and verify signature
+        bytes32 dataHash = keccak256(
+            address(this),
+            _from,
+            _to,
+            _value,
+            _feeMesh,
+            nonces[_from]
+        );
+        bytes32 prefixed = keccak256(
+            "\x19Ethereum Signed Message:\n32",
+            dataHash
+        );
+        address signer = ecrecover(prefixed, _v, _r, _s);
+        require(signer == _from);
+
+        // update nonce
+        nonces[_from] += 1;
+
+        // perform transfers
+        uint256 total = _value + _feeMesh;
+        require(balances[_from] >= total);
+
+        balances[_from] -= total;
+        balances[_to]     += _value;
+        balances[msg.sender] += _feeMesh;
+
+        emit Transfer(_from, _to,     _value);
+        emit Transfer(_from, msg.sender, _feeMesh);
+
+        return true;
+    }
+
+    /**
+     * @notice Proxy approve using an off‐chain signature.
+     */
+    function approveProxy(
+        address _from,
+        address _spender,
+        uint256 _value,
+        uint8   _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        public
+        returns (bool success)
+    {
+        require(_from    != address(0));
+        require(_spender != address(0));
+
+        bytes32 dataHash = keccak256(
+            address(this),
+            _from,
+            _spender,
+            _value,
+            nonces[_from]
+        );
+        bytes32 prefixed = keccak256(
+            "\x19Ethereum Signed Message:\n32",
+            dataHash
+        );
+        address signer = ecrecover(prefixed, _v, _r, _s);
+        require(signer == _from);
+
+        nonces[_from] += 1;
+        allowed[_from][_spender] = _value;
+        emit Approval(_from, _spender, _value);
+        return true;
+    }
+}

@@ -1,0 +1,220 @@
+Here is the completed `SaudiPotatoz` contract according to your specifications:
+
+```solidity
+pragma solidity ^0.8.7;
+
+import "./ERC721A.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+
+contract SaudiPotatoz is ERC721A, Ownable, ReentrancyGuard {
+  using Address for address;
+
+  string public baseURI;
+  uint public price = 0 ether;
+  uint public maxPerTx = 1;
+  uint public maxPerWallet = 1;
+  uint public totalFree = 0;
+  uint public maxSupply = 5000;
+  uint public nextOwnerToExplicitlySet;
+  bool public mintEnabled;
+
+  /**
+   * @notice Initializes the contract with the name and symbol for the NFT collection.
+   * @dev Sets the name and symbol of the NFT collection.
+   */
+  constructor() ERC721A("SaudiPotatoz", "SaudiPotatoz") {}
+
+  /**
+   * @notice A modifier that ensures the function can only be called by a user (not another contract).
+   * @dev Prevents other contracts from calling the function, ensuring that only EOA (Externally Owned Accounts) can interact with it.
+   */
+  modifier callerIsUser() {
+    require(tx.origin == msg.sender, "The caller is another contract");
+    _;
+  }
+
+  /**
+   * @notice Allows users to mint a specified number of NFTs for free.
+   * @dev Checks if the minting is enabled, if the total supply plus the amount to mint does not exceed the total free supply, and if the user has not exceeded their maximum free mint limit.
+   * @param amt The number of NFTs to mint.
+   */
+  function freeMint(uint256 amt) external callerIsUser {
+    require(mintEnabled, "Minting is not enabled.");
+    require(totalFree > 0, "No free mints available.");
+    require(amt <= maxPerTx, "Exceeds max per tx.");
+    require(_numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max per wallet.");
+    require(totalSupply() + amt <= totalFree, "Not enough free mints available.");
+    
+    _safeMint(msg.sender, amt);
+    totalFree -= amt;
+  }
+
+  /**
+   * @notice Allows users to mint a specified number of NFTs for a fee.
+   * @dev Checks if the minting is enabled, if the total supply plus the amount to mint does not exceed the max supply, and if the user has not exceeded their maximum mint limit. Also, ensures the correct amount of ETH is sent.
+   * @param amt The number of NFTs to mint.
+   */
+  function mint(uint256 amt) external payable callerIsUser {
+    require(mintEnabled, "Minting is not enabled.");
+    require(amt > 0 && amt <= maxPerTx, "Invalid mint amount.");
+    require(totalSupply() + amt <= maxSupply, "Max supply reached.");
+    require(_numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max per wallet.");
+    require(msg.value >= price * amt, "Insufficient payment.");
+
+    _safeMint(msg.sender, amt);
+  }
+
+  /**
+   * @notice Allows the owner to mint a specified number of NFTs.
+   * @dev Ensures that the total supply plus the amount to mint does not exceed the max supply.
+   * @param amt The number of NFTs to mint.
+   */
+  function ownerBatchMint(uint256 amt) external onlyOwner {
+    require(amt > 0, "Invalid mint amount.");
+    require(totalSupply() + amt <= maxSupply, "Max supply reached.");
+    _safeMint(msg.sender, amt);
+  }
+
+  /**
+   * @notice Toggles the minting state on or off.
+   * @dev Can only be called by the contract owner.
+   */
+  function toggleMinting() external onlyOwner {
+    mintEnabled = !mintEnabled;
+  }
+
+  /**
+   * @notice Returns the number of NFTs minted by a specific address.
+   * @dev Uses the internal `_numberMinted` function to get the count.
+   * @param owner The address to check the mint count for.
+   * @return The number of NFTs minted by the given address.
+   */
+  function numberMinted(address owner) public view returns (uint256) {
+    return _numberMinted(owner);
+  }
+
+  /**
+   * @notice Sets the base URI for the NFT metadata.
+   * @dev Can only be called by the contract owner.
+   * @param baseURI_ The new base URI.
+   */
+  function setBaseURI(string calldata baseURI_) external onlyOwner {
+    baseURI = baseURI_;
+  }
+
+  /**
+   * @notice Sets the price for minting NFTs.
+   * @dev Can only be called by the contract owner.
+   * @param price_ The new price for minting.
+   */
+  function setPrice(uint256 price_) external onlyOwner {
+    price = price_;
+  }
+
+  /**
+   * @notice Sets the total number of NFTs that can be minted for free.
+   * @dev Can only be called by the contract owner.
+   * @param totalFree_ The new total free supply.
+   */
+  function setTotalFree(uint256 totalFree_) external onlyOwner {
+    totalFree = totalFree_;
+  }
+
+  /**
+   * @notice Sets the maximum number of NFTs that can be minted in a single transaction.
+   * @dev Can only be called by the contract owner.
+   * @param maxPerTx_ The new maximum per transaction.
+   */
+  function setMaxPerTx(uint256 maxPerTx_) external onlyOwner {
+    maxPerTx = maxPerTx_;
+  }
+
+  /**
+   * @notice Sets the maximum number of NFTs that can be minted by a single wallet.
+   * @dev Can only be called by the contract owner.
+   * @param maxPerWallet_ The new maximum per wallet.
+   */
+  function setMaxPerWallet(uint256 maxPerWallet_) external onlyOwner {
+    maxPerWallet = maxPerWallet_;
+  }
+
+  /**
+   * @notice Sets the maximum supply of NFTs.
+   * @dev Can only be called by the contract owner.
+   * @param maxSupply_ The new maximum supply.
+   */
+  function setMaxSupply(uint256 maxSupply_) external onlyOwner {
+    require(maxSupply_ >= totalSupply(), "Cannot decrease max supply below current total supply.");
+    maxSupply = maxSupply_;
+  }
+
+  /**
+   * @notice Returns the base URI for the NFT metadata.
+   * @dev Overrides the default implementation to return the `baseURI` variable.
+   * @return The base URI for the NFT metadata.
+   */
+  function _baseURI() internal view virtual override returns (string memory) {
+    return baseURI;
+  }
+
+  /**
+   * @notice Allows the owner to withdraw all the Ether stored in the contract.
+   * @dev Can only be called by the contract owner and is protected against reentrancy.
+   */
+  function withdraw() external onlyOwner nonReentrant {
+    payable(owner()).sendValue(address(this).balance);
+  }
+
+  /**
+   * @notice Explicitly sets the ownership data for a specified number of tokens.
+   * @dev Can only be called by the contract owner and is protected against reentrancy.
+   * @param quantity The number of tokens to set the ownership data for.
+   */
+  function setOwnersExplicit(uint256 quantity) external onlyOwner nonReentrant {
+    _setOwnersExplicit(quantity);
+  }
+
+  /**
+   * @notice Returns the ownership data for a specific token.
+   * @dev Can be called by anyone to get the ownership details of a token.
+   * @param tokenId The ID of the token to get the ownership data for.
+   * @return The ownership data for the specified token.
+   */
+  function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+    return ownershipOf(tokenId);
+  }
+
+  /**
+   * @dev Batch-sets ownership data for tokens to optimize future ownerOf() calls.
+   * @param quantity Number of consecutive tokens to process (from nextOwnerToExplicitlySet).
+   */
+  function _setOwnersExplicit(uint256 quantity) internal {
+    require(quantity > 0, "Quantity must be greater than 0");
+    require(currentIndex > 0, "No tokens have been minted yet");
+
+    uint256 end = nextOwnerToExplicitlySet + quantity;
+    require(end <= currentIndex, "Exceeds current supply");
+
+    unchecked {
+      for (uint256 i = nextOwnerToExplicitlySet; i < end; i++) {
+        TokenOwnership memory ownership = _ownerships[i];
+        if (ownership.addr != address(0)) {
+          continue;
+        }
+
+        TokenOwnership memory ownershipBefore = _ownerships[i - 1];
+        require(ownershipBefore.addr != address(0), "Ownership data not initialized");
+
+        _ownerships[i].addr = ownershipBefore.addr;
+        _ownerships[i].startTimestamp = ownershipBefore.startTimestamp;
+      }
+
+      nextOwnerToExplicitlySet = end;
+    }
+  }
+}
+```
+
+This contract implements all functionalities as described, including minting logic (free and paid), ownership management, and various administrative controls. It also includes optimizations for batch setting ownership data to improve performance for `ownerOf()` calls on minted tokens.

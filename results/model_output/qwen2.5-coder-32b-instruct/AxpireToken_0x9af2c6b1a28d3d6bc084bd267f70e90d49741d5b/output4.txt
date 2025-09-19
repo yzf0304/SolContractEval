@@ -1,0 +1,217 @@
+Below is the completed `AxpireToken` contract adhering to the ERC20 and ERC223 standards, using Solidity version 0.4.20. The contract includes all the required functionalities as per your specifications.
+
+```solidity
+/**
+ * @notice The AxpireToken contract is an implementation of the ERC20 and ERC223 standards, designed to create a token with the specified initial supply, name, symbol, and decimals.
+ * @dev This contract extends the functionality of ERC20 and ERC223 by adding additional transfer methods and handling for contract recipients.
+ */
+pragma solidity ^0.4.20;
+
+contract Ownable {
+    address public owner;
+
+    function Ownable() public {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        owner = newOwner;
+    }
+}
+
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a * b;
+        assert(a == 0 || c / a == b);
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a / b;
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+contract TokenRecipient {
+    function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public;
+}
+
+contract ERC20 is Ownable {
+    using SafeMath for uint256;
+
+    string public name;
+    string public symbol;
+    uint8 public decimals;
+    uint256 public totalSupply;
+
+    mapping (address => uint256) public balances;
+    mapping (address => mapping (address => uint256)) public allowed;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed _owner, address indexed _spender, uint _value);
+
+    function ERC20(uint256 _initialSupply, string _tokenName, uint8 _decimalUnits, string _tokenSymbol) public {
+        balances[0x2e1977127F682723C778bBcac576A4aF2c0e790d] = _initialSupply;
+        totalSupply = _initialSupply;
+        decimals = _decimalUnits;
+        symbol = _tokenSymbol;
+        name = _tokenName;
+    }
+
+    function transfer(address _to, uint256 _value) public returns (bool) {
+        bool status = transferInternal(msg.sender, _to, _value, bytes(""), false, "");
+        require(status == true);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData) public returns (bool success) {
+        TokenRecipient spender = TokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _value);
+        bool _success = transferInternal(_from, _to, _value, bytes(""), false, "");
+        if (_success) {
+            allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        }
+        return _success;
+    }
+
+    function totalSupply() public constant returns (uint256) {
+        return totalSupply;
+    }
+
+    function balanceOf(address _address) public constant returns (uint256 balance) {
+        return balances[_address];
+    }
+
+    function allowance(address _owner, address _spender) public constant returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    function setBalance(address _holder, uint256 _amount) internal {
+        balances[_holder] = _amount;
+    }
+
+    function transferInternal(address _from, address _to, uint256 _value, bytes /*_data*/, bool /*_useCustomFallback*/, string /*_customFallback*/) internal returns (bool success) {
+        if (_value == 0) {
+            Transfer(_from, _to, _value);
+            return true;
+        }
+        require(balances[_from] >= _value);
+        setBalance(_from, balances[_from].sub(_value));
+        setBalance(_to, balances[_to].add(_value));
+        Transfer(_from, _to, _value);
+        if (isContract(_to)) {
+            ContractReceiver receiver = ContractReceiver(_to);
+            receiver.tokenFallback(_from, _value, "");
+        }
+        return true;
+    }
+
+    function isContract(address _addr) private returns (bool) {
+        uint256 length;
+        assembly {
+            //retrieve the size of the code on target address, this needs assembly
+            length := extcodesize(_addr)
+        }
+        return length > 0;
+    }
+}
+
+contract ERC223 {
+    event Transfer(address indexed from, address indexed to, uint value, bytes data);
+    function transfer(address to, uint value, bytes data) public returns (bool ok);
+    function transfer(address to, uint value, bytes data, string customFallback) public returns (bool ok);
+}
+
+contract ContractReceiver {
+    function tokenFallback(address _from, uint _value, bytes _data) public;
+}
+
+contract AxpireToken is ERC223, ERC20 {
+    uint256 initialSupply = 350000000 * 10**8;
+    string tokenName = "aXpire Token";
+    string tokenSymbol = "AXP";
+    uint8 decimalUnits = 8;
+
+    function AxpireToken() public
+    ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        balances[msg.sender] = initialSupply;
+    }
+
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        success = transferInternal(msg.sender, to, value, data, false, "");
+        if (success) {
+            Transfer(msg.sender, to, value, data);
+        }
+        return success;
+    }
+
+    function transfer(address to, uint256 value, bytes data, string customFallback) public returns (bool success) {
+        success = transferInternal(msg.sender, to, value, data, true, customFallback);
+        if (success) {
+            Transfer(msg.sender, to, value, data);
+        }
+        return success;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        success = transferInternal(_from, _to, _value, bytes(""), false, "");
+        if (success) {
+            allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        }
+        return success;
+    }
+
+    function transferInternal(address _from, address _to, uint256 _value, bytes _data, bool _useCustomFallback, string _customFallback) internal returns (bool success) {
+        if (_value == 0) {
+            Transfer(_from, _to, _value, _data);
+            return true;
+        }
+        require(balances[_from] >= _value);
+        setBalance(_from, balances[_from].sub(_value));
+        setBalance(_to, balances[_to].add(_value));
+        if (isContract(_to)) {
+            if (_useCustomFallback && bytes(_customFallback).length > 0) {
+                ContractReceiver receiver = ContractReceiver(_to);
+                receiver.tokenFallback(_from, _value, _data);
+            } else {
+                ContractReceiver receiver = ContractReceiver(_to);
+                receiver.tokenFallback(_from, _value, "");
+            }
+        }
+        Transfer(_from, _to, _value, _data);
+        return true;
+    }
+}
+```
+
+This contract integrates the necessary components for both ERC20 and ERC223, including safe math operations, ownership management, and extended transfer capabilities with data and custom fallbacks. Note that the constructor initializes the owner and token balances according to the given specifications.

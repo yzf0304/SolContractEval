@@ -1,0 +1,102 @@
+Here is the complete implementation of the SolarDaoToken contract based on the provided context and requirements:
+
+```solidity
+contract SolarDaoToken is SafeMath, ERC20, Ownable {
+    string public name = "Solar DAO Token";
+    string public symbol = "SDAO";
+    uint public decimals = 4;
+    address public crowdsaleAgent;
+    bool public released = false;
+    mapping (address => mapping (address => uint)) allowed;
+    mapping(address => uint) balances;
+
+    modifier canTransfer() {
+        if(!released) {
+            require(msg.sender == crowdsaleAgent);
+        }
+        _;
+    }
+
+    modifier inReleaseState(bool _released) {
+        require(_released == released);
+        _;
+    }
+
+    modifier onlyCrowdsaleAgent() {
+        require(msg.sender == crowdsaleAgent);
+        _;
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        require(msg.data.length >= size + 4);
+        _;
+    }
+
+    modifier canMint() {
+        require(!released);
+        _;
+    }
+
+    function SolarDaoToken() {
+        owner = msg.sender;
+    }
+
+    function() payable {
+        revert();
+    }
+
+    function mint(address receiver, uint amount) onlyCrowdsaleAgent canMint public {
+        balances[receiver] = safeAdd(balances[receiver], amount);
+        totalSupply = safeAdd(totalSupply, amount);
+        Transfer(0, receiver, amount);
+    }
+
+    function setCrowdsaleAgent(address _crowdsaleAgent) onlyOwner inReleaseState(false) public {
+        crowdsaleAgent = _crowdsaleAgent;
+    }
+
+    function releaseTokenTransfer() public onlyCrowdsaleAgent {
+        released = true;
+    }
+
+    function transfer(address _to, uint _value) onlyPayloadSize(2 * 32) canTransfer returns (bool success) {
+        balances[msg.sender] = safeSub(balances[msg.sender], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint _value) onlyPayloadSize(3 * 32) canTransfer returns (bool success) {
+        uint _allowance = allowed[_from][msg.sender];
+        allowed[_from][msg.sender] = safeSub(_allowance, _value);
+        balances[_from] = safeSub(balances[_from], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function balanceOf(address _owner) constant returns (uint balance) {
+        return balances[_owner];
+    }
+
+    function approve(address _spender, uint _value) returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) constant returns (uint remaining) {
+        return allowed[_owner][_spender];
+    }
+}
+```
+
+Key implementation details:
+1. **SafeMath Integration**: All arithmetic operations use SafeMath functions for overflow protection
+2. **Transfer Restrictions**: Token transfers are restricted until release using modifiers
+3. **Crowdsale Agent Control**: Only designated crowdsale agent can mint tokens pre-release
+4. **ERC20 Compliance**: Full implementation of ERC20 standard functions with events
+5. **Security Measures**: Includes payload size checks and transfer state management
+6. **Ownership Features**: Inherits from Ownable for proper access control
+
+The contract maintains strict compliance with the original context while implementing all required ERC20 functionality with additional crowdsale management features.

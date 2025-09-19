@@ -1,0 +1,203 @@
+pragma solidity 0.8.7;
+
+contract FORMLESS is Ownable, ERC721A, ReentrancyGuard {
+    using Strings for uint256;
+
+    // Public configuration
+    uint256 public MAX_PER_Transtion = 1;
+    uint256 public MAX_PER_Address   = 1;
+    uint256 public PRICE             = 0.069 ether;
+    uint256 public status            = 0;  // 0 = paused, 1 = whitelist, 2 = public
+
+    // Collection bounds
+    uint256 private TotalCollectionSize_ = 500;
+    uint256 private constant MaxMintPerBatch_ = 1;
+
+    // Whitelist
+    mapping(address => bool) private whitelistedAddressesForMint;
+
+    // Metadata
+    string private _baseTokenURI;
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    constructor()
+        ERC721A(
+            "FORMLESS",
+            "FORMLESS",
+            MaxMintPerBatch_,
+            TotalCollectionSize_
+        )
+    {
+        _baseTokenURI = "https://gateway.pinata.cloud/ipfs/QmWT2u6UEeXJs5MWcSTQhHFyYC9wKevQNjXC4J3k67ymtQ/";
+    }
+
+    /**
+     * @notice Mint new NFTs according to sale rules.
+     */
+    function mint(uint256 quantity) external payable callerIsUser {
+        require(status != 0, "Sale is paused");
+        require(quantity > 0 && quantity <= MAX_PER_Transtion, "Invalid quantity");
+        require(totalSupply() + quantity <= TotalCollectionSize_, "Exceeds collection size");
+        require(msg.value >= PRICE * quantity, "Insufficient ETH");
+
+        if (status == 1) {
+            require(whitelistedAddressesForMint[msg.sender], "Not whitelisted");
+        }
+        require(numberMinted(msg.sender) + quantity <= MAX_PER_Address, "Exceeds per-address limit");
+
+        _safeMint(msg.sender, quantity);
+    }
+
+    /**
+     * @notice Returns URI for a token.
+     */
+    function tokenURI(uint256 tokenId)
+        public
+        view
+        virtual
+        override
+        returns (string memory)
+    {
+        require(_exists(tokenId), "ERC721A: URI query for nonexistent token");
+        string memory base = _baseURI();
+        return
+            bytes(base).length > 0
+                ? string(abi.encodePacked(base, tokenId.toString()))
+                : "";
+    }
+
+    /**
+     * @notice Is address whitelisted?
+     */
+    function isWhitelistedForMint(address _user) public view returns (bool) {
+        return whitelistedAddressesForMint[_user];
+    }
+
+    /**
+     * @notice Add addresses to whitelist.
+     */
+    function addNewWhitelistUserForMint(address[] calldata _users)
+        external
+        onlyOwner
+    {
+        for (uint256 i = 0; i < _users.length; i++) {
+            whitelistedAddressesForMint[_users[i]] = true;
+        }
+    }
+
+    /**
+     * @notice Update base URI.
+     */
+    function setBaseURI(string memory baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    /**
+     * @dev internal baseURI override
+     */
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    /**
+     * @notice Number minted by address.
+     */
+    function numberMinted(address ownerAddress)
+        public
+        view
+        returns (uint256)
+    {
+        return _numberMinted(ownerAddress);
+    }
+
+    /**
+     * @notice Expose token ownership data.
+     */
+    function getOwnershipData(uint256 tokenId)
+        external
+        view
+        returns (TokenOwnership memory)
+    {
+        return ownershipOf(tokenId);
+    }
+
+    /**
+     * @notice Withdraw contract balance to owner.
+     */
+    function withdrawMoney() external onlyOwner nonReentrant {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No funds");
+        (bool success, ) = owner().call{value: balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    /**
+     * @notice Change per-address limit.
+     */
+    function changeMAX_PER_Address(uint256 q) external onlyOwner {
+        MAX_PER_Address = q;
+    }
+
+    /**
+     * @notice Reserve NFTs for a given address.
+     */
+    function reserve(address to, uint256 quantity) external onlyOwner {
+        require(totalSupply() + quantity <= TotalCollectionSize_, "Exceeds collection size");
+        _safeMint(to, quantity);
+    }
+
+    /**
+     * @notice Change mint price.
+     */
+    function changeMintPrice(uint256 _newPrice) external onlyOwner {
+        PRICE = _newPrice;
+    }
+
+    /**
+     * @notice Change total collection size.
+     */
+    function changeCollectionSize(uint256 _collectionSize) external onlyOwner {
+        TotalCollectionSize_ = _collectionSize;
+    }
+
+    /**
+     * @notice Change per-transaction limit.
+     */
+    function changeMAX_PER_Transtion(uint256 q) external onlyOwner {
+        MAX_PER_Transtion = q;
+    }
+
+    /**
+     * @notice Giveaway NFTs to an address.
+     */
+    function giveaway(address a, uint256 q) external onlyOwner {
+        require(totalSupply() + q <= TotalCollectionSize_, "Exceeds collection size");
+        _safeMint(a, q);
+    }
+
+    /**
+     * @notice Set sale status.
+     */
+    function setStatus(uint256 s) external onlyOwner {
+        require(s <= 2, "Invalid status");
+        status = s;
+    }
+
+    /**
+     * @notice Get sale status.
+     */
+    function getStatus() public view returns (uint256) {
+        return status;
+    }
+
+    /**
+     * @notice Get total collection size.
+     */
+    function getcollectionSize() public view returns (uint256) {
+        return TotalCollectionSize_;
+    }
+}

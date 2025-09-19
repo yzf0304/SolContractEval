@@ -1,0 +1,238 @@
+```solidity
+// SPDX-License-Identifier: MIT
+//--------------------------------------
+//  EVAI contract
+//
+// Symbol      : EVAI
+// Name        : EVAI.IO
+// Total supply: 1000000000
+// Decimals    : 8
+//--------------------------------------
+
+abstract contract ERC20Interface {
+    function totalSupply() external view virtual returns (uint256);
+
+    function balanceOf(address tokenOwner)
+        external
+        view
+        virtual
+        returns (uint256);
+
+    function allowance(address tokenOwner, address spender)
+        external
+        view
+        virtual
+        returns (uint256);
+
+    function transfer(address to, uint256 tokens)
+        external
+        virtual
+        returns (bool);
+
+    function approve(address spender, uint256 tokens)
+        external
+        virtual
+        returns (bool);
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 tokens
+    ) external virtual returns (bool);
+
+    function burn(uint256 tokens) external virtual returns (bool success);
+
+    function buy(address to, uint256 tokens) external virtual returns (bool);
+
+    function operationProfit(uint256 _profit) external virtual returns (bool);
+
+    event Transfer(address indexed from, address indexed to, uint256 tokens);
+    event Approval(
+        address indexed tokenOwner,
+        address indexed spender,
+        uint256 tokens
+    );
+    event Burn(address from, address, uint256 value);
+    event Profit(address from, uint256 profit, uint256 totalProfit);
+}
+
+// ----------------------------------------------------------------------------
+// Safe Math Library
+// ----------------------------------------------------------------------------
+
+contract SafeMath {
+    function safeAdd(uint256 a, uint256 b) public pure returns (uint256 c) {
+        c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+
+    function safeSub(uint256 a, uint256 b) public pure returns (uint256 c) {
+        require(b <= a, "SafeMath: subtraction overflow");
+        c = a - b;
+        return c;
+    }
+}
+
+
+
+// You task is to complete the smart contract Evaitoken strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.6.10, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @title Evaitoken
+ * @notice This contract implements the ERC20 token standard with additional functionalities like profit tracking and token burning.
+ * @dev The contract uses SafeMath for arithmetic operations to prevent overflows and underflows.
+ */
+contract Evaitoken is ERC20Interface, SafeMath {
+    string public name;
+    string public symbol;
+    uint8 public decimals;
+    uint256 public initialSupply;
+    uint256 public _totalSupply;
+    address public owner;
+    uint256 public totalProfit;
+    uint256 public profit;
+
+    mapping(address => uint256) internal balances;
+    mapping(address => mapping(address => uint256)) internal allowed;
+    mapping(uint256 => uint256) internal token;
+
+    /**
+     * @notice Initializes the contract with the initial supply of tokens and sets the owner.
+     * @dev The constructor sets the token's name, symbol, decimals, and initial supply. It also assigns the entire initial supply to the contract deployer.
+     */
+    constructor() public {
+        name = "EVAI.IO";
+        symbol = "EVAI";
+        decimals = 8;
+        _totalSupply = 1000000000 * 10**uint256(decimals);
+        initialSupply = _totalSupply;
+        balances[msg.sender] = _totalSupply;
+        owner = msg.sender;
+        emit Transfer(address(0), msg.sender, _totalSupply);
+    }
+
+    /**
+     * @notice Returns the total supply of tokens, excluding any tokens sent to the zero address.
+     * @dev This function calculates the total supply by subtracting the balance of the zero address from the `_totalSupply`.
+     * @return The total supply of tokens.
+     */
+    function totalSupply() external view override returns (uint256) {
+        return _totalSupply;
+    }
+
+    /**
+     * @notice Returns the balance of a specific token holder.
+     * @dev This function retrieves the balance of the specified `tokenOwner` from the `balances` mapping.
+     * @param tokenOwner The address of the token holder.
+     * @return The balance of the token holder.
+     */
+    function balanceOf(address tokenOwner) external view override returns (uint256 getBalance) {
+        return balances[tokenOwner];
+    }
+
+    /**
+     * @notice Returns the amount of tokens that an owner allowed to a spender.
+     * @dev This function retrieves the allowance set by `tokenOwner` for `spender` from the `allowed` mapping.
+     * @param tokenOwner The address of the token owner.
+     * @param spender The address of the spender.
+     * @return The remaining allowance.
+     */
+    function allowance(address tokenOwner, address spender) external view override returns (uint256 remaining) {
+        return allowed[tokenOwner][spender];
+    }
+
+    /**
+     * @notice Sets the amount of tokens that an owner allows to a spender.
+     * @dev This function updates the `allowed` mapping and emits an `Approval` event.
+     * @param spender The address of the spender.
+     * @param tokens The number of tokens to approve.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function approve(address spender, uint256 tokens) external override returns (bool success) {
+        allowed[msg.sender][spender] = tokens;
+        emit Approval(msg.sender, spender, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from the message sender to another address.
+     * @dev This function updates the `balances` mapping and emits a `Transfer` event.
+     * @param to The address to transfer tokens to.
+     * @param tokens The number of tokens to transfer.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function transfer(address to, uint256 tokens) external override returns (bool success) {
+        balances[msg.sender] = safeSub(balances[msg.sender], tokens);
+        balances[to] = safeAdd(balances[to], tokens);
+        emit Transfer(msg.sender, to, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from one address to another, using the allowance mechanism.
+     * @dev This function updates the `balances` and `allowed` mappings and emits a `Transfer` event.
+     * @param from The address to transfer tokens from.
+     * @param to The address to transfer tokens to.
+     * @param tokens The number of tokens to transfer.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function transferFrom(address from, address to, uint256 tokens) external override returns (bool success) {
+        uint256 allowance_ = allowed[from][msg.sender];
+        require(allowance_ >= tokens);
+        balances[from] = safeSub(balances[from], tokens);
+        balances[to] = safeAdd(balances[to], tokens);
+        allowed[from][msg.sender] = safeSub(allowance_, tokens);
+        emit Transfer(from, to, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Allows the purchase of tokens and transfers them to a specified address.
+     * @dev This function updates the `balances` mapping and emits a `Transfer` event.
+     * @param to The address to transfer tokens to.
+     * @param tokens The number of tokens to transfer.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function buy(address to, uint256 tokens) external override returns (bool success) {
+        balances[to] = safeAdd(balances[to], tokens);
+        _totalSupply = safeAdd(_totalSupply, tokens);
+        emit Transfer(address(0), to, tokens);
+        return true;
+    }
+
+    /**
+     * @notice Updates the profit and total profit of the contract.
+     * @dev This function can only be called by the contract owner and updates the `profit` and `totalProfit` variables.
+     * @param _profit The amount of profit to add.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function operationProfit(uint256 _profit) external override returns (bool success) {
+        require(msg.sender == owner);
+        profit = safeAdd(profit, _profit);
+        totalProfit = safeAdd(totalProfit, _profit);
+        emit Profit(msg.sender, _profit, totalProfit);
+        return true;
+    }
+
+    /**
+     * @notice Burns a specified amount of tokens from the owner's balance.
+     * @dev This function can only be called by the contract owner and updates the `balances` and `_totalSupply` variables.
+     * @param tokens The number of tokens to burn.
+     * @return A boolean value indicating whether the operation succeeded.
+     */
+    function burn(uint256 tokens) external override returns (bool success) {
+        require(msg.sender == owner);
+        balances[msg.sender] = safeSub(balances[msg.sender], tokens);
+        _totalSupply = safeSub(_totalSupply, tokens);
+        emit Burn(msg.sender, address(0), tokens);
+        return true;
+    }
+
+    /**
+     * @notice Fallback function to receive Ether.
+     * @dev This function is used to receive Ether, but it does not perform any action in this contract.
+     */
+    receive() external payable {}
+}
+```

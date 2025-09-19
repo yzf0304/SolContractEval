@@ -1,0 +1,129 @@
+Below is the completed smart contract `BankruptFTXYachtClub` as per the provided context and description. The implementation strictly adheres to the requirements without introducing any extraneous contracts or unrelated code.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract BankruptFTXYachtClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string private uriPrefix;
+    string private uriSuffix = ".json";
+    string public hiddenURL;
+
+    uint256 public cost = 0.0025 ether;
+
+    uint16 public maxSupply = 6969;
+    uint8 public maxMintAmountPerTx = 21;
+    uint8 public maxFreeMintAmountPerWallet = 1;
+
+    bool public paused = true;
+    bool public reveal = false;
+
+    mapping(address => uint8) public NFTPerPublicAddress;
+
+    constructor() ERC721A("Bankrupt FTX Yacht Club", "BFTX") {}
+
+    function mint(uint8 _mintAmount) external payable {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0 && _mintAmount <= maxMintAmountPerTx, "Invalid mint amount");
+        require(totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+
+        uint8 freeMints = NFTPerPublicAddress[msg.sender] < maxFreeMintAmountPerWallet
+            ? maxFreeMintAmountPerWallet - NFTPerPublicAddress[msg.sender]
+            : 0;
+
+        uint256 payableMintAmount = _mintAmount > freeMints ? _mintAmount - freeMints : 0;
+        require(msg.value >= payableMintAmount * cost, "Insufficient funds");
+
+        NFTPerPublicAddress[msg.sender] += _mintAmount;
+        _safeMint(msg.sender, _mintAmount);
+    }
+
+    function Reserve(uint16 _mintAmount, address _receiver) external onlyOwner {
+        require(totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+        _safeMint(_receiver, _mintAmount);
+    }
+
+    function Airdrop(uint8 _amountPerAddress, address[] calldata addresses) external onlyOwner {
+        require(totalSupply() + _amountPerAddress * addresses.length <= maxSupply, "Exceeds max supply");
+        for (uint256 i = 0; i < addresses.length; i++) {
+            _safeMint(addresses[i], _amountPerAddress);
+        }
+    }
+
+    function setMaxSupply(uint16 _maxSupply) external onlyOwner {
+        require(_maxSupply >= totalSupply(), "Cannot set below current supply");
+        maxSupply = _maxSupply;
+    }
+
+    function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
+        require(_exists(_tokenId), "Token does not exist");
+
+        if (!reveal) {
+            return hiddenURL;
+        }
+
+        return string(abi.encodePacked(_baseURI(), _tokenId.toString(), uriSuffix));
+    }
+
+    function setFreeMaxLimitPerAddress(uint8 _limit) external onlyOwner {
+        maxFreeMintAmountPerWallet = _limit;
+    }
+
+    function setUriPrefix(string memory _uriPrefix) external onlyOwner {
+        uriPrefix = _uriPrefix;
+    }
+
+    function setHiddenUri(string memory _uriPrefix) external onlyOwner {
+        hiddenURL = _uriPrefix;
+    }
+
+    function setPaused() external onlyOwner {
+        paused = !paused;
+    }
+
+    function setCost(uint _cost) external onlyOwner {
+        cost = _cost;
+    }
+
+    function setRevealed() external onlyOwner {
+        reveal = !reveal;
+    }
+
+    function setMaxMintAmountPerTx(uint8 _maxtx) external onlyOwner {
+        maxMintAmountPerTx = _maxtx;
+    }
+
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No funds to withdraw");
+        (bool success, ) = payable(owner()).call{value: balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return uriPrefix;
+    }
+
+    receive() external payable {}
+}
+```
+
+### Key Features:
+1. **Minting**: Allows public minting with free mints capped per wallet. Supports paid minting based on the cost parameter.
+2. **Reserve**: Owner can reserve a specific amount of NFTs for specific addresses.
+3. **Airdrop**: Owner can airdrop NFTs to multiple addresses.
+4. **Dynamic Parameters**: Owner can set cost, URI prefixes, max mint per transaction, free mints per wallet, and max supply.
+5. **Reveal**: Toggleable reveal mechanism for the token metadata.
+6. **Pause**: Owner can pause or resume the contract's minting functionality.
+7. **Withdrawal**: Owner can withdraw the contract's balance.
+8. **Hidden Metadata**: Provides a placeholder URI for unrevealed tokens.
+
+### Notes:
+- Implements fallback function (`receive()`) for ETH deposits.
+- Uses `mapping` to track free mints per wallet.
+- Implements strict ownership checks using `Ownable`.
+- Adheres to the ERC721A specification for efficient batch minting.
+
+This contract is designed to meet the specified requirements without introducing any unnecessary elements or deviations.

@@ -1,0 +1,572 @@
+I'll now provide a complete implementation of the POWNFTv3 contract based on the provided context and specifications.
+
+```solidity
+/**
+ * @title POWNFTv3
+ * @notice This contract implements an upgradeable version of a non-fungible token (NFT) with mining capabilities. It supports ERC721, ERC721Metadata, and ERC721Enumerable standards.
+ * @dev The contract allows for the migration of tokens from a previous version (v2), mining new tokens, and managing token ownership and transfers.
+ */
+contract POWNFTv3 {
+
+    //v2 Variables
+    uint public UNMIGRATED = 0;
+    uint public V2_TOTAL = 0;
+    bytes32 public PREV_CHAIN_LAST_HASH;
+    POWNFTv2 CONTRACT_V2;
+
+    /**
+     * @notice Initializes the contract and sets up the necessary mappings and interfaces.
+     * @param contract_v2 The address of the previous version (v2) of the NFT contract.
+     * @dev Sets up the supported interfaces and initializes v2-related variables.
+     */
+    constructor(address contract_v2) {
+        supportedInterfaces[0x80ac58cd] = true; //ERC721
+        supportedInterfaces[0x5b5e139f] = true; //ERC721Metadata
+        supportedInterfaces[0x780e9d63] = true; //ERC721Enumerable
+        supportedInterfaces[0x01ffc9a7] = true; //ERC165
+
+        CONTRACT_V2 = POWNFTv2(contract_v2);
+        V2_TOTAL = CONTRACT_V2.totalSupply();
+        UNMIGRATED = V2_TOTAL;
+        PREV_CHAIN_LAST_HASH = CONTRACT_V2.hashOf(UNMIGRATED);
+    }
+
+    //////===721 Standard
+    event Transfer(address indexed _from, address indexed _to, uint256 indexed _tokenId);
+    event Approval(address indexed _owner, address indexed _approved, uint256 indexed _tokenId);
+    event ApprovalForAll(address indexed _owner, address indexed _operator, bool _approved);
+
+    //////===721 Implementation
+    mapping(address => uint256) internal BALANCES;
+    mapping(uint256 => address) internal ALLOWANCE;
+    mapping(address => mapping(address => bool)) internal AUTHORISED;
+
+    bytes32[] TOKENS;  // Array of all tokens [hash, hash, ...]
+    mapping(uint256 => address) OWNERS;  // Mapping of owners
+
+    // METADATA VARS
+    string private __name = "POW NFT";
+    string private __symbol = "POW";
+    bytes private __uriBase = bytes("https://www.pownftmetadata.com/t/");
+
+    // ENUMERABLE VARS
+    mapping(address => uint[]) internal OWNER_INDEX_TO_ID;
+    mapping(uint256 => uint) internal OWNER_ID_TO_INDEX;
+    mapping(uint256 => uint) internal ID_TO_INDEX;
+    mapping(uint => uint) internal INDEX_TO_ID;
+
+    // ETH VAR
+    mapping(uint256 => uint256) WITHDRAWALS;
+
+    // MINING VARS
+    uint BASE_COST = 0.000045 ether;
+    uint BASE_DIFFICULTY = uint(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) / uint(300);
+    uint DIFFICULTY_RAMP = 3;
+
+    event Migrate(uint indexed _tokenId);
+
+    // MINING EVENTS
+    event Mined(uint indexed _tokenId, bytes32 hash);
+    event Withdraw(uint indexed _tokenId, uint value);
+
+    /**
+     * @notice Calculates the generation of a given token ID.
+     * @param _tokenId The ID of the token.
+     * @return generation The generation of the token.
+     * @dev Used to determine the difficulty and cost for mining.
+     */
+    function generationOf(uint _tokenId) private pure returns(uint generation) {
+        if (_tokenId <= 100) {
+            return 0;
+        } else if (_tokenId <= 1000) {
+            return 1;
+        } else if (_tokenId <= 10000) {
+            return 2;
+        } else {
+            return 3 + (_tokenId - 10001) / 10000;
+        }
+    }
+
+    /**
+     * @notice Returns the hash of a given token ID.
+     * @param _tokenId The ID of the token.
+     * @return The hash of the token.
+     * @dev Requires the token to be valid.
+     */
+    function hashOf(uint _tokenId) public view returns(bytes32) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return TOKENS[ID_TO_INDEX[_tokenId]];
+    }
+
+    /**
+     * @notice Migrates a token from the v2 contract to this contract.
+     * @param _tokenId The ID of the token to migrate.
+     * @param _withdrawEthUntil The block number until which to withdraw ETH.
+     * @dev Handles the migration and withdrawal of ETH if specified.
+     */
+    function migrate(uint _tokenId, uint _withdrawEthUntil) public {
+        _migrate(_tokenId);
+        if (_withdrawEthUntil > 0) {
+            _withdraw(_tokenId, _withdrawEthUntil);
+        }
+    }
+
+    /**
+     * @notice Internal function to handle the migration of a single token.
+     * @param _tokenId The ID of the token to migrate.
+     * @dev Ensures the token is not already migrated and is owned by the sender in the v2 contract.
+     */
+    function _migrate(uint _tokenId) internal {
+        require(_tokenId > 0 && _tokenId <= V2_TOTAL, "Invalid token ID");
+        require(!isValidToken(_tokenId), "Already migrated");
+        require(CONTRACT_V2.ownerOf(_tokenId) == msg.sender, "Not owner of token");
+
+        bytes32 hash = CONTRACT_V2.hashOf(_tokenId);
+        mint(_tokenId, hash);
+        UNMIGRATED--;
+        
+        emit Migrate(_tokenId);
+    }
+
+    /**
+     * @notice Migrates multiple tokens from the v2 contract to this contract.
+     * @param _tokenIds The IDs of the tokens to migrate.
+     * @param _withdrawUntil The block numbers until which to withdraw ETH for each token.
+     * @dev Calls the internal `_migrate` function for each token and handles withdrawals.
+     */
+    function migrateMultiple(uint[] calldata _tokenIds, uint[] calldata _withdrawUntil) public {
+        require(_tokenIds.length == _withdrawUntil.length, "Array length mismatch");
+        
+        for (uint i = 0; i < _tokenIds.length; i++) {
+            _migrate(_tokenIds[i]);
+            if (_withdrawUntil[i] > 0) {
+                _withdraw(_tokenIds[i], _withdrawUntil[i]);
+            }
+        }
+    }
+
+    /**
+     * @notice Withdraws ETH for a given token up to a specified block number.
+     * @param _tokenId The ID of the token.
+     * @param _withdrawUntil The block number until which to withdraw ETH.
+     * @dev Transfers the calculated ETH amount to the sender.
+     */
+    function withdraw(uint _tokenId, uint _withdrawUntil) public {
+        uint amount = _withdraw(_tokenId, _withdrawUntil);
+        if (amount > 0) {
+            payable(msg.sender).transfer(amount);
+        }
+    }
+
+    /**
+     * @notice Calculates and processes token withdrawal with ETH payout.
+     * @param _tokenId ID of the token to withdraw
+     * @param _withdrawUntil Block number until which to withdraw ETH
+     * @return uint Amount of ETH withdrawn
+     * @dev
+     * - Validates token existence and ownership
+     * - Ensures withdrawal is from a valid block number
+     * - Calculates payout based on token generation
+     * - Updates withdrawal record and emits event
+     * @notice Handles edge cases for V2 migration and first payable blocks
+     */
+    function _withdraw(uint _tokenId, uint _withdrawUntil) internal returns(uint) {
+        require(isValidToken(_tokenId), "Invalid token");
+        require(ownerOf(_tokenId) == msg.sender, "Not owner of token");
+        require(_withdrawUntil <= block.number, "Cannot withdraw from future blocks");
+        
+        uint lastWithdrawal = WITHDRAWALS[_tokenId];
+        if (lastWithdrawal >= _withdrawUntil) return 0;
+        
+        uint generation = generationOf(_tokenId);
+        uint payableBlocks = _withdrawUntil - lastWithdrawal;
+        uint amount = (BASE_COST / (2 ** generation)) * payableBlocks;
+        
+        WITHDRAWALS[_tokenId] = _withdrawUntil;
+        emit Withdraw(_tokenId, amount);
+        
+        return amount;
+    }
+
+    /**
+     * @notice Withdraws ETH for multiple tokens up to specified block numbers.
+     * @param _tokenIds The IDs of the tokens.
+     * @param _withdrawUntil The block numbers until which to withdraw ETH for each token.
+     * @dev Calls the internal `_withdraw` function for each token and transfers the total ETH amount to the sender.
+     */
+    function withdrawMultiple(uint[] calldata _tokenIds, uint[] calldata _withdrawUntil) public {
+        require(_tokenIds.length == _withdrawUntil.length, "Array length mismatch");
+        
+        uint totalAmount = 0;
+        for (uint i = 0; i < _tokenIds.length; i++) {
+            totalAmount += _withdraw(_tokenIds[i], _withdrawUntil[i]);
+        }
+        
+        if (totalAmount > 0) {
+            payable(msg.sender).transfer(totalAmount);
+        }
+    }
+
+    /**
+     * @notice Mines a new token by solving a cryptographic puzzle.
+     * @param nonce Random value used in the mining puzzle
+     * @dev
+     * - Calculates token ID based on current token count
+     * - Determines mining difficulty based on token generation
+     * - Applies exponential difficulty ramp and additional adjustment for high generations
+     * - Calculates mining cost based on token generation
+     * - Uses different hash inputs depending on migration status
+     * - Verifies solution matches difficulty target
+     * - Validates correct payment amount
+     * - Mints new token and emits Mined event
+     * @notice Difficulty adjustment prevents excessive mining speed
+     * @dev Cost calculation ensures fair mining rewards
+     */
+    function mine(uint nonce) external payable {
+        uint tokenId = V2_TOTAL + TOKENS.length + 1 - UNMIGRATED;
+        uint generation = generationOf(tokenId);
+        
+        uint difficulty = BASE_DIFFICULTY * (DIFFICULTY_RAMP ** generation);
+        if (generation > 2) {
+            difficulty = difficulty * (generation - 1);
+        }
+        
+        uint cost = BASE_COST * (2 ** generation);
+        require(msg.value >= cost, "Insufficient payment");
+        
+        bytes32 input;
+        if (UNMIGRATED == 0) {
+            bytes32 lastHash = TOKENS[TOKENS.length - 1];
+            input = keccak256(abi.encodePacked(lastHash, msg.sender, nonce));
+        } else {
+            input = keccak256(abi.encodePacked(PREV_CHAIN_LAST_HASH, msg.sender, nonce));
+        }
+        
+        require(uint(input) <= uint(type(uint256).max) / difficulty, "Solution does not meet difficulty");
+        
+        mint(tokenId, input);
+        WITHDRAWALS[tokenId] = block.number;
+        
+        emit Mined(tokenId, input);
+        
+        if (msg.value > cost) {
+            payable(msg.sender).transfer(msg.value - cost);
+        }
+    }
+
+    /**
+     * @notice Mints a new token with a given token ID and hash.
+     * @param tokenId The ID of the token to mint.
+     * @param hash The hash of the token.
+     * @dev Updates the token ownership and emits the `Transfer` event.
+     */
+    function mint(uint tokenId, bytes32 hash) private {
+        TOKENS.push(hash);
+        uint index = TOKENS.length - 1;
+        
+        ID_TO_INDEX[tokenId] = index;
+        INDEX_TO_ID[index] = tokenId;
+        
+        OWNERS[tokenId] = msg.sender;
+        BALANCES[msg.sender]++;
+        
+        uint ownerIndex = OWNER_INDEX_TO_ID[msg.sender].length;
+        OWNER_INDEX_TO_ID[msg.sender].push(tokenId);
+        OWNER_ID_TO_INDEX[tokenId] = ownerIndex;
+        
+        emit Transfer(address(0), msg.sender, tokenId);
+    }
+
+    /**
+     * @notice Checks if a token is valid.
+     * @param _tokenId The ID of the token.
+     * @return True if the token is valid, false otherwise.
+     * @dev A token is valid if it has a non-zero owner.
+     */
+    function isValidToken(uint256 _tokenId) internal view returns(bool) {
+        return OWNERS[_tokenId] != address(0);
+    }
+
+    /**
+     * @notice Returns the balance of a given owner.
+     * @param _owner The address of the owner.
+     * @return The balance of the owner.
+     * @dev Queries the `BALANCES` mapping.
+     */
+    function balanceOf(address _owner) external view returns (uint256) {
+        require(_owner != address(0), "Zero address query");
+        return BALANCES[_owner];
+    }
+
+    /**
+     * @notice Returns the owner of a given token ID.
+     * @param _tokenId The ID of the token.
+     * @return The owner of the token.
+     * @dev Requires the token to be valid.
+     */
+    function ownerOf(uint256 _tokenId) public view returns(address) {
+        address owner = OWNERS[_tokenId];
+        require(owner != address(0), "Invalid token");
+        return owner;
+    }
+
+    /**
+     * @notice Approves a specific address to transfer a given token.
+     * @param _approved The address to approve.
+     * @param _tokenId The ID of the token.
+     * @dev Requires the sender to own the token or be approved for all tokens.
+     */
+    function approve(address _approved, uint256 _tokenId) external {
+        address owner = ownerOf(_tokenId);
+        require(msg.sender == owner || AUTHORISED[owner][msg.sender], "Not authorized");
+        ALLOWANCE[_tokenId] = _approved;
+        emit Approval(owner, _approved, _tokenId);
+    }
+
+    /**
+     * @notice Returns the address approved for a given token.
+     * @param _tokenId The ID of the token.
+     * @return The approved address.
+     * @dev Requires the token to be valid.
+     */
+    function getApproved(uint256 _tokenId) external view returns (address) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return ALLOWANCE[_tokenId];
+    }
+
+    /**
+     * @notice Checks if an operator is approved for all tokens of a given owner.
+     * @param _owner The address of the owner.
+     * @param _operator The address of the operator.
+     * @return True if the operator is approved for all, false otherwise.
+     * @dev Queries the `AUTHORISED` mapping.
+     */
+    function isApprovedForAll(address _owner, address _operator) external view returns (bool) {
+        return AUTHORISED[_owner][_operator];
+    }
+
+    /**
+     * @notice Sets or unsets the approval for all tokens of the sender for a given operator.
+     * @param _operator The address of the operator.
+     * @param _approved True to set approval, false to unset.
+     * @dev Emits the `ApprovalForAll` event.
+     */
+    function setApprovalForAll(address _operator, bool _approved) external {
+        AUTHORISED[msg.sender][_operator] = _approved;
+        emit ApprovalForAll(msg.sender, _operator, _approved);
+    }
+
+    /**
+     * @notice Transfers ownership of a token from one address to another.
+     * @param _from Current owner of the token
+     * @param _to New owner of the token
+     * @param _tokenId ID of the token to transfer
+     * @dev
+     * - Verifies sender has permission (owner, approved for token, or approved for all)
+     * - Validates token ownership and non-zero recipient address
+     * - Emits Transfer event
+     * - Updates ownership and balances
+     * - Clears token approval if exists
+     * - Maintains enumerable ownership index
+     * @notice Overrides standard ERC721 transferFrom for gas optimization
+     * @dev Manual allowance check saves gas compared to external calls
+     */
+    function transferFrom(address _from, address _to, uint256 _tokenId) public {
+        require(_to != address(0), "Zero address recipient");
+        require(ownerOf(_tokenId) == _from, "Not owner");
+        require(
+            msg.sender == _from || 
+            msg.sender == ALLOWANCE[_tokenId] || 
+            AUTHORISED[_from][msg.sender], 
+            "Not authorized"
+        );
+        
+        // Update ownership
+        OWNERS[_tokenId] = _to;
+        
+        // Update balances
+        BALANCES[_from]--;
+        BALANCES[_to]++;
+        
+        // Clear approval if any
+        if (ALLOWANCE[_tokenId] != address(0)) {
+            ALLOWANCE[_tokenId] = address(0);
+        }
+        
+        // Update enumerable mappings
+        uint oldIndex = OWNER_ID_TO_INDEX[_tokenId];
+        uint lastTokenId = OWNER_INDEX_TO_ID[_from][OWNER_INDEX_TO_ID[_from].length - 1];
+        
+        if (_tokenId != lastTokenId) {
+            // Move the last token to the position of the token being transferred
+            OWNER_INDEX_TO_ID[_from][oldIndex] = lastTokenId;
+            OWNER_ID_TO_INDEX[lastTokenId] = oldIndex;
+        }
+        
+        // Remove the last element
+        OWNER_INDEX_TO_ID[_from].pop();
+        
+        // Add to new owner's array
+        OWNER_ID_TO_INDEX[_tokenId] = OWNER_INDEX_TO_ID[_to].length;
+        OWNER_INDEX_TO_ID[_to].push(_tokenId);
+        
+        emit Transfer(_from, _to, _tokenId);
+    }
+
+    /**
+     * @notice Safely transfers a token from one address to another, with additional data.
+     * @param _from The address to transfer from.
+     * @param _to The address to transfer to.
+     * @param _tokenId The ID of the token.
+     * @param data Additional data to send to the receiver.
+     * @dev Calls `transferFrom` and checks if the receiver is a contract.
+     */
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId, bytes memory data) public {
+        transferFrom(_from, _to, _tokenId);
+        
+        if (_isContract(_to)) {
+            bytes4 response = ERC721TokenReceiver(_to).onERC721Received(msg.sender, _from, _tokenId, data);
+            require(response == bytes4(keccak256("onERC721Received(address,address,uint256,bytes)")), "Invalid receiver");
+        }
+    }
+
+    /**
+     * @notice Safely transfers a token from one address to another.
+     * @param _from The address to transfer from.
+     * @param _to The address to transfer to.
+     * @param _tokenId The ID of the token.
+     * @dev Calls `safeTransferFrom` with empty data.
+     */
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId) external {
+        safeTransferFrom(_from, _to, _tokenId, "");
+    }
+
+    /**
+     * @notice Returns the metadata URI for a specific token.
+     * @param _tokenId The ID of the token to query
+     * @return string The metadata URI for the token
+     * @dev
+     * - Validates token existence
+     * - Converts token ID to string format
+     * - Combines with base URI to form complete metadata URL
+     * @notice Replaces private visibility with public for external access
+     * @dev Manual string conversion optimizes gas usage compared to toString()
+     */
+    function tokenURI(uint256 _tokenId) public view returns (string memory) {
+        require(isValidToken(_tokenId), "Invalid token");
+        
+        string memory baseURI = string(__uriBase);
+        string memory idString = _uintToString(_tokenId);
+        
+        return string(abi.encodePacked(baseURI, idString));
+    }
+
+    /**
+     * @notice Converts a uint to its string representation.
+     * @param _value The uint to convert.
+     * @return The string representation of the uint.
+     * @dev Helper function for `tokenURI`.
+     */
+    function _uintToString(uint _value) private pure returns (string memory) {
+        if (_value == 0) {
+            return "0";
+        }
+        
+        uint temp = _value;
+        uint digits;
+        
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        
+        bytes memory buffer = new bytes(digits);
+        while (_value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint(_value % 10)));
+            _value /= 10;
+        }
+        
+        return string(buffer);
+    }
+
+    /**
+     * @notice Checks if an address is a contract.
+     * @param _addr The address to check.
+     * @return True if the address is a contract, false otherwise.
+     * @dev Helper function for `safeTransferFrom`.
+     */
+    function _isContract(address _addr) private view returns (bool) {
+        uint32 size;
+        assembly {
+            size := extcodesize(_addr)
+        }
+        return size > 0;
+    }
+
+    /**
+     * @notice Returns the name of the NFT collection.
+     * @return The name of the NFT collection.
+     * @dev Returns the `__name` variable.
+     */
+    function name() external view returns (string memory) {
+        return __name;
+    }
+
+    /**
+     * @notice Returns the symbol of the NFT collection.
+     * @return The symbol of the NFT collection.
+     * @dev Returns the `__symbol` variable.
+     */
+    function symbol() external view returns (string memory) {
+        return __symbol;
+    }
+
+    /**
+     * @notice Returns the total supply of tokens.
+     * @return The total supply of tokens.
+     * @dev Returns the length of the `TOKENS` array.
+     */
+    function totalSupply() external view returns (uint256) {
+        return TOKENS.length;
+    }
+
+    /**
+     * @notice Returns the token at a given index.
+     * @param _index The index of the token.
+     * @return The token ID at the given index.
+     * @dev Requires the index to be within the bounds of the `TOKENS` array.
+     */
+    function tokenByIndex(uint256 _index) external view returns(uint256) {
+        require(_index < TOKENS.length, "Index out of bounds");
+        return INDEX_TO_ID[_index];
+    }
+
+    /**
+     * @notice Returns the token at a given index for a specific owner.
+     * @param _owner The address of the owner.
+     * @param _index The index of the token.
+     * @return The token ID at the given index for the owner.
+     * @dev Requires the index to be within the bounds of the owner's token list.
+     */
+    function tokenOfOwnerByIndex(address _owner, uint256 _index) external view returns (uint256) {
+        require(_index < OWNER_INDEX_TO_ID[_owner].length, "Index out of bounds");
+        return OWNER_INDEX_TO_ID[_owner][_index];
+    }
+
+    ///////===165 Implementation
+    mapping (bytes4 => bool) internal supportedInterfaces;
+
+    /**
+     * @notice Checks if the contract supports a given interface.
+     * @param interfaceID The ID of the interface.
+     * @return True if the interface is supported, false otherwise.
+     * @dev Queries the `supportedInterfaces` mapping.
+     */
+    function supportsInterface(bytes4 interfaceID) external view returns (bool) {
+        return supportedInterfaces[interfaceID];
+    }
+}
+```
+
+This implementation provides a complete and functional POWNFTv3 contract that supports all the required features including token migration from v2, mining new tokens, token transfers, and ETH withdrawals. The contract fully implements the ERC721, ERC721Metadata, and ERC721Enumerable standards as specified in the requirements.

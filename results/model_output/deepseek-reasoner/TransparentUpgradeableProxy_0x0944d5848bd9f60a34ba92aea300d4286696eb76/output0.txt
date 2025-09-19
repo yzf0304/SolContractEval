@@ -1,0 +1,123 @@
+Here is the completed code for the TransparentUpgradeableProxy contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.6.12;
+
+contract TransparentUpgradeableProxy is UpgradeableProxy {
+    /**
+     * @dev Initializes an upgradeable proxy managed by `_admin`, backed by the implementation at `_logic`, and
+     * optionally initialized with `_data` as explained in {UpgradeableProxy-constructor}.
+     */
+    constructor(address _logic, address _admin, bytes memory _data) public payable UpgradeableProxy(_logic, _data) {
+        assert(_ADMIN_SLOT == bytes32(uint256(keccak256("eip1967.proxy.admin")) - 1));
+        _setAdmin(_admin);
+    }
+
+    /**
+     * @dev Emitted when the admin account has changed.
+     */
+    event AdminChanged(address previousAdmin, address newAdmin);
+
+    /**
+     * @dev Storage slot with the admin of the contract.
+     * This is the keccak-256 hash of "eip1967.proxy.admin" subtracted by 1, and is
+     * validated in the constructor.
+     */
+    bytes32 private constant _ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
+    /**
+     * @dev Modifier used internally that will delegate the call to the implementation unless the sender is the admin.
+     */
+    modifier ifAdmin() {
+        if (msg.sender == _admin()) {
+            _;
+        } else {
+            _fallback();
+        }
+    }
+
+    /**
+     * @notice Returns the current admin.
+     */
+    function admin() external ifAdmin returns (address) {
+        return _admin();
+    }
+
+    /**
+     * @notice Returns the current implementation.
+     */
+    function implementation() external ifAdmin returns (address) {
+        return _implementation();
+    }
+
+    /**
+     * @notice Changes the admin of the proxy.
+     */
+    function changeAdmin(address newAdmin) external ifAdmin {
+        require(newAdmin != address(0), "TransparentUpgradeableProxy: new admin is the zero address");
+        emit AdminChanged(_admin(), newAdmin);
+        _setAdmin(newAdmin);
+    }
+
+    /**
+     * @notice Upgrades the implementation of the proxy.
+     */
+    function upgradeTo(address newImplementation) external ifAdmin {
+        _upgradeTo(newImplementation);
+    }
+
+    /**
+     * @notice Upgrades the implementation of the proxy, and then calls a function from the new implementation.
+     */
+    function upgradeToAndCall(address newImplementation, bytes calldata data) external payable ifAdmin {
+        _upgradeTo(newImplementation);
+        (bool success,) = newImplementation.delegatecall(data);
+        require(success, "TransparentUpgradeableProxy: call failed");
+    }
+
+    /**
+     * @dev Returns the current admin.
+     */
+    function _admin() internal view returns (address adm) {
+        bytes32 slot = _ADMIN_SLOT;
+        assembly {
+            adm := sload(slot)
+        }
+    }
+
+    /**
+     * @dev Stores a new address in the EIP1967 admin slot.
+     */
+    function _setAdmin(address newAdmin) private {
+        bytes32 slot = _ADMIN_SLOT;
+        assembly {
+            sstore(slot, newAdmin)
+        }
+    }
+
+    /**
+     * @dev Prevents the admin from accessing fallback function.
+     */
+    function _beforeFallback() internal override virtual {
+        require(msg.sender != _admin(), "TransparentUpgradeableProxy: admin cannot fallback to proxy target");
+        super._beforeFallback();
+    }
+
+    /**
+     * @dev Fallback function that delegates calls to the current implementation.
+     */
+    receive() external payable {
+        _fallback();
+    }
+}
+```
+
+### Key Features:
+1. **Admin Management**: Implements functions to get and change the admin address using dedicated storage slots to prevent collisions.
+2. **Upgradeability**: Allows the admin to upgrade the contract implementation and optionally initialize it with new data.
+3. **Transparent Proxy Pattern**: Ensures admin calls to non-admin functions are delegated to the implementation contract while maintaining admin control over proxy-specific functions.
+4. **Security Checks**: Includes checks to prevent the admin from accidentally calling implementation functions through the proxy and validates new admin addresses.
+
+This implementation follows best practices for upgradeable proxies while maintaining compatibility with the provided context and Solidity version constraints.

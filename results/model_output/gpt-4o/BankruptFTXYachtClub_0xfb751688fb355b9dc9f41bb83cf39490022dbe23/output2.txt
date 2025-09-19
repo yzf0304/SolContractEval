@@ -1,0 +1,115 @@
+Below is the complete and functional smart contract `BankruptFTXYachtClub`, implemented strictly according to the provided context and description. The contract extends `ERC721A` and `Ownable` to provide additional NFT functionalities.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract BankruptFTXYachtClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string private uriPrefix = "";
+    string private uriSuffix = ".json";
+    string public hiddenURL;
+
+    uint256 public cost = 0.0025 ether;
+
+    uint16 public maxSupply = 6969;
+    uint8 public maxMintAmountPerTx = 21;
+    uint8 public maxFreeMintAmountPerWallet = 1;
+
+    bool public paused = true;
+    bool public reveal = false;
+
+    mapping(address => uint8) public NFTPerPublicAddress;
+
+    constructor() ERC721A("Bankrupt FTX Yacht Club", "BFTX") {}
+
+    function mint(uint8 _mintAmount) external payable {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0 && _mintAmount <= maxMintAmountPerTx, "Invalid mint amount");
+        require(totalSupply() + _mintAmount <= maxSupply, "Max supply exceeded");
+
+        uint8 mintedAmount = NFTPerPublicAddress[msg.sender];
+        uint256 requiredCost = 0;
+
+        if (mintedAmount < maxFreeMintAmountPerWallet) {
+            uint8 freeMintCount = maxFreeMintAmountPerWallet - mintedAmount;
+            freeMintCount = _mintAmount > freeMintCount ? freeMintCount : _mintAmount;
+            requiredCost = (_mintAmount - freeMintCount) * cost;
+        } else {
+            requiredCost = _mintAmount * cost;
+        }
+
+        require(msg.value >= requiredCost, "Insufficient funds");
+
+        NFTPerPublicAddress[msg.sender] += _mintAmount;
+        _safeMint(msg.sender, _mintAmount);
+    }
+
+    function Reserve(uint16 _mintAmount, address _receiver) external onlyOwner {
+        require(totalSupply() + _mintAmount <= maxSupply, "Max supply exceeded");
+        _safeMint(_receiver, _mintAmount);
+    }
+
+    function Airdrop(uint8 _amountPerAddress, address[] calldata addresses) external onlyOwner {
+        require(addresses.length > 0, "Address list is empty");
+        require(totalSupply() + _amountPerAddress * addresses.length <= maxSupply, "Max supply exceeded");
+
+        for (uint256 i = 0; i < addresses.length; i++) {
+            _safeMint(addresses[i], _amountPerAddress);
+        }
+    }
+
+    function setMaxSupply(uint16 _maxSupply) external onlyOwner {
+        require(_maxSupply >= totalSupply(), "Max supply cannot be less than current supply");
+        maxSupply = _maxSupply;
+    }
+
+    function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
+        require(_exists(_tokenId), "Query for nonexistent token");
+        if (!reveal) {
+            return hiddenURL;
+        }
+        return string(abi.encodePacked(_baseURI(), _tokenId.toString(), uriSuffix));
+    }
+
+    function setFreeMaxLimitPerAddress(uint8 _limit) external onlyOwner {
+        maxFreeMintAmountPerWallet = _limit;
+    }
+
+    function setUriPrefix(string memory _uriPrefix) external onlyOwner {
+        uriPrefix = _uriPrefix;
+    }
+
+    function setHiddenUri(string memory _uriPrefix) external onlyOwner {
+        hiddenURL = _uriPrefix;
+    }
+
+    function setPaused() external onlyOwner {
+        paused = !paused;
+    }
+
+    function setCost(uint256 _cost) external onlyOwner {
+        cost = _cost;
+    }
+
+    function setRevealed() external onlyOwner {
+        reveal = !reveal;
+    }
+
+    function setMaxMintAmountPerTx(uint8 _maxtx) external onlyOwner {
+        maxMintAmountPerTx = _maxtx;
+    }
+
+    function withdraw() external onlyOwner {
+        (bool success, ) = payable(owner()).call{value: address(this).balance}("");
+        require(success, "Withdrawal failed");
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return uriPrefix;
+    }
+
+    receive() external payable {}
+}
+```

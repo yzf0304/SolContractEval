@@ -1,0 +1,177 @@
+To complete the `MintHelper` contract according to the provided specifications and context, we need to implement the missing functions. Since the contract is meant to be compatible with Solidity 0.5.10 and interacts with both ERC20 and ERC918 tokens, we will incorporate the necessary logic while adhering to these constraints. We will also implement the `SafeMath` library manually since it's not explicitly imported in the given context.
+
+Here's the completed `MintHelper` contract:
+
+```solidity
+pragma solidity ^0.5.10;
+
+contract Ownable {
+    address private _owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    /**
+     * @dev Initializes the contract setting the deployer as the initial owner.
+     */
+    constructor () internal {
+        _owner = msg.sender;
+        emit OwnershipTransferred(address(0), _owner);
+    }
+
+    /**
+     * @dev Returns the address of the current owner.
+     */
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    /**
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwner() {
+        require(isOwner(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    /**
+     * @dev Returns true if the caller is the current owner.
+     */
+    function isOwner() public view returns (bool) {
+        return msg.sender == _owner;
+    }
+
+    /**
+     * @dev Leaves the contract without owner. It will not be possible to call
+     * `onlyOwner` functions anymore. Can only be called by the current owner.
+     *
+     * > Note: Renouncing ownership will leave the contract without an owner,
+     * thereby removing any functionality that is only available to the owner.
+     */
+    function renounceOwnership() public onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+     * Can only be called by the current owner.
+     */
+    function transferOwnership(address newOwner) public onlyOwner {
+        _transferOwnership(newOwner);
+    }
+
+    /**
+     * @dev Transfers ownership of the contract to a new account (`newOwner`).
+     */
+    function _transferOwnership(address newOwner) internal {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+contract ERC20Interface {
+    function totalSupply() public view returns (uint);
+    function balanceOf(address tokenOwner) public view returns (uint balance);
+    function allowance(address tokenOwner, address spender) public view returns (uint remaining);
+    function transfer(address to, uint tokens) public returns (bool success);
+    function approve(address spender, uint tokens) public returns (bool success);
+    function transferFrom(address from, address to, uint tokens) public returns (bool success);
+
+    event Transfer(address indexed from, address indexed to, uint tokens);
+    event Approval(address indexed tokenOwner, address indexed spender, uint tokens);
+}
+
+contract ERC918Interface {
+  function totalSupply() public view returns (uint);
+  function getMiningDifficulty() public view returns (uint);
+  function getMiningTarget() public view returns (uint);
+  function getMiningReward() public view returns (uint);
+  function balanceOf(address tokenOwner) public view returns (uint balance);
+
+  function mint(uint256 nonce, bytes32 challenge_digest) public returns (bool success);
+
+  event Mint(address indexed from, uint reward_amount, uint epochCount, bytes32 newChallengeNumber);
+}
+
+library SafeMath {
+    function add(uint a, uint b) internal pure returns (uint c) {
+        c = a + b;
+        require(c >= a);
+    }
+
+    function sub(uint a, uint b) internal pure returns (uint c) {
+        require(b <= a);
+        c = a - b;
+    }
+
+    function mul(uint a, uint b) internal pure returns (uint c) {
+        c = a * b;
+        require(a == 0 || c / a == b);
+    }
+
+    function div(uint a, uint b) internal pure returns (uint c) {
+        require(b > 0);
+        c = a / b;
+    }
+}
+
+contract MintHelper is Ownable {
+    using SafeMath for uint;
+
+    string public name;
+    address public mintableToken;
+    mapping(bytes32 => bool) public successfulPayments;
+
+    constructor(address mToken, string memory mName) public {
+        mintableToken = mToken;
+        name = mName;
+    }
+
+    function setMintableToken(address mToken) public onlyOwner returns (bool) {
+        mintableToken = mToken;
+        return true;
+    }
+
+    function paymentSuccessful(bytes32 paymentId) public view returns (bool) {
+        return successfulPayments[paymentId];
+    }
+
+    function proxyMint(uint256 nonce, bytes32 challenge_digest) public returns (bool) {
+        ERC918Interface token = ERC918Interface(mintableToken);
+        bool success = token.mint(nonce, challenge_digest);
+        if (success) {
+            // Log a custom event if needed, or handle accordingly
+        }
+        return success;
+    }
+
+    function withdraw() public onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    function send(address _tokenAddr, address dest, uint value) public onlyOwner returns (bool) {
+        ERC20Interface token = ERC20Interface(_tokenAddr);
+        return token.transfer(dest, value);
+    }
+
+    function multisend(address _tokenAddr, bytes32 paymentId, address[] memory dests, uint256[] memory values) public onlyOwner returns (uint256) {
+        require(!paymentSuccessful(paymentId), "Payment ID already used");
+        require(dests.length == values.length, "Invalid input arrays");
+
+        ERC20Interface token = ERC20Interface(_tokenAddr);
+        uint256 successfulTransfers = 0;
+        for (uint i = 0; i < dests.length; i++) {
+            if (token.transfer(dests[i], values[i])) {
+                successfulTransfers++;
+            }
+        }
+
+        // Mark the payment as successful
+        successfulPayments[paymentId] = true;
+        return successfulTransfers;
+    }
+}
+```
+
+This implementation adheres to the Solidity 0.5.10 compiler requirements and includes all functionalities described in the contract's documentation, such as setting the mintable token, checking payment status, proxy minting tokens, withdrawing ETH, transferring tokens, and batch sending tokens to multiple recipients.

@@ -1,0 +1,239 @@
+Here's the completed `CrowdSale` contract based on the provided context and descriptions. 
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract CrowdSale is Ownable {
+
+    // ERC20 Token
+    ERC20 public token;
+
+    // Address where funds are received
+    address public beneficiary;
+    // Address that provides tokens
+    address public tokenHolder;
+
+    // Rate of token units per wei
+    uint public rate;
+    // Goal amount in wei
+    uint public amountGoal;
+    // Current amount of raised money in wei
+    uint public amountRaised;
+    // Amount of tokens issued
+    uint public amountTokenIssued;
+
+    // Important Time
+    uint public startTime;
+    uint public endTime;
+
+    // Stages Info
+    struct Stage {
+        uint duration;      // Duration in seconds of the current stage
+        uint rate;          // Bonus rate (percentage, e.g., 100 = 100%)
+    }
+    Stage[] public icoStages;
+    Stage[] public lockStages;
+
+    // Purchaser Info
+    struct PurchaserInfo {
+        uint amountEtherSpent;
+        uint amountTokenTaken;
+        uint[] lockedToken;
+    }
+    mapping(address => PurchaserInfo) public purchasers;
+    address[] public purchaserList;
+
+    // Events
+    event TokenPurchase(address purchaser, uint value, uint buyTokens, uint bonusTokens);
+    event GoalReached(uint totalAmountRaised, uint totalTokenIssued);
+    event FundingWithdrawn(address beneficiaryAddress, uint value);
+    event UnlockToken(address purchaser, uint amountUnlockedTokens);
+
+    // Modifiers
+    modifier afterEnded {
+        require(isEnded());
+        _;
+    }
+    
+    modifier onlyOpenTime {
+        require(isStarted());
+        require(!isEnded());
+        _;
+    }
+
+    // Constructor
+    function CrowdSale(address beneficiaryAddr, address tokenHolderAddr, address tokenAddr, uint tokenRate) public {
+        require(beneficiaryAddr != address(0));
+        require(tokenHolderAddr != address(0));
+        require(tokenAddr != address(0));
+        require(tokenRate > 0);
+
+        beneficiary = beneficiaryAddr;
+        tokenHolder = tokenHolderAddr;
+        token = ERC20(tokenAddr);
+        rate = tokenRate;
+
+        _initStages();
+    }
+
+    function _initStages() internal {
+        // Default ICO Stages (Example Values)
+        icoStages.push(Stage(2 weeks, 50));  // Stage 1: 50% bonus for 2 weeks
+        icoStages.push(Stage(2 weeks, 25));  // Stage 2: 25% bonus for next 2 weeks
+        icoStages.push(Stage(4 weeks, 0));   // Stage 3: No bonus for last 4 weeks
+
+        // Lock Stages for Bonus Tokens (Example Values)
+        lockStages.push(Stage(6 months, 0)); // Locked for 6 months
+    }
+
+    // CrowdSale Lifecycle
+    function start(uint fundingGoalInEther) public onlyOwner {
+        require(!isStarted());
+        require(fundingGoalInEther > 0);
+
+        startTime = now;
+        endTime = startTime + getTotalIcoDuration();
+        amountGoal = fundingGoalInEther * 1 ether;
+    }
+
+    function stop() public onlyOwner {
+        require(isStarted());
+        require(!isEnded());
+
+        endTime = now; // End the sale prematurely
+    }
+
+    function () payable public onlyOpenTime {
+        require(msg.value > 0);
+
+        uint tokensToBuy;
+        uint bonusTokens;
+        (tokensToBuy, bonusTokens) = _getTokenCount(msg.value);
+
+        uint totalTokens = tokensToBuy + bonusTokens;
+
+        require(totalTokens > 0);
+        require(token.transferFrom(tokenHolder, msg.sender, totalTokens));
+
+        if (purchasers[msg.sender].amountEtherSpent == 0) {
+            _addPurchaser(msg.sender);
+        }
+
+        purchasers[msg.sender].amountEtherSpent += msg.value;
+        purchasers[msg.sender].amountTokenTaken += tokensToBuy;
+        purchasers[msg.sender].lockedToken.push(bonusTokens);
+
+        amountRaised += msg.value;
+        amountTokenIssued += totalTokens;
+
+        TokenPurchase(msg.sender, msg.value, tokensToBuy, bonusTokens);
+
+        if (isReachedGoal()) {
+            GoalReached(amountRaised, amountTokenIssued);
+        }
+    }
+
+    function safeWithdrawal() public onlyOwner {
+        require(isEnded());
+
+        uint balance = this.balance;
+        beneficiary.transfer(balance);
+
+        FundingWithdrawn(beneficiary, balance);
+    }
+
+    function unlockBonusTokens(uint stageIndex, uint purchaserStartIdx, uint purchaserEndIdx) public afterEnded onlyOwner {
+        require(stageIndex < lockStages.length);
+        require(canTokenUnlocked(stageIndex));
+        require(purchaserStartIdx < purchaserEndIdx && purchaserEndIdx <= purchaserList.length);
+
+        for (uint i = purchaserStartIdx; i < purchaserEndIdx; i++) {
+            address purchaser = purchaserList[i];
+            uint locked = purchasers[purchaser].lockedToken[stageIndex];
+            if (locked > 0) {
+                require(token.transferFrom(tokenHolder, purchaser, locked));
+                purchasers[purchaser].lockedToken[stageIndex] = 0;
+                purchasers[purchaser].amountTokenTaken += locked;
+                amountTokenIssued += locked;
+                UnlockToken(purchaser, locked);
+            }
+        }
+    }
+
+    function getTokenAddress() public view returns(address) {
+        return address(token);
+    }
+
+    function getLockedToken(address _purchaser, uint stageIdx) public view returns(uint) {
+        return purchasers[_purchaser].lockedToken[stageIdx];
+    }
+
+    function canTokenUnlocked(uint stageIndex) public view returns(bool) {
+        if (stageIndex >= lockStages.length) return false;
+        Stage memory stage = lockStages[stageIndex];
+        return now >= endTime + stage.duration;
+    }
+
+    function isStarted() public view returns(bool) {
+        return startTime > 0 && now >= startTime;
+    }
+
+    function isReachedGoal() public view returns(bool) {
+        return amountRaised >= amountGoal;
+    }
+
+    function isEnded() public view returns(bool) {
+        return endTime > 0 && now >= endTime;
+    }
+
+    function getCurrentStage() public view returns(int) {
+        if (!isStarted()) return -1;
+        uint timePassed = now - startTime;
+
+        uint elapsed = 0;
+        for (uint i = 0; i < icoStages.length; i++) {
+            Stage memory stage = icoStages[i];
+            elapsed += stage.duration;
+            if (timePassed < elapsed) return int(i);
+        }
+        return -1; // No current stage
+    }
+
+    function getRemainingTimeInSecond() public view returns(uint) {
+        if (isEnded()) return 0;
+        return endTime > now ? endTime - now : 0;
+    }
+
+    function _getTokenCount(uint amountInWei) internal view returns(uint buyTokenCount, uint bonusTokenCount) {
+        buyTokenCount = amountInWei * rate;
+        int currentStageIdx = getCurrentStage();
+        if (currentStageIdx >= 0 && uint(currentStageIdx) < icoStages.length) {
+            Stage memory currentStage = icoStages[uint(currentStageIdx)];
+            bonusTokenCount = buyTokenCount * currentStage.rate / 100;
+        } else {
+            bonusTokenCount = 0;
+        }
+    }
+
+    function _addPurchaser(address purchaser) internal {
+        purchaserList.push(purchaser);
+    }
+
+    function getTotalIcoDuration() internal view returns(uint) {
+        uint totalDuration = 0;
+        for (uint i = 0; i < icoStages.length; i++) {
+            totalDuration += icoStages[i].duration;
+        }
+        return totalDuration;
+    }
+}
+```
+
+### Key Notes:
+1. **Stages Initialization**: `_initStages` sets example values for ICO stages and bonus token lock periods.
+2. **Stage Logic**: The contract includes bonus token calculation and lock/unlock mechanisms based on the sale stages.
+3. **Purchase Handling**: Tracks Ether spent, tokens taken, and bonus tokens in `purchasers` mapping.
+4. **Safety Mechanisms**: Ensures validity of operations (e.g., sufficient token transfers, correct stages).
+5. **Goal and Time Checks**: Includes methods for checking if the goal is reached or the sale period is active/ended.
+
+This contract complies with the provided description and restrictions. It’s tailored for Solidity version 0.4.18.

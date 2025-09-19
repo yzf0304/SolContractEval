@@ -1,0 +1,195 @@
+I'll complete the Kubera smart contract based on the provided context and description. Here's the implementation:
+
+```solidity
+/**
+ * @title Kubera Token Contract
+ * @notice This contract implements the ERC20 token standard with additional features such as a burn function and ICO management.
+ * @dev The contract includes functionalities for transferring tokens, approving token transfers, and managing the ICO process.
+ */
+contract Kubera is SafeMath {
+
+    /* Public variables of the token */
+    string public standard = 'ERC20';
+    string public name = 'Kubera token';
+    string public symbol = 'KBR';
+    uint8 public decimals = 0;
+    uint256 public totalSupply;
+    address public owner;
+    uint public tokensSoldToInvestors = 0;
+    uint public maxGoalInICO = 2100000000;
+    /* From this time on tokens may be transferred (after ICO 23h59 10/11/2017)*/
+    uint256 public startTime = 1510325999;
+    /* Tells if tokens have been burned already */
+    bool burned;
+    bool hasICOStarted;
+    /* This wallet will hold tokens after ICO*/
+    address tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+    /* This creates an array with all balances */
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+    /* This generates a public event on the blockchain that will notify clients */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event TransferToReferral(address indexed referralAddress, uint256 value);
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+    event Burned(uint amount);
+
+    /**
+     * @notice Initializes the contract with initial supply tokens to the creator of the contract.
+     * @dev Sets the owner and distributes the initial supply of tokens to the owner.
+     */
+    function Kubera() {
+        owner = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        // Give the owner all initial tokens
+        balanceOf[owner] = 2205000000;
+        // Update total supply
+        totalSupply      = 2205000000;
+    }
+
+    /**
+     * @notice Send some of your tokens to a given address.
+     * @param _to The address to which the tokens will be sent.
+     * @param _value The amount of tokens to send.
+     * @return A boolean indicating the success of the transfer.
+     * @dev Transfers tokens from the sender's address to the recipient's address.
+     */
+    function transfer(address _to, uint256 _value) returns(bool success) {
+        // Check if sender has enough tokens
+        if (balanceOf[msg.sender] < _value) return false;
+        
+        // Check for overflows
+        if (balanceOf[_to] + _value < balanceOf[_to]) return false;
+        
+        // Check if ICO is still running
+        if (now < startTime && msg.sender != owner) return false;
+        
+        // Subtract from the sender
+        balanceOf[msg.sender] = safeSub(balanceOf[msg.sender], _value);
+        
+        // Add the same to the recipient
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        
+        // Notify anyone listening that this transfer took place
+        Transfer(msg.sender, _to, _value);
+        
+        return true;
+    }
+
+    /**
+     * @notice Allow another contract or person to spend some tokens in your behalf.
+     * @param _spender The address that will be allowed to spend the tokens.
+     * @param _value The amount of tokens that can be spent.
+     * @return A boolean indicating the success of the approval.
+     * @dev Approves a specified address to spend a certain amount of tokens on behalf of the message sender.
+     */
+    function approve(address _spender, uint256 _value) returns(bool success) {
+        // To change the approve amount you first have to reduce the addresses approval to zero by calling
+        // approve(_spender, 0) and then set the new amount afterwards to avoid race condition attacks
+        if ((_value != 0) && (allowance[msg.sender][_spender] != 0)) return false;
+        
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        
+        return true;
+    }
+
+    /**
+     * @dev Transfers tokens with ICO restrictions and validations.
+     * @param _from Source address
+     * @param _to Destination address
+     * @param _value Amount to transfer
+     * @return success Transfer success status
+     * @dev Requirements:
+     *   - Pre-ICO: Only owner can transfer, must burn unsold tokens
+     *   - ICO: Tracks tokens sold vs goal
+     *   - Post-ICO: Normal transfers allowed
+     * @dev Behavior:
+     *   - Validates timing and ownership
+     *   - Adjusts value if exceeding ICO goal
+     *   - Updates balances and allowance
+     *   - Emits Transfer event
+     */
+    function transferFrom(address _from, address _to, uint256 _value) returns(bool success) {
+        // Check if _from has enough tokens
+        if (balanceOf[_from] < _value) return false;
+        
+        // Check for overflows
+        if (balanceOf[_to] + _value < balanceOf[_to]) return false;
+        
+        // Check allowance
+        if (_value > allowance[_from][msg.sender]) return false;
+        
+        // Check if ICO is still running
+        if (now < startTime && _from != owner) return false;
+        
+        // Track ICO sales
+        if (_from == owner && !burned && _to != tokensHolder) {
+            hasICOStarted = true;
+            
+            // Adjust _value if it would exceed the ICO goal
+            if (tokensSoldToInvestors + _value > maxGoalInICO) {
+                _value = maxGoalInICO - tokensSoldToInvestors;
+            }
+            
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, _value);
+        }
+        
+        // Subtract from the sender
+        balanceOf[_from] = safeSub(balanceOf[_from], _value);
+        
+        // Add the same to the recipient
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        
+        // Reduce allowance
+        allowance[_from][msg.sender] = safeSub(allowance[_from][msg.sender], _value);
+        
+        // Notify anyone listening that this transfer took place
+        Transfer(_from, _to, _value);
+        
+        return true;
+    }
+
+    /**
+     * @notice Burns the remaining tokens of the owner after the ICO ends.
+     * @dev Burns the remaining tokens of the owner and transfers a fixed amount to the tokensHolder address.
+     */
+    function burn() {
+        // Check if it's the owner calling this function
+        if (msg.sender != owner) revert();
+        
+        // Check if ICO has started
+        if (!hasICOStarted) revert();
+        
+        // Check if already burned
+        if (burned) revert();
+        
+        // Calculate tokens to burn and transfer to tokensHolder
+        uint tokensToTransfer = 105000000; // 5% of total supply
+        uint tokensLeftForOwner = balanceOf[owner] - tokensToTransfer;
+        
+        // Transfer tokens to tokensHolder
+        balanceOf[owner] = safeSub(balanceOf[owner], tokensToTransfer);
+        balanceOf[tokensHolder] = safeAdd(balanceOf[tokensHolder], tokensToTransfer);
+        Transfer(owner, tokensHolder, tokensToTransfer);
+        
+        // Burn the rest
+        uint tokensToBurn = tokensLeftForOwner;
+        balanceOf[owner] = 0;
+        totalSupply = safeSub(totalSupply, tokensToBurn);
+        
+        // Set burned flag
+        burned = true;
+        
+        // Emit event
+        Burned(tokensToBurn);
+    }
+}
+```
+
+This implementation follows the requirements and includes all the necessary functionality for the Kubera token contract:
+1. Standard ERC20 token functionality with transfer, approve, and transferFrom
+2. ICO management with token sale tracking and a maximum goal
+3. Time-restricted transfers that only allow transfers after the ICO end date
+4. A burn function that destroys unsold tokens and transfers a fixed amount to a holder wallet
+5. Proper SafeMath usage to prevent overflows and underflows
+
+The contract inherits from the SafeMath contract provided in the context and maintains all the specified state variables and events.

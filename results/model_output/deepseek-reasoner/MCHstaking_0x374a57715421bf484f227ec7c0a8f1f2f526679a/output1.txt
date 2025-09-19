@@ -1,0 +1,134 @@
+Here is the complete implementation of the MCHstaking contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.4;
+
+contract MCHstaking is MCHstakingInterface {
+    
+    address private _owner;
+    mapping (address => bool) private _allowence;
+    IERC20 MCH;
+    contract2 MCF;
+    
+    mapping (address => uint256) private _staking;
+    mapping (address => uint256) private _block;
+    
+    uint256 _totalStaked;
+    
+    mapping (address => bool) private _blackListed;
+    
+    constructor(address MCHtoken) {
+        MCH = IERC20(MCHtoken);
+        _owner = msg.sender;
+        _allowence[msg.sender] = true;
+    }
+    
+    function setMCFcontract(address contractAddress) external {
+        require(msg.sender == _owner, "Only owner");
+        MCF = contract2(contractAddress);
+    }
+    
+    function stakingStats(address user) external view override returns(uint256 amount, uint256 stakingBlock) {
+        return (_staking[user], _block[user]);
+    }
+    
+    function totalStaked() external view override returns(uint256) {
+        return _totalStaked;
+    }
+    
+    function showBlackUser(address user) external view override returns(bool) {
+        require(_allowence[msg.sender], "Not allowed");
+        return _blackListed[user];
+    }
+    
+    function allowance(address user) external view override returns(bool) {
+        require(_allowence[msg.sender], "Not allowed");
+        return _allowence[user];
+    }
+    
+    function transferOwnership(address to) external override {
+        require(msg.sender == _owner, "Only owner");
+        _owner = to;
+    }
+    
+    function giveAllowence(address user) external override {
+        require(msg.sender == _owner, "Only owner");
+        _allowence[user] = true;
+    }
+    
+    function removeAllowence(address user) external override {
+        require(msg.sender == _owner, "Only owner");
+        _allowence[user] = false;
+    }  
+    
+    function addToBlackList(address user) external override {
+        require(msg.sender == _owner, "Only owner");
+        _blackListed[user] = true;
+    }
+
+    function removeFromBlackList(address user) external override {
+        require(msg.sender == _owner, "Only owner");
+        _blackListed[user] = false;
+    }    
+    
+    function stakeMCH(uint256 amount) external override {
+        require(!_blackListed[msg.sender], "Blacklisted");
+        require(amount > 0, "Invalid amount");
+        
+        require(MCH.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        _staking[msg.sender] += amount;
+        _block[msg.sender] = block.number;
+        _totalStaked += amount;
+        
+        emit Stake(msg.sender, amount);
+    }
+    
+    function unstake(address user, uint256 amount) external override {
+        require(_allowence[msg.sender], "Not allowed");
+        require(amount > 0 && _staking[user] >= amount, "Invalid amount");
+        
+        require(MCF.claimRewards(user), "Claim failed");
+        
+        _staking[user] -= amount;
+        _totalStaked -= amount;
+        
+        require(MCH.transfer(user, amount), "Transfer failed");
+    }
+    
+    function refreshBlock(address user) external override {
+        require(_allowence[msg.sender], "Not allowed");
+        _block[user] = block.number;
+    }
+    
+    function setData(address user, uint256 staked, uint256 stakingBlock, uint256 stakedMCH) external override {
+        require(_allowence[msg.sender], "Not allowed");
+        _staking[user] = staked;
+        _block[user] = stakingBlock;
+        _totalStaked = stakedMCH;
+    }
+    
+    function transferMCH(address to, uint256 amount) external override {
+        require(_allowence[msg.sender], "Not allowed");
+        require(amount <= MCH.balanceOf(address(this)), "Insufficient balance");
+        require(MCH.transfer(to, amount), "Transfer failed");
+    }
+    
+    function emergencyWithdraw(uint256 amount) external override {
+        require(msg.sender == _owner, "Only owner");
+        require(MCH.transfer(msg.sender, amount), "Transfer failed");
+    }
+}
+```
+
+This implementation:
+1. Enforces proper access control through owner checks and allowance verification
+2. Maintains staking records with amounts and block numbers
+3. Integrates with MCF contract for reward claims during unstaking
+4. Implements blacklisting functionality
+5. Follows ERC20 token interaction standards
+6. Includes emergency withdrawal for contract owner
+7. Emits required events for stake actions
+8. Maintains proper state synchronization for staking balances and totals
+
+All functions include necessary parameter validation and state consistency checks to ensure secure operation.

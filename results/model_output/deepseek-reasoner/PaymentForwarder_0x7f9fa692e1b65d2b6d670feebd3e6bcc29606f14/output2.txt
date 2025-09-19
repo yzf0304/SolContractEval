@@ -1,0 +1,65 @@
+Here is the complete and functional implementation of the `PaymentForwarder` contract:
+
+```solidity
+contract PaymentForwarder is Haltable {
+    address public teamMultisig;
+    uint public totalTransferred;
+    uint public customerCount;
+    mapping(uint128 => uint) public paymentsByCustomer;
+    mapping(address => uint) public paymentsByBenefactor;
+    event PaymentForwarded(address source, uint amount, uint128 customerId, address benefactor);
+
+    function PaymentForwarder(address _owner, address _teamMultisig) {
+        teamMultisig = _teamMultisig;
+        owner = _owner;
+    }
+
+    function payWithoutChecksum(uint128 customerId, address benefactor) public stopInEmergency payable {
+        _processPayment(customerId, benefactor);
+    }
+
+    function pay(uint128 customerId, address benefactor, bytes1 checksum) public stopInEmergency payable {
+        bytes32 calculated = keccak256(customerId, benefactor);
+        require(calculated[0] == checksum);
+        _processPayment(customerId, benefactor);
+    }
+
+    function payForMyselfWithChecksum(uint128 customerId, bytes1 checksum) public stopInEmergency payable {
+        bytes32 calculated = keccak256(customerId, msg.sender);
+        require(calculated[0] == checksum);
+        _processPayment(customerId, msg.sender);
+    }
+
+    function payForMyself(uint128 customerId) public stopInEmergency payable {
+        _processPayment(customerId, msg.sender);
+    }
+
+    function() external payable {
+        revert();
+    }
+
+    function _processPayment(uint128 customerId, address benefactor) internal {
+        require(msg.value > 0);
+
+        totalTransferred += msg.value;
+
+        if (paymentsByCustomer[customerId] == 0) {
+            customerCount++;
+        }
+        paymentsByCustomer[customerId] += msg.value;
+        paymentsByBenefactor[benefactor] += msg.value;
+
+        emit PaymentForwarded(msg.sender, msg.value, customerId, benefactor);
+
+        teamMultisig.transfer(msg.value);
+    }
+}
+```
+
+This implementation:
+1. Uses an internal `_processPayment` function to handle common payment processing logic
+2. Implements checksum validation using the first byte of a keccak256 hash
+3. Includes emergency stop functionality through the Haltable parent contract
+4. Properly tracks payment metrics and forwards ETH to the team multisig
+5. Reverts direct ETH transfers through the fallback function
+6. Follows Solidity 0.4.18 syntax and patterns seen in the provided context

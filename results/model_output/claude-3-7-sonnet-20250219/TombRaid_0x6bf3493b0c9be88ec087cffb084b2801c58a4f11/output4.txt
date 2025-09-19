@@ -1,0 +1,211 @@
+I'll complete the TombRaid contract according to the specifications provided:
+
+```solidity
+/**
+ * @title TombRaid
+ * @notice A smart contract for managing a raiding game where Boneheadz NFTs can be raided to increase their tier or get locked.
+ * @dev The contract allows the owner to control the raid status, price, and other parameters. It also includes functions for raiding, viewing tiers, and locking statuses.
+ */
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+
+    uint256 internal cutoff;
+
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+
+    uint256 public raidPrice = 0.005 ether;
+
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    /**
+     * @notice Initializes the contract with the provided parameters.
+     * @param boneheadz The address of the Boneheadz NFT contract.
+     * @param _cutoff The cutoff value for the pseudo-random number generation.
+     * @param maxTier The maximum tier a Boneheadz NFT can reach.
+     * @param season The current season of the game.
+     */
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    // MODIFIERS
+
+    /**
+     * @notice Modifier to ensure that only the owner of the specified token can call the function.
+     * @param tokenId The ID of the token to check ownership for.
+     */
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    // OWNER FUNCTIONS
+
+    /**
+     * @notice Toggles the raid status on or off.
+     * @dev Only the contract owner can call this function.
+     */
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    /**
+     * @notice Sets the price required to raid a Boneheadz NFT.
+     * @param price The new raid price in wei.
+     * @dev Only the contract owner can call this function.
+     */
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    /**
+     * @notice Sets the cutoff value for the pseudo-random number generation.
+     * @param _cutoff The new cutoff value.
+     * @dev Only the contract owner can call this function.
+     */
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    /**
+     * @notice Toggles the lock status for an array of token IDs.
+     * @param tokenIds An array of token IDs to toggle the lock status for.
+     * @dev Only the contract owner can call this function.
+     */
+    function flipLockStatuses(uint256[] calldata tokenIds) public onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            isLocked[tokenIds[i]] = !isLocked[tokenIds[i]];
+            if (isLocked[tokenIds[i]]) {
+                emit Locked(tokenIds[i]);
+            }
+        }
+    }
+
+    /**
+     * @notice Transfers the contract's balance to the specified recipient.
+     * @param recipient The address to receive the funds.
+     * @dev Only the contract owner can call this function.
+     */
+    function withdraw(address recipient) external onlyOwner {
+        require(recipient != address(0), "Cannot withdraw to zero address");
+        (bool success, ) = payable(recipient).call{value: address(this).balance}("");
+        require(success, "Transfer failed");
+    }
+
+    // RAID FUNCTIONS
+
+    /**
+     * @notice Allows the owner of a Boneheadz NFT to raid it, potentially increasing its tier or getting it locked.
+     * @param tokenId The ID of the token to raid.
+     * @dev The caller must be the owner of the token, and the raid must be active.
+     */
+    function raid(uint256 tokenId) public payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raiding is not active");
+        require(!isLocked[tokenId], "Token is locked");
+        require(msg.value >= raidPrice, "Insufficient payment");
+        
+        uint256 currentTier = tokenTiers[tokenId];
+        require(currentTier < MAX_TIER, "Token already at max tier");
+        
+        uint256 pseudoRandomHash = _genPseudoRandomNumber(tokenId);
+        
+        if (pseudoRandomHash < cutoff) {
+            // Token gets locked
+            isLocked[tokenId] = true;
+            emit Locked(tokenId);
+        } else {
+            // Tier increases
+            tokenTiers[tokenId] = currentTier + 1;
+            emit TierUpdated(tokenId, currentTier + 1);
+        }
+    }
+
+    // VIEW FUNCTIONS
+
+    /**
+     * @notice Returns the number of tokens at each tier.
+     * @return counts An array where each index represents the count of tokens at that tier.
+     */
+    function numPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        
+        uint256 totalSupply = Boneheadz.totalSupply();
+        
+        for (uint256 i = 1; i <= totalSupply; i++) {
+            try Boneheadz.ownerOf(i) {
+                uint256 tier = tokenTiers[i];
+                if (tier <= MAX_TIER) {
+                    counts[tier]++;
+                }
+            } catch {
+                // Skip non-existent tokens
+            }
+        }
+        
+        return counts;
+    }
+
+    /**
+     * @notice Returns the number of locked tokens at each tier.
+     * @return counts An array where each index represents the count of locked tokens at that tier.
+     */
+    function numLockedPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        
+        uint256 totalSupply = Boneheadz.totalSupply();
+        
+        for (uint256 i = 1; i <= totalSupply; i++) {
+            try Boneheadz.ownerOf(i) {
+                if (isLocked[i]) {
+                    uint256 tier = tokenTiers[i];
+                    if (tier <= MAX_TIER) {
+                        counts[tier]++;
+                    }
+                }
+            } catch {
+                // Skip non-existent tokens
+            }
+        }
+        
+        return counts;
+    }
+
+    /**
+     * @notice Generates a pseudo-random number based on the block difficulty, timestamp, and token ID.
+     * @param tokenId The ID of the token to generate the pseudo-random number for.
+     * @return pseudoRandomHash The generated pseudo-random number.
+     * @dev This function is private and used internally by the contract.
+     */
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.difficulty, block.timestamp, tokenId, SEASON)));
+    }
+}
+```
+
+This implementation completes all the functions in the TombRaid contract according to the specification, including:
+
+1. Toggling raid status on/off
+2. Setting raid price
+3. Setting the cutoff for random number generation
+4. Flipping lock statuses for tokens
+5. Withdrawing funds
+6. Raiding functionality that either increases a token's tier or locks it
+7. View functions to get the number of tokens per tier and locked tokens per tier
+8. A pseudo-random number generator for the raiding mechanism
+
+The contract follows the Ownable pattern for access control and interacts with the Boneheadz NFT contract through the provided interface.

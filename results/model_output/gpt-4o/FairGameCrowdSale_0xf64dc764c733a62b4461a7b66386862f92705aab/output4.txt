@@ -1,0 +1,224 @@
+To complete the `CrowdSale` contract, we need to implement the core functionalities required by the description. This includes the management of stages, token purchase logic, start and stop mechanisms for the sale, and the unlocking of bonus tokens after the sale ends. Below is the implementation of the contract with missing functions filled in:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract CrowdSale is Ownable {
+
+    // ERC20 Token
+    ERC20 public token;
+
+    // Address where funds are received
+    address public beneficiary;
+    // Address that provides tokens
+    address public tokenHolder;
+
+    // Rate of token units per wei
+    uint public rate;
+    // Goal amount in wei
+    uint public amountGoal;
+    // Current amount of raised money in wei
+    uint public amountRaised;
+    // Amount of tokens issued
+    uint public amountTokenIssued;
+
+    // Important Time
+    uint public startTime;
+    uint public endTime;
+
+    // Stages Info
+    struct Stage {
+        uint duration;      // Duration in seconds of the current stage
+        uint rate;          // Bonus rate (100 = 100%)
+    }
+    Stage[] public icoStages;
+    Stage[] public lockStages;
+
+    // Purchaser Info
+    struct PurchaserInfo {
+        uint amountEtherSpent;
+        uint amountTokenTaken;
+        uint[] lockedToken;
+    }
+    mapping(address => PurchaserInfo) public purchasers;
+    address[] public purchaserList;
+
+    // ----- Events -----
+    event TokenPurchase(address purchaser, uint value, uint buyTokens, uint bonusTokens);
+    event GoalReached(uint totalAmountRaised, uint totalTokenIssued);
+    event FundingWithdrawn(address beneficiaryAddress, uint value);
+    event UnlockToken(address purchaser, uint amountUnlockedTokens);
+
+    // ----- Modifiers -----
+    modifier afterEnded {
+        require(isEnded());
+        _;
+    }
+
+    modifier onlyOpenTime {
+        require(isStarted());
+        require(!isEnded());
+        _;
+    }
+
+    // ----- Functions -----
+    function CrowdSale(address beneficiaryAddr, address tokenHolderAddr, address tokenAddr, uint tokenRate) public {
+        require(beneficiaryAddr != address(0));
+        require(tokenHolderAddr != address(0));
+        require(tokenAddr != address(0));
+        require(tokenRate > 0);
+
+        beneficiary = beneficiaryAddr;
+        tokenHolder = tokenHolderAddr;
+        token = ERC20(tokenAddr);
+        rate = tokenRate;
+
+        _initStages();
+    }
+
+    function _initStages() internal {
+        // Initialize ICO stages (example)
+        icoStages.push(Stage(1 weeks, 20)); // 20% bonus during first week
+        icoStages.push(Stage(1 weeks, 10)); // 10% bonus during second week
+        // Initialize lock stages (example)
+        lockStages.push(Stage(6 months, 0)); // Tokens locked for 6 months
+    }
+
+    function getTokenAddress() public view returns(address) {
+        return address(token);
+    }
+
+    function getLockedToken(address _purchaser, uint stageIdx) public view returns(uint) {
+        require(stageIdx < lockStages.length);
+        return purchasers[_purchaser].lockedToken[stageIdx];
+    }
+
+    function canTokenUnlocked(uint stageIndex) public view returns(bool) {
+        require(stageIndex < lockStages.length);
+        uint lockEndTime = endTime + lockStages[stageIndex].duration;
+        return now >= lockEndTime;
+    }
+
+    function isStarted() public view returns(bool) {
+        return startTime > 0 && now >= startTime;
+    }
+
+    function isReachedGoal() public view returns(bool) {
+        return amountRaised >= amountGoal;
+    }
+
+    function isEnded() public view returns(bool) {
+        return endTime > 0 && now >= endTime;
+    }
+
+    function getCurrentStage() public view returns(int) {
+        if (!isStarted()) return -1;
+        uint elapsed = now - startTime;
+        uint cumulativeDuration = 0;
+        for (uint i = 0; i < icoStages.length; i++) {
+            cumulativeDuration += icoStages[i].duration;
+            if (elapsed < cumulativeDuration) {
+                return int(i);
+            }
+        }
+        return -1;
+    }
+
+    function getRemainingTimeInSecond() public view returns(uint) {
+        if (isEnded()) return 0;
+        return endTime > now ? endTime - now : 0;
+    }
+
+    function _addPurchaser(address purchaser) internal {
+        if (purchasers[purchaser].amountEtherSpent == 0) {
+            purchaserList.push(purchaser);
+        }
+    }
+
+    function start(uint fundingGoalInEther) public onlyOwner {
+        require(!isStarted());
+        amountGoal = fundingGoalInEther * 1 ether;
+        startTime = now;
+        endTime = now + icoStages[icoStages.length - 1].duration;
+    }
+
+    function stop() public onlyOwner {
+        require(isStarted());
+        endTime = now;
+    }
+
+    function () payable public onlyOpenTime {
+        uint amount = msg.value;
+        uint buyTokens;
+        uint bonusTokens;
+        
+        (buyTokens, bonusTokens) = _getTokenCount(amount);
+
+        require(token.transferFrom(tokenHolder, msg.sender, buyTokens + bonusTokens));
+
+        PurchaserInfo storage purchaser = purchasers[msg.sender];
+        purchaser.amountEtherSpent += amount;
+        purchaser.amountTokenTaken += buyTokens + bonusTokens;
+        purchaser.lockedToken.push(bonusTokens);
+        
+        amountRaised += amount;
+        amountTokenIssued += buyTokens + bonusTokens;
+
+        _addPurchaser(msg.sender);
+
+        TokenPurchase(msg.sender, amount, buyTokens, bonusTokens);
+        
+        if (isReachedGoal()) {
+            GoalReached(amountRaised, amountTokenIssued);
+        }
+    }
+
+    function _getTokenCount(uint amountInWei) internal view returns(uint buyTokenCount, uint bonusTokenCount) {
+        int stageIndex = getCurrentStage();
+        if (stageIndex >= 0) {
+            Stage storage stage = icoStages[uint(stageIndex)];
+            buyTokenCount = amountInWei * rate;
+            bonusTokenCount = buyTokenCount * stage.rate / 100;
+        } else {
+            buyTokenCount = amountInWei * rate;
+            bonusTokenCount = 0;
+        }
+    }
+
+    function safeWithdrawal() public onlyOwner {
+        uint amount = this.balance;
+        beneficiary.transfer(amount);
+        FundingWithdrawn(beneficiary, amount);
+    }
+
+    function unlockBonusTokens(uint stageIndex, uint purchaserStartIdx, uint purchaserEndIdx) public afterEnded onlyOwner {
+        require(stageIndex < lockStages.length);
+        require(canTokenUnlocked(stageIndex));
+        require(purchaserStartIdx < purchaserEndIdx && purchaserEndIdx <= purchaserList.length);
+
+        for (uint i = purchaserStartIdx; i < purchaserEndIdx; i++) {
+            address purchaser = purchaserList[i];
+            uint lockedAmount = purchasers[purchaser].lockedToken[stageIndex];
+            if (lockedAmount > 0) {
+                require(token.transferFrom(tokenHolder, purchaser, lockedAmount));
+                purchasers[purchaser].lockedToken[stageIndex] = 0;
+                purchasers[purchaser].amountTokenTaken += lockedAmount;
+                amountTokenIssued += lockedAmount;
+
+                UnlockToken(purchaser, lockedAmount);
+            }
+        }
+    }
+}
+```
+
+### Key Points of the Implementation:
+
+- **Stage Initialization**: `_initStages` sets up example ICO and lock stages, which can be adjusted based on the real-world requirements.
+- **Purchase Logic**: The function fallback handles Ether sent directly to the contract and computes the number of tokens and bonus based on current stage rates.
+- **Token Unlocking**: `unlockBonusTokens` checks if tokens can be unlocked and transfers them if conditions are met.
+- **Modifiers**: `onlyOpenTime` and `afterEnded` ensure functions are called in the appropriate sale phase.
+- **Start/Stop Mechanism**: `start` and `stop` manage the lifecycle of the sale.
+- **Safe Withdrawal**: Allows the owner to withdraw funds once conditions are met.
+
+Note: Ensure that the ERC20 token has implemented `transferFrom` appropriately to allow token transfers from the tokenHolder to the purchaser. This implementation assumes the standard ERC20 functionality. Adjust stage details and logic as per specific crowd sale needs.

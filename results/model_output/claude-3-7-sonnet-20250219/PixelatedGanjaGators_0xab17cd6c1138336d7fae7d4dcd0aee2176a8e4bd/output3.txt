@@ -1,0 +1,582 @@
+I'll implement the ERC721A contract according to the provided context. Here's the complete implementation with all functions filled in:
+
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.7;
+
+/**
+ * @title ERC721A
+ * @notice This contract implements the ERC721 standard with additional features for efficient batch minting and enumeration.
+ * @dev This implementation is optimized for gas efficiency and includes the IERC721, IERC721Metadata, and IERC721Enumerable interfaces.
+ */
+contract ERC721A is Context, ERC165, IERC721, IERC721Metadata, IERC721Enumerable {
+    using Address for address;
+    using Strings for uint256;
+
+    struct TokenOwnership {
+        address addr;
+        uint64 startTimestamp;
+    }
+
+    struct AddressData {
+        uint128 balance;
+        uint128 numberMinted;
+    }
+
+    uint256 internal currentIndex;
+
+    // Token name
+    string private _name;
+
+    // Token symbol
+    string private _symbol;
+
+    // Mapping from token ID to ownership details
+    // An empty struct value does not necessarily mean the token is unowned. See ownershipOf implementation for details.
+    mapping(uint256 => TokenOwnership) internal _ownerships;
+
+    // Mapping owner address to address data
+    mapping(address => AddressData) private _addressData;
+
+    // Mapping from token ID to approved address
+    mapping(uint256 => address) private _tokenApprovals;
+
+    // Mapping from owner to operator approvals
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+
+    /**
+     * @notice Initializes the contract by setting a name and a symbol to the token collection.
+     * @dev The constructor sets the name and symbol of the token.
+     * @param name_ The name of the token.
+     * @param symbol_ The symbol of the token.
+     */
+    constructor(string memory name_, string memory symbol_) {
+        _name = name_;
+        _symbol = symbol_;
+    }
+
+    /**
+     * @notice Returns the total amount of tokens stored by the contract.
+     * @dev This function returns the total supply of tokens.
+     * @return The total supply of tokens.
+     */
+    function totalSupply() public view override returns (uint256) {
+        return currentIndex;
+    }
+
+    /**
+     * @notice Returns a token ID at a given index of all the tokens stored by the contract.
+     * @dev This function returns the token ID at a specific index.
+     * @param index A valid index in the list of tokens.
+     * @return The token ID at the given index.
+     */
+    function tokenByIndex(uint256 index) public view override returns (uint256) {
+        require(index < currentIndex, "ERC721A: global index out of bounds");
+        return index;
+    }
+
+    /**
+     * @notice Returns a token ID at a given index of all the tokens owned by a given address.
+     * @dev This function returns the token ID at a specific index for a given owner.
+     * @param owner The address of the token owner.
+     * @param index A valid index in the list of tokens owned by the owner.
+     * @return The token ID at the given index.
+     */
+    function tokenOfOwnerByIndex(address owner, uint256 index) public view override returns (uint256) {
+        require(index < balanceOf(owner), "ERC721A: owner index out of bounds");
+        
+        uint256 numMintedSoFar = currentIndex;
+        uint256 tokenIdsIdx = 0;
+        address currOwnershipAddr = address(0);
+        
+        // Counter overflow is impossible as the loop breaks when tokenIdsIdx reaches balanceOf(owner)
+        // which is capped by totalSupply, which is capped at 2^256-1
+        unchecked {
+            for (uint256 i = 0; i < numMintedSoFar; i++) {
+                TokenOwnership memory ownership = ownershipOf(i);
+                if (ownership.addr != address(0)) {
+                    currOwnershipAddr = ownership.addr;
+                }
+                
+                if (currOwnershipAddr == owner) {
+                    if (tokenIdsIdx == index) {
+                        return i;
+                    }
+                    tokenIdsIdx++;
+                }
+            }
+        }
+        
+        // Execution should never reach this point
+        revert("ERC721A: unable to find token of owner by index");
+    }
+
+    /**
+     * @notice Returns true if this contract implements the interface defined by `interfaceId`.
+     * @dev This function checks if the contract supports a specific interface.
+     * @param interfaceId The interface identifier, as specified in ERC-165.
+     * @return True if the contract implements the interface, false otherwise.
+     */
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return
+            interfaceId == type(IERC721).interfaceId ||
+            interfaceId == type(IERC721Metadata).interfaceId ||
+            interfaceId == type(IERC721Enumerable).interfaceId ||
+            super.supportsInterface(interfaceId);
+    }
+
+    /**
+     * @notice Returns the number of tokens in `owner`'s account.
+     * @dev This function returns the balance of a specific owner.
+     * @param owner The address of the token owner.
+     * @return The balance of the owner.
+     */
+    function balanceOf(address owner) public view override returns (uint256) {
+        require(owner != address(0), "ERC721A: balance query for the zero address");
+        return uint256(_addressData[owner].balance);
+    }
+
+    /**
+     * @notice Returns the number of tokens minted by a given address.
+     * @dev This function returns the number of tokens minted by a specific address.
+     * @param owner The address of the minter.
+     * @return The number of tokens minted by the address.
+     */
+    function _numberMinted(address owner) internal view returns (uint256) {
+        return uint256(_addressData[owner].numberMinted);
+    }
+
+    /**
+     * @notice Returns the ownership details of a given token ID.
+     * @dev This function returns the ownership details of a specific token.
+     * @param tokenId The ID of the token.
+     * @return The ownership details of the token.
+     */
+    function ownershipOf(uint256 tokenId) internal view returns (TokenOwnership memory) {
+        require(_exists(tokenId), "ERC721A: query for nonexistent token");
+
+        unchecked {
+            for (uint256 curr = tokenId; curr >= 0; curr--) {
+                TokenOwnership memory ownership = _ownerships[curr];
+                if (ownership.addr != address(0)) {
+                    return ownership;
+                }
+                
+                if (curr == 0) {
+                    break;
+                }
+            }
+        }
+
+        revert("ERC721A: unable to determine ownership of token");
+    }
+
+    /**
+     * @notice Returns the owner of the `tokenId` token.
+     * @dev This function returns the owner of a specific token.
+     * @param tokenId The ID of the token.
+     * @return The owner of the token.
+     */
+    function ownerOf(uint256 tokenId) public view override returns (address) {
+        return ownershipOf(tokenId).addr;
+    }
+
+    /**
+     * @notice Returns the name of the token.
+     * @dev This function returns the name of the token.
+     * @return The name of the token.
+     */
+    function name() public view virtual override returns (string memory) {
+        return _name;
+    }
+
+    /**
+     * @notice Returns the symbol of the token.
+     * @dev This function returns the symbol of the token.
+     * @return The symbol of the token.
+     */
+    function symbol() public view virtual override returns (string memory) {
+        return _symbol;
+    }
+
+    /**
+     * @notice Returns the URI for a given token ID.
+     * @dev This function returns the URI for a specific token.
+     * @param tokenId The ID of the token.
+     * @return The URI for the token.
+     */
+    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+        require(_exists(tokenId), "ERC721A: URI query for nonexistent token");
+
+        string memory baseURI = _baseURI();
+        return bytes(baseURI).length > 0 ? string(abi.encodePacked(baseURI, tokenId.toString())) : "";
+    }
+
+    /**
+     * @notice Returns the base URI for the token.
+     * @dev This function returns the base URI for the token.
+     * @return The base URI for the token.
+     */
+    function _baseURI() internal view virtual returns (string memory) {
+        return "";
+    }
+
+    /**
+     * @notice Gives permission to `to` to transfer `tokenId` token to another account.
+     * @dev This function approves an address to transfer a specific token.
+     * @param to The address to approve.
+     * @param tokenId The ID of the token to approve.
+     */
+    function approve(address to, uint256 tokenId) public override {
+        address owner = ownerOf(tokenId);
+        require(to != owner, "ERC721A: approval to current owner");
+
+        require(
+            _msgSender() == owner || isApprovedForAll(owner, _msgSender()),
+            "ERC721A: approve caller is not owner nor approved for all"
+        );
+
+        _approve(to, tokenId, owner);
+    }
+
+    /**
+     * @notice Returns the account approved for `tokenId` token.
+     * @dev This function returns the approved address for a specific token.
+     * @param tokenId The ID of the token.
+     * @return The approved address for the token.
+     */
+    function getApproved(uint256 tokenId) public view override returns (address) {
+        require(_exists(tokenId), "ERC721A: approved query for nonexistent token");
+
+        return _tokenApprovals[tokenId];
+    }
+
+    /**
+     * @notice Approve or remove `operator` as an operator for the caller.
+     * @dev This function sets or removes the approval for an operator.
+     * @param operator The address of the operator.
+     * @param approved True if the operator is approved, false to revoke approval.
+     */
+    function setApprovalForAll(address operator, bool approved) public override {
+        require(operator != _msgSender(), "ERC721A: approve to caller");
+
+        _operatorApprovals[_msgSender()][operator] = approved;
+        emit ApprovalForAll(_msgSender(), operator, approved);
+    }
+
+    /**
+     * @notice Returns if the `operator` is allowed to manage all of `owner`'s assets.
+     * @dev This function checks if an operator is approved for all assets of an owner.
+     * @param owner The address of the token owner.
+     * @param operator The address of the operator.
+     * @return True if the operator is approved for all, false otherwise.
+     */
+    function isApprovedForAll(address owner, address operator) public view virtual override returns (bool) {
+        return _operatorApprovals[owner][operator];
+    }
+
+    /**
+     * @notice Transfers `tokenId` token from `from` to `to`.
+     * @dev This function transfers a specific token from one address to another.
+     * @param from The address to transfer from.
+     * @param to The address to transfer to.
+     * @param tokenId The ID of the token to transfer.
+     */
+    function transferFrom(
+        address from,
+        address to,
+        uint256 tokenId
+    ) public virtual override {
+        _transfer(from, to, tokenId);
+    }
+
+    /**
+     * @notice Safely transfers `tokenId` token from `from` to `to`, checking first that contract recipients are aware of the ERC721 protocol to prevent tokens from being forever locked.
+     * @dev This function safely transfers a specific token from one address to another.
+     * @param from The address to transfer from.
+     * @param to The address to transfer to.
+     * @param tokenId The ID of the token to transfer.
+     */
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 tokenId
+    ) public virtual override {
+        safeTransferFrom(from, to, tokenId, "");
+    }
+
+    /**
+     * @notice Safely transfers `tokenId` token from `from` to `to`, checking first that contract recipients are aware of the ERC721 protocol to prevent tokens from being forever locked.
+     * @dev This function safely transfers a specific token from one address to another with additional data.
+     * @param from The address to transfer from.
+     * @param to The address to transfer to.
+     * @param tokenId The ID of the token to transfer.
+     * @param _data Additional data with no specified format.
+     */
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 tokenId,
+        bytes memory _data
+    ) public override {
+        _transfer(from, to, tokenId);
+        require(
+            _checkOnERC721Received(from, to, tokenId, _data),
+            "ERC721A: transfer to non ERC721Receiver implementer"
+        );
+    }
+
+    /**
+     * @notice Checks if a token exists.
+     * @dev This function checks if a specific token exists.
+     * @param tokenId The ID of the token.
+     * @return True if the token exists, false otherwise.
+     */
+    function _exists(uint256 tokenId) internal view returns (bool) {
+        return tokenId < currentIndex;
+    }
+
+    /**
+     * @notice Mints `quantity` tokens and transfers them to `to`.
+     * @dev This function mints a specific quantity of tokens and transfers them to an address.
+     * @param to The address to transfer the tokens to.
+     * @param quantity The number of tokens to mint.
+     */
+    function _safeMint(address to, uint256 quantity) internal {
+        _safeMint(to, quantity, "");
+    }
+
+    /**
+     * @notice Mints `quantity` tokens and transfers them to `to`.
+     * @dev This function mints a specific quantity of tokens and transfers them to an address with additional data.
+     * @param to The address to transfer the tokens to.
+     * @param quantity The number of tokens to mint.
+     * @param _data Additional data with no specified format.
+     */
+    function _safeMint(
+        address to,
+        uint256 quantity,
+        bytes memory _data
+    ) internal {
+        _mint(to, quantity, _data, true);
+    }
+
+    /**
+     * @notice Mints `quantity` tokens and transfers them to `to`.
+     * @dev This function mints a specific quantity of tokens and transfers them to an address.
+     * @param to The address to transfer the tokens to.
+     * @param quantity The number of tokens to mint.
+     * @param _data Additional data with no specified format.
+     * @param safe Whether to check onERC721Received.
+     * @notice
+     * - Mints NFTs starting from the current index
+     * - Updates balances and ownership records
+     * - Emits Transfer events for each minted NFT
+     * - Performs safety checks for ERC721Receiver if enabled
+     * @dev
+     * - Uses unchecked arithmetic for performance
+     * - Calls _beforeTokenTransfers and _afterTokenTransfers hooks
+     * - Requires valid recipient address and quantity
+     * - Automatically increments the current index
+     */
+    function _mint(
+        address to,
+        uint256 quantity,
+        bytes memory _data,
+        bool safe
+    ) internal {
+        require(to != address(0), "ERC721A: mint to the zero address");
+        require(quantity > 0, "ERC721A: quantity must be greater than 0");
+
+        _beforeTokenTransfers(address(0), to, currentIndex, quantity);
+
+        // Overflows are incredibly unrealistic.
+        // balance or numberMinted overflow if current value of either + quantity > 1.8e19 (2^64) - 1
+        // Additionally, currentIndex won't overflow because it would take ~1.8e19 mints to reach that value
+        unchecked {
+            _addressData[to].balance += uint128(quantity);
+            _addressData[to].numberMinted += uint128(quantity);
+
+            _ownerships[currentIndex].addr = to;
+            _ownerships[currentIndex].startTimestamp = uint64(block.timestamp);
+
+            uint256 updatedIndex = currentIndex;
+            uint256 end = updatedIndex + quantity;
+
+            if (safe && to.isContract()) {
+                do {
+                    emit Transfer(address(0), to, updatedIndex);
+                    require(
+                        _checkOnERC721Received(address(0), to, updatedIndex, _data),
+                        "ERC721A: transfer to non ERC721Receiver implementer"
+                    );
+                    updatedIndex++;
+                } while (updatedIndex < end);
+                // Reentrancy protection
+                require(currentIndex == updatedIndex, "ERC721A: unexpected mint state");
+            } else {
+                do {
+                    emit Transfer(address(0), to, updatedIndex);
+                    updatedIndex++;
+                } while (updatedIndex < end);
+            }
+            currentIndex = updatedIndex;
+        }
+
+        _afterTokenTransfers(address(0), to, currentIndex - quantity, quantity);
+    }
+
+    /**
+     * @notice Transfers `tokenId` token from `from` to `to`.
+     * @dev This function transfers a specific token from one address to another.
+     * @param from The address to transfer from.
+     * @param to The address to transfer to.
+     * @param tokenId The ID of the token to transfer.
+     * @notice
+     * - Verifies sender is owner or approved operator
+     * - Checks for valid 'from' address
+     * - Prevents transfer to zero address
+     * - Emits Transfer event
+     * - Updates ownership and balance records
+     * 
+     * @dev
+     * - Uses unchecked arithmetic for performance
+     * - Handles adjacent token ownership continuity
+     * - Calls before/after transfer hooks
+     * - Clears previous approvals
+     * - Maintains data consistency for ownerOf(tokenId+1) checks
+     */
+    function _transfer(
+        address from,
+        address to,
+        uint256 tokenId
+    ) private {
+        TokenOwnership memory prevOwnership = ownershipOf(tokenId);
+
+        bool isApprovedOrOwner = (_msgSender() == prevOwnership.addr ||
+            isApprovedForAll(prevOwnership.addr, _msgSender()) ||
+            getApproved(tokenId) == _msgSender());
+
+        require(isApprovedOrOwner, "ERC721A: transfer caller is not owner nor approved");
+        require(prevOwnership.addr == from, "ERC721A: transfer from incorrect owner");
+        require(to != address(0), "ERC721A: transfer to the zero address");
+
+        _beforeTokenTransfers(from, to, tokenId, 1);
+
+        // Clear approvals
+        _approve(address(0), tokenId, prevOwnership.addr);
+
+        // Underflow of the sender's balance is impossible because we check for
+        // ownership above and the recipient's balance can't realistically overflow.
+        unchecked {
+            _addressData[from].balance -= 1;
+            _addressData[to].balance += 1;
+
+            _ownerships[tokenId].addr = to;
+            _ownerships[tokenId].startTimestamp = uint64(block.timestamp);
+
+            // If the ownership slot of tokenId+1 is not explicitly set, that means the transfer initiator owns it.
+            // Set the slot of tokenId+1 explicitly in storage to maintain correctness for ownerOf(tokenId+1) calls.
+            uint256 nextTokenId = tokenId + 1;
+            if (nextTokenId < currentIndex) {
+                if (_ownerships[nextTokenId].addr == address(0)) {
+                    if (_exists(nextTokenId)) {
+                        _ownerships[nextTokenId].addr = prevOwnership.addr;
+                        _ownerships[nextTokenId].startTimestamp = prevOwnership.startTimestamp;
+                    }
+                }
+            }
+        }
+
+        emit Transfer(from, to, tokenId);
+        _afterTokenTransfers(from, to, tokenId, 1);
+    }
+
+    /**
+     * @notice Approves `to` to operate on `tokenId`.
+     * @dev This function approves an address to operate on a specific token.
+     * @param to The address to approve.
+     * @param tokenId The ID of the token to approve.
+     * @param owner The address of the token owner.
+     */
+    function _approve(
+        address to,
+        uint256 tokenId,
+        address owner
+    ) private {
+        _tokenApprovals[tokenId] = to;
+        emit Approval(owner, to, tokenId);
+    }
+
+    /**
+     * @notice Checks if the recipient is an ERC721Receiver and if it accepts the token.
+     * @dev This function checks if the recipient is an ERC721Receiver and if it accepts the token.
+     * @param from The address to transfer from.
+     * @param to The address to transfer to.
+     * @param tokenId The ID of the token to transfer.
+     * @param _data Additional data with no specified format.
+     * @return True if the recipient is an ERC721Receiver and accepts the token, false otherwise.
+     */
+    function _checkOnERC721Received(
+        address from,
+        address to,
+        uint256 tokenId,
+        bytes memory _data
+    ) private returns (bool) {
+        if (!to.isContract()) {
+            return true;
+        }
+        try IERC721Receiver(to).onERC721Received(_msgSender(), from, tokenId, _data) returns (bytes4 retval) {
+            return retval == IERC721Receiver.onERC721Received.selector;
+        } catch (bytes memory reason) {
+            if (reason.length == 0) {
+                revert("ERC721A: transfer to non ERC721Receiver implementer");
+            } else {
+                assembly {
+                    revert(add(32, reason), mload(reason))
+                }
+            }
+        }
+    }
+
+    /**
+     * @notice Hook that is called before any token transfer.
+     * @dev This function is called before any token transfer.
+     * @param from The address to transfer from.
+     * @param to The address to transfer to.
+     * @param startTokenId The starting token ID.
+     * @param quantity The number of tokens to transfer.
+     */
+    function _beforeTokenTransfers(
+        address from,
+        address to,
+        uint256 startTokenId,
+        uint256 quantity
+    ) internal virtual {}
+
+    /**
+     * @notice Hook that is called after any token transfer.
+     * @dev This function is called after any token transfer.
+     * @param from The address to transfer from.
+     * @param to The address to transfer to.
+     * @param startTokenId The starting token ID.
+     * @param quantity The number of tokens to transfer.
+     */
+    function _afterTokenTransfers(
+        address from,
+        address to,
+        uint256 startTokenId,
+        uint256 quantity
+    ) internal virtual {}
+}
+```
+
+This implementation of ERC721A includes all the required functionality while optimizing for gas efficiency during batch minting operations. Key optimizations include:
+
+1. Sequential token IDs for efficient enumeration
+2. Lazy initialization of ownership records
+3. Efficient batch minting that only stores ownership data for the first token in a batch
+4. Optimized storage layout to reduce gas costs
+
+The contract supports all standard ERC721 functionality plus enumeration capabilities while significantly reducing gas costs for batch minting operations.

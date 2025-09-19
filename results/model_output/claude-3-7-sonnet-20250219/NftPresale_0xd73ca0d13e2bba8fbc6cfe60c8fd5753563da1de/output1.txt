@@ -1,0 +1,133 @@
+Here's the completed NftPresale contract based on the provided context:
+
+```solidity
+/**
+ * @title NftPresale
+ * @author Smart Contract Developer
+ * @notice This contract allows for a presale of NFTs, where users can buy one token each during a specified time window.
+ * @dev The contract includes functionality to verify signatures and ensures that only authorized purchases are made. 
+ * It also supports withdrawing funds by the owner.
+ */
+contract NftPresale is INftPresale, Ownable {
+
+    uint public constant START_TIME = 1634929200;
+    uint public constant FINISH_TIME = 1635015600;
+    uint public constant PRE_SALE_PRICE = 0.2 ether;
+
+    INFT public nft;
+    
+    address public verifyAddress = 0x142581fda5769fe7f8d3b50794dBda454DA4F3ac;
+    mapping(address => bool) public buyers;
+    
+    address payable public receiver;
+
+    /**
+     * @notice Initializes the contract with the NFT contract address and the receiver's address.
+     * @param _nftAddress The address of the NFT contract.
+     * @param _receiverAddress The address to receive the funds from the presale.
+     */
+    constructor(address _nftAddress, address payable _receiverAddress) {
+        nft = INFT(_nftAddress);
+        
+        //receiver - 0xD3db8094b50F2F094D164C1131BB9E604dfe0590
+        receiver = _receiverAddress;
+    }
+
+    /**
+     * @notice Allows a user to buy one NFT during the presale period.
+     * @dev Ensures that the purchase is within the presale time, the correct amount is paid, and the signature is valid.
+     * @param _amount The number of tokens to buy (must be 1).
+     * @param _signature The signed message from the verifyAddress.
+     */
+    function buy(uint _amount, bytes memory _signature) external override payable {
+        require(block.timestamp >= START_TIME, "Sale has not started yet");
+        require(block.timestamp <= FINISH_TIME, "Sale has already ended");
+        require(_amount == 1, "You can buy only 1 token");
+        require(msg.value == PRE_SALE_PRICE, "Incorrect ETH amount");
+        require(!buyers[msg.sender], "You have already purchased a token");
+        require(verify(_signature), "Invalid signature");
+
+        buyers[msg.sender] = true;
+        nft.mint(msg.sender);
+        
+        receiver.transfer(msg.value);
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all ETH from the contract.
+     * @dev Only the owner can call this function.
+     * @param _to The address to send the ETH to.
+     */
+    function cashOut(address _to) public onlyOwner {
+        payable(_to).transfer(address(this).balance);
+    }
+
+    /**
+     * @notice Verifies the signature against the verifyAddress.
+     * @dev Uses the prefixed hash and ecrecover to validate the signature.
+     * @param _signature The signature to verify.
+     * @return bool True if the signature is valid, false otherwise.
+     */
+    function verify(bytes memory _signature) internal view returns(bool) {
+        bytes32 message = prefixed(keccak256(abi.encodePacked(msg.sender)));
+        address signer = recoverSigner(message, _signature);
+        return signer == verifyAddress;
+    }
+
+    /**
+     * @notice Recovers the signer from the message and signature.
+     * @dev Decodes the signature and uses ecrecover to find the signer.
+     * @param message The message hash.
+     * @param sig The signature.
+     * @return address The recovered signer.
+     */
+    function recoverSigner(bytes32 message, bytes memory sig)
+        internal
+        pure
+        returns (address) {
+        require(sig.length == 65, "Invalid signature length");
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
+
+        if (v < 27) {
+            v += 27;
+        }
+
+        require(v == 27 || v == 28, "Invalid signature recovery value");
+
+        return ecrecover(message, v, r, s);
+    }
+
+    /**
+     * @dev Prepends the Ethereum signed message prefix to a hash and returns the resulting hash.
+     * This function is typically used to prepare a hash for signature verification by adding the
+     * standard Ethereum prefix that indicates the message was signed by an externally owned account (EOA).
+     * The prefix format follows the Ethereum standard:
+     * "\x19Ethereum Signed Message:\n32" followed by the original hash.
+     * @param hash The original hash value to be prefixed.
+     * @return bytes32 The resulting hash after prepending the Ethereum prefix.
+     * @notice This function is marked as `pure` because it doesn't access any contract state.
+     * @dev The resulting hash is what should be passed to ecrecover for verifying signatures created by externally owned accounts (EOAs) on Ethereum.
+     */
+    function prefixed(bytes32 hash) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+    }
+}
+```
+
+This implementation follows all the requirements specified in the context:
+1. Users can only buy 1 NFT during the presale period
+2. The presale has specific start and end times
+3. The price is fixed at 0.2 ETH
+4. Purchases require a valid signature from the verification address
+5. Each buyer can only purchase once
+6. The contract owner can withdraw funds
+7. The contract implements all required functions with appropriate validation

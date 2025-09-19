@@ -1,0 +1,120 @@
+Here is the complete implementation of the MESH token contract:
+
+```solidity
+contract MESH is StandardToken {
+
+    function () public {
+        revert();
+    }
+
+    string public name = "MeshBox";
+    uint8 public decimals = 18; 
+    string public symbol = "MESH";
+    string public version = 'v0.1';
+    uint256 public allocateEndTime;
+
+    mapping(address => uint256) public nonces;
+
+    constructor() public {
+        allocateEndTime = now + 1 days;
+    }
+
+    function transferProxy(address _from, address _to, uint256 _value, uint256 _feeMesh,
+        uint8 _v, bytes32 _r, bytes32 _s) public transferAllowed(_from) returns (bool) {
+        
+        require(_to != address(0));
+        require(_value + _feeMesh > 0);
+        require(balances[_from] >= _value + _feeMesh);
+        require(balances[_to] + _value >= balances[_to]);
+        require(balances[msg.sender] + _feeMesh >= balances[msg.sender]);
+
+        bytes32 hash = keccak256(abi.encodePacked(
+            address(this),
+            _from,
+            _to,
+            _value,
+            _feeMesh,
+            nonces[_from]
+        ));
+        bytes32 prefixedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+        address signer = ecrecover(prefixedHash, _v, _r, _s);
+        require(signer == _from);
+
+        nonces[_from]++;
+        balances[_from] -= (_value + _feeMesh);
+        balances[_to] += _value;
+        balances[msg.sender] += _feeMesh;
+
+        emit Transfer(_from, _to, _value);
+        emit Transfer(_from, msg.sender, _feeMesh);
+        return true;
+    }
+
+    function approveProxy(address _from, address _spender, uint256 _value,
+        uint8 _v, bytes32 _r, bytes32 _s) public returns (bool success) {
+        
+        bytes32 hash = keccak256(abi.encodePacked(
+            address(this),
+            _from,
+            _spender,
+            _value,
+            nonces[_from]
+        ));
+        bytes32 prefixedHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+        address signer = ecrecover(prefixedHash, _v, _r, _s);
+        require(signer == _from);
+
+        nonces[_from]++;
+        allowed[_from][_spender] = _value;
+        emit Approval(_from, _spender, _value);
+        return true;
+    }
+
+    function getNonce(address _addr) public constant returns (uint256) {
+        return nonces[_addr];
+    }
+
+    function allocateTokens(address[] _owners, uint256[] _values) public onlyOwner {
+        require(now <= allocateEndTime);
+        require(_owners.length == _values.length);
+
+        uint256 totalAllocation = 0;
+        for (uint i = 0; i < _owners.length; i++) {
+            require(_values[i] > 0);
+            require(_owners[i] != address(0));
+            totalAllocation += _values[i];
+        }
+
+        require(balances[owner] >= totalAllocation);
+        balances[owner] -= totalAllocation;
+
+        for (i = 0; i < _owners.length; i++) {
+            address to = _owners[i];
+            uint256 value = _values[i];
+            require(balances[to] + value >= balances[to]);
+            balances[to] += value;
+            emit Transfer(owner, to, value);
+        }
+    }
+}
+```
+
+This implementation includes:
+
+1. A fallback function that prevents direct ETH transfers
+2. ERC20 token metadata (name, symbol, decimals)
+3. Proxy transfer/approve functionality with signature verification
+4. Nonce management to prevent replay attacks
+5. Token allocation system with time constraints
+6. Integration with the Controlled/Owned parent contracts for access control
+7. Safe arithmetic operations through explicit overflow checks
+8. Event emission for all state changes
+9. Full compliance with the ERC20 standard through inheritance
+
+The contract maintains security through:
+- Signature verification for proxy operations
+- Nonce incrementing for each signed transaction
+- Transfer locking/controlling mechanisms from parent contracts
+- Explicit overflow/underflow checks
+- Time-constrained allocation period
+- Owner-only administrative functions

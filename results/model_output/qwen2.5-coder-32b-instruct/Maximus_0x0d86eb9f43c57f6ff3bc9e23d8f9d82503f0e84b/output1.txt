@@ -1,0 +1,105 @@
+To implement the `HEXToken` contract as described, we need to define several mappings and variables to keep track of token balances, stakes, allowances, and more. Here's a complete implementation that fits within the constraints provided:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    // Events for logging actions
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event StakeStarted(address indexed staker, uint256 amount, uint256 duration);
+    event StakeEnded(address indexed staker, uint256 amount);
+
+    // Variables to track total supply and balances
+    uint256 private _totalSupply;
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+
+    // Variables to track stakes
+    struct Stake {
+        uint256 amount;
+        uint256 startDate;
+        uint256 duration; // Duration in days
+        uint40 id;
+    }
+
+    mapping(address => Stake[]) private _stakes;
+    uint40 private _lastStakeId = 0;
+
+    // Function to return the current day
+    function currentDay() external view returns (uint256) {
+        return block.timestamp / 1 days;
+    }
+
+    // Function to start a new stake
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "Amount must be greater than 0");
+        require(newStakedDays > 0, "Duration must be greater than 0");
+        require(_balances[msg.sender] >= newStakedHearts, "Insufficient balance");
+
+        _balances[msg.sender] -= newStakedHearts;
+
+        Stake memory newStake = Stake({
+            amount: newStakedHearts,
+            startDate: block.timestamp,
+            duration: newStakedDays,
+            id: _lastStakeId++
+        });
+
+        _stakes[msg.sender].push(newStake);
+
+        emit StakeStarted(msg.sender, newStakedHearts, newStakedDays);
+    }
+
+    // Function to end a stake
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < _stakes[msg.sender].length, "Invalid stake index");
+        Stake storage s = _stakes[msg.sender][stakeIndex];
+        require(s.id == stakeIdParam, "Invalid stake ID");
+        require(block.timestamp >= s.startDate + s.duration * 1 days, "Stake period not over yet");
+
+        _balances[msg.sender] += s.amount;
+
+        emit StakeEnded(msg.sender, s.amount);
+
+        // Remove stake entry or mark it as ended if needed
+        delete _stakes[msg.sender][stakeIndex];
+    }
+
+    // Function to approve a spender
+    function approve(address spender, uint256 amount) external returns (bool) {
+        _allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    // Function to transfer HEX
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(recipient != address(0), "Recipient is the zero address");
+        require(_balances[msg.sender] >= amount, "Insufficient balance");
+
+        _balances[msg.sender] -= amount;
+        _balances[recipient] += amount;
+
+        emit Transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    // Function to return the number of stakes for a given address
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return _stakes[stakerAddr].length;
+    }
+}
+```
+
+### Explanation:
+
+- **Balances and Allowances**: We use a mapping to store the balance of each address and another mapping to store approvals.
+- **Stakes**: Each stake is represented as a struct and stored in an array mapped to each address's stakes.
+- **currentDay**: Returns the current day using block timestamp.
+- **stakeStart**: Allows users to stake tokens, deducting them from the sender's balance and recording the stake details.
+- **stakeEnd**: Ends a specific stake if its duration has passed, adding the staked amount back to the user's balance.
+- **approve**: Allows token holder to approve another address to spend a certain amount of their tokens.
+- **transfer**: Transfers a certain amount of tokens from the sender to another address.
+- **stakeCount**: Returns the number of stakes associated with a particular address.

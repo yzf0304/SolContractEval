@@ -1,0 +1,106 @@
+Here's the implementation of the `AggregationRouterV3` contract based on the provided context and requirements:
+
+```solidity
+pragma solidity 0.6.12;
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        gasLeft = gasleft();
+        uint256 initialGas = gasLeft;
+        if (desc.flags & _BURN_FROM_MSG_SENDER != 0) {
+            chiSpent = IChi(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c).freeFromUpTo(msg.sender, type(uint256).max);
+        } else if (desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+            chiSpent = IChi(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c).freeFromUpTo(tx.origin, type(uint256).max);
+        }
+        
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+        gasLeft = initialGas.sub(gasLeft);
+    }
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        require(desc.amount > 0, "Invalid amount");
+        require(desc.minReturnAmount > 0, "Invalid minReturnAmount");
+        require(address(caller) != address(0), "Invalid caller");
+
+        // Handling permit if needed
+        _permit(desc.srcToken, desc.amount, desc.permit);
+
+        // Perform the swap
+        if (desc.flags & _PARTIAL_FILL == 0) {
+            require(desc.srcToken.uniBalanceOf(msg.sender) >= desc.amount, "Insufficient funds");
+        }
+
+        uint256 beforeBalance = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+        caller.callBytes{value: msg.value}(data);
+        uint256 afterBalance = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+
+        returnAmount = afterBalance.sub(beforeBalance);
+        require(returnAmount >= desc.minReturnAmount, "Min return not reached");
+
+        emit Swapped(msg.sender, desc.srcToken, desc.dstToken, desc.dstReceiver, desc.amount, returnAmount);
+        gasLeft = gasleft();
+    }
+
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        token.safeTransfer(owner(), amount);
+    }
+
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```
+
+### Key Features Implemented:
+1. **discountedSwap**: Handles CHI token burning if specified by flags and then calls the `swap` function.
+2. **swap**: Executes the token swap, ensuring the caller and amounts are valid, handling permits if necessary, and verifying the minimum return amount.
+3. **rescueFunds**: Allows the owner to rescue any funds mistakenly sent to the contract.
+4. **destroy**: Allows the owner to destroy the contract and reclaim any remaining ETH.
+
+This contract is designed to be compatible with Solidity version 0.6.12 as specified in the instructions.

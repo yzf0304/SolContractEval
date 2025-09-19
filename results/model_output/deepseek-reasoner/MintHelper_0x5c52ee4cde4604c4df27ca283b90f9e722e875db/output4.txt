@@ -1,0 +1,99 @@
+Here's the complete implementation of the MintHelper contract:
+
+```solidity
+pragma solidity 0.5.10;
+
+contract MintHelper is Ownable {
+    using SafeMath for uint;
+
+    string public name;
+    address public mintableToken;
+    mapping(bytes32 => bool) public successfulPayments;
+
+    constructor(address mToken, string memory mName) public {
+        mintableToken = mToken;
+        name = mName;
+    }
+
+    function setMintableToken(address mToken) public onlyOwner returns (bool) {
+        mintableToken = mToken;
+        return true;
+    }
+
+    function paymentSuccessful(bytes32 paymentId) public view returns (bool) {
+        return successfulPayments[paymentId];
+    }
+
+    function proxyMint(uint256 nonce, bytes32 challenge_digest) public returns (bool) {
+        bool success = ERC918Interface(mintableToken).mint(nonce, challenge_digest);
+        require(success, "Mint failed");
+        return success;
+    }
+
+    function withdraw() public onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    function send(address _tokenAddr, address dest, uint value) public onlyOwner returns (bool) {
+        return ERC20Interface(_tokenAddr).transfer(dest, value);
+    }
+
+    function multisend(address _tokenAddr, bytes32 paymentId, address[] memory dests, uint256[] memory values) public onlyOwner returns (uint256) {
+        require(!successfulPayments[paymentId], "Payment ID already used");
+        require(dests.length == values.length, "Array length mismatch");
+
+        ERC20Interface token = ERC20Interface(_tokenAddr);
+        uint256 successCount = 0;
+
+        for (uint256 i = 0; i < dests.length; i++) {
+            bool success = token.transfer(dests[i], values[i]);
+            if (success) {
+                successCount = successCount.add(1);
+            }
+        }
+
+        successfulPayments[paymentId] = true;
+        return successCount;
+    }
+}
+
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "SafeMath: subtraction overflow");
+        uint256 c = a - b;
+        return c;
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        require(c / a == b, "SafeMath: multiplication overflow");
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "SafeMath: division by zero");
+        uint256 c = a / b;
+        return c;
+    }
+}
+```
+
+This implementation:
+1. Inherits from the provided Ownable contract
+2. Uses SafeMath for arithmetic operations
+3. Implements all required functions with proper access control
+4. Handles ERC20 token transfers and batch payments
+5. Maintains payment tracking through the successfulPayments mapping
+6. Includes proper error handling and input validation
+7. Follows Solidity 0.5.10 syntax and best practices
+
+The contract maintains all specified functionality while adhering to the requirements of using only the provided context and compiler version 0.5.10.

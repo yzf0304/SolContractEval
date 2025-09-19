@@ -1,0 +1,594 @@
+```solidity
+/**
+ * @notice This contract implements a basic ERC20 token with additional features like minting, burning, and owner change.
+ * @dev It uses the TokenLib library to handle most of the token functionalities. The contract is designed to be used in a crowdsale context.
+ */
+pragma solidity ^0.4.18;
+
+library BasicMathLib {
+
+  /// @dev Safely add two unsigned integers. If addition overflows, return error.
+
+  function plus(uint256 a, uint256 b) internal pure returns (bool err, uint256 sum) {
+
+    sum = a + b;
+
+    if (sum < a) {
+
+      err = true;
+
+      return (err, 0);
+
+    }
+
+    else {
+
+      err = false;
+
+      return (err, sum);
+
+    }
+
+  }
+
+
+
+  /// @dev Safely subtract two unsigned integers. If subtraction results in a negative number, return error.
+
+  function minus(uint256 a, uint256 b) internal pure returns (bool err, uint256 diff) {
+
+    if (b > a) {
+
+      err = true;
+
+      return (err, 0);
+
+    }
+
+    else {
+
+      diff = a - b;
+
+      err = false;
+
+      return (err, diff);
+
+    }
+
+  }
+
+}
+
+library TokenLib {
+
+  using BasicMathLib for uint256;
+
+
+
+  struct TokenStorage {
+
+    bool initialized;
+
+    mapping (address => uint256) balances;
+
+    mapping (address => mapping (address => uint256)) allowed;
+
+
+
+    string name;
+
+    string symbol;
+
+    uint256 totalSupply;
+
+    uint256 initialSupply;
+
+    address owner;
+
+    uint8 decimals;
+
+    bool stillMinting;
+
+  }
+
+
+
+  event Transfer(address indexed from, address indexed to, uint256 value);
+
+  event Approval(address indexed owner, address indexed spender, uint256 value);
+
+  event OwnerChange(address from, address to);
+
+  event Burn(address indexed burner, uint256 value);
+
+  event MintingClosed(bool mintingClosed);
+
+
+
+  /// @dev Called by the Standard Token upon creation.
+
+  /// @param self Stored token from token contract
+
+  /// @param _name Name of the new token
+
+  /// @param _symbol Symbol of the new token
+
+  /// @param _decimals Decimal places for the token represented
+
+  /// @param _initial_supply The initial token supply
+
+  /// @param _allowMinting True if additional tokens can be created, false otherwise
+
+  function init(TokenStorage storage self,
+
+                address _owner,
+
+                string _name,
+
+                string _symbol,
+
+                uint8 _decimals,
+
+                uint256 _initial_supply,
+
+                bool _allowMinting)
+
+                public
+
+  {
+
+    require(!self.initialized);
+
+    self.initialized = true;
+
+    self.name = _name;
+
+    self.symbol = _symbol;
+
+    self.totalSupply = _initial_supply;
+
+    self.initialSupply = _initial_supply;
+
+    self.decimals = _decimals;
+
+    self.owner = _owner;
+
+    self.stillMinting = _allowMinting;
+
+    self.balances[_owner] = _initial_supply;
+
+  }
+
+
+
+  /// @dev Transfer tokens from caller's account to another account.
+
+  /// @param self Stored token from token contract
+
+  /// @param _to Address to send tokens
+
+  /// @param _value Number of tokens to send
+
+  /// @return True if completed
+
+  function transfer(TokenStorage storage self, address _to, uint256 _value) public returns (bool) {
+
+    require(_to != address(0));
+    bool err;
+    uint256 balance;
+
+    (err,balance) = self.balances[msg.sender].minus(_value);
+    require(!err);
+    self.balances[msg.sender] = balance;
+    //It's not possible to overflow token supply
+    self.balances[_to] = self.balances[_to] + _value;
+    Transfer(msg.sender, _to, _value);
+    return true;
+  }
+
+
+
+  /// @dev Authorized caller transfers tokens from one account to another
+
+  /// @param self Stored token from token contract
+
+  /// @param _from Address to send tokens from
+
+  /// @param _to Address to send tokens to
+
+  /// @param _value Number of tokens to send
+
+  /// @return True if completed
+
+  function transferFrom(TokenStorage storage self,
+
+                        address _from,
+
+                        address _to,
+
+                        uint256 _value)
+
+                        public
+
+                        returns (bool)
+
+  {
+
+    var _allowance = self.allowed[_from][msg.sender];
+    bool err;
+    uint256 balanceOwner;
+    uint256 balanceSpender;
+
+    (err,balanceOwner) = self.balances[_from].minus(_value);
+    require(!err);
+
+    (err,balanceSpender) = _allowance.minus(_value);
+    require(!err);
+
+    self.balances[_from] = balanceOwner;
+    self.allowed[_from][msg.sender] = balanceSpender;
+    self.balances[_to] = self.balances[_to] + _value;
+
+    Transfer(_from, _to, _value);
+    return true;
+  }
+
+
+
+  /// @dev Retrieve token balance for an account
+
+  /// @param self Stored token from token contract
+
+  /// @param _owner Address to retrieve balance of
+
+  /// @return balance The number of tokens in the subject account
+
+  function balanceOf(TokenStorage storage self, address _owner) public view returns (uint256 balance) {
+
+    return self.balances[_owner];
+
+  }
+
+
+
+  /// @dev Authorize an account to send tokens on caller's behalf
+
+  /// @param self Stored token from token contract
+
+  /// @param _spender Address to authorize
+
+  /// @param _value Number of tokens authorized account may send
+
+  /// @return True if completed
+
+  function approve(TokenStorage storage self, address _spender, uint256 _value) public returns (bool) {
+
+    // must set to zero before changing approval amount in accordance with spec
+    require((_value == 0) || (self.allowed[msg.sender][_spender] == 0));
+
+    self.allowed[msg.sender][_spender] = _value;
+    Approval(msg.sender, _spender, _value);
+    return true;
+  }
+
+
+
+  /// @dev Remaining tokens third party spender has to send
+
+  /// @param self Stored token from token contract
+
+  /// @param _owner Address of token holder
+
+  /// @param _spender Address of authorized spender
+
+  /// @return remaining Number of tokens spender has left in owner's account
+
+  function allowance(TokenStorage storage self, address _owner, address _spender)
+
+                     public
+
+                     view
+
+                     returns (uint256 remaining) {
+
+    return self.allowed[_owner][_spender];
+
+  }
+
+
+
+  /// @dev Authorize third party transfer by increasing/decreasing allowed rather than setting it
+
+  /// @param self Stored token from token contract
+
+  /// @param _spender Address to authorize
+
+  /// @param _valueChange Increase or decrease in number of tokens authorized account may send
+
+  /// @param _increase True if increasing allowance, false if decreasing allowance
+
+  /// @return True if completed
+
+  function approveChange (TokenStorage storage self, address _spender, uint256 _valueChange, bool _increase)
+
+                          public returns (bool)
+  {
+    uint256 _newAllowed;
+    bool err;
+
+    if(_increase) {
+      (err, _newAllowed) = self.allowed[msg.sender][_spender].plus(_valueChange);
+      require(!err);
+
+      self.allowed[msg.sender][_spender] = _newAllowed;
+    } else {
+      if (_valueChange > self.allowed[msg.sender][_spender]) {
+        self.allowed[msg.sender][_spender] = 0;
+      } else {
+        _newAllowed = self.allowed[msg.sender][_spender] - _valueChange;
+        self.allowed[msg.sender][_spender] = _newAllowed;
+      }
+    }
+
+    Approval(msg.sender, _spender, _newAllowed);
+    return true;
+  }
+
+  /// @dev Change owning address of the token contract, specifically for minting
+
+  /// @param self Stored token from token contract
+
+  /// @param _newOwner Address for the new owner
+
+  /// @return True if completed
+
+  function changeOwner(TokenStorage storage self, address _newOwner) public returns (bool) {
+    require((self.owner == msg.sender) && (_newOwner > 0));
+
+    self.owner = _newOwner;
+    OwnerChange(msg.sender, _newOwner);
+    return true;
+  }
+
+  /// @dev Mints additional tokens, new tokens go to owner
+
+  /// @param self Stored token from token contract
+
+  /// @param _amount Number of tokens to mint
+
+  /// @return True if completed
+
+  function mintToken(TokenStorage storage self, uint256 _amount) public returns (bool) {
+    require((self.owner == msg.sender) && self.stillMinting);
+    uint256 _newAmount;
+    bool err;
+
+    (err, _newAmount) = self.totalSupply.plus(_amount);
+    require(!err);
+
+    self.totalSupply =  _newAmount;
+    self.balances[self.owner] = self.balances[self.owner] + _amount;
+    Transfer(0x0, self.owner, _amount);
+    return true;
+  }
+
+  /// @dev Permanent stops minting
+
+  /// @param self Stored token from token contract
+
+  /// @return True if completed
+
+  function closeMint(TokenStorage storage self) public returns (bool) {
+    require(self.owner == msg.sender);
+
+    self.stillMinting = false;
+    MintingClosed(true);
+    return true;
+  }
+
+  /// @dev Permanently burn tokens
+
+  /// @param self Stored token from token contract
+
+  /// @param _amount Amount of tokens to burn
+
+  /// @return True if completed
+
+  function burnToken(TokenStorage storage self, uint256 _amount) public returns (bool) {
+      uint256 _newBalance;
+      bool err;
+
+      (err, _newBalance) = self.balances[msg.sender].minus(_amount);
+      require(!err);
+
+      self.balances[msg.sender] = _newBalance;
+      self.totalSupply = self.totalSupply - _amount;
+      Burn(msg.sender, _amount);
+      Transfer(msg.sender, 0x0, _amount);
+      return true;
+  }
+}
+
+// You task is to complete the smart contract CrowdsaleToken strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.4.18, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @notice This contract implements a basic ERC20 token with additional features like minting, burning, and owner change.
+ * @dev It uses the TokenLib library to handle most of the token functionalities. The contract is designed to be used in a crowdsale context.
+ */
+contract CrowdsaleToken {
+
+  using TokenLib for TokenLib.TokenStorage;
+
+  TokenLib.TokenStorage public token;
+
+  /**
+   * @notice Initializes the token with the provided parameters.
+   * @param owner The initial owner of the token.
+   * @param name The name of the token.
+   * @param symbol The symbol of the token.
+   * @param decimals The number of decimal places the token supports.
+   * @param initialSupply The initial supply of tokens.
+   * @param allowMinting Whether or not minting is allowed.
+   * @dev This function initializes the token with the given parameters and sets the initial supply.
+   */
+  function CrowdsaleToken(address owner,
+                          string memory name,
+                          string memory symbol,
+                          uint8 decimals,
+                          uint256 initialSupply,
+                          bool allowMinting) public {
+    token.init(owner, name, symbol, decimals, initialSupply, allowMinting);
+  }
+
+  /**
+   * @notice Returns the name of the token.
+   * @return The name of the token.
+   * @dev This function returns the name of the token as stored in the TokenLib.
+   */
+  function name() public view returns (string memory) {
+    return token.name;
+  }
+
+  /**
+   * @notice Returns the symbol of the token.
+   * @return The symbol of the token.
+   * @dev This function returns the symbol of the token as stored in the TokenLib.
+   */
+  function symbol() public view returns (string memory) {
+    return token.symbol;
+  }
+
+  /**
+   * @notice Returns the number of decimals the token supports.
+   * @return The number of decimals.
+   * @dev This function returns the number of decimals the token supports as stored in the TokenLib.
+   */
+  function decimals() public view returns (uint8) {
+    return token.decimals;
+  }
+
+  /**
+   * @notice Returns the total supply of the token.
+   * @return The total supply of the token.
+   * @dev This function returns the total supply of the token as stored in the TokenLib.
+   */
+  function totalSupply() public view returns (uint256) {
+    return token.totalSupply;
+  }
+
+  /**
+   * @notice Returns the initial supply of the token.
+   * @return The initial supply of the token.
+   * @dev This function returns the initial supply of the token as stored in the TokenLib.
+   */
+  function initialSupply() public view returns (uint256) {
+    return token.initialSupply;
+  }
+
+  /**
+   * @notice Returns the balance of the specified address.
+   * @param who The address to query the balance of.
+   * @return The balance of the specified address.
+   * @dev This function returns the balance of the specified address as stored in the TokenLib.
+   */
+  function balanceOf(address who) public view returns (uint256) {
+    return token.balanceOf(who);
+  }
+
+  /**
+   * @notice Returns the remaining allowance of the spender over the owner's tokens.
+   * @param owner The address of the token owner.
+   * @param spender The address of the spender.
+   * @return The remaining allowance.
+   * @dev This function returns the remaining allowance of the spender over the owner's tokens as stored in the TokenLib.
+   */
+  function allowance(address owner, address spender) public view returns (uint256) {
+    return token.allowance(owner, spender);
+  }
+
+  /**
+   * @notice Transfers a specified amount of tokens to the recipient.
+   * @param to The recipient address.
+   * @param value The amount of tokens to transfer.
+   * @return A boolean indicating if the operation was successful.
+   * @dev This function transfers a specified amount of tokens to the recipient using the TokenLib.
+   */
+  function transfer(address to, uint256 value) public returns (bool ok) {
+    return token.transfer(to, value);
+  }
+
+  /**
+   * @notice Transfers tokens from one address to another.
+   * @param from The address to transfer from.
+   * @param to The address to transfer to.
+   * @param value The amount of tokens to transfer.
+   * @return A boolean indicating if the operation was successful.
+   * @dev This function transfers tokens from one address to another using the TokenLib.
+   */
+  function transferFrom(address from, address to, uint value) public returns (bool ok) {
+    return token.transferFrom(from, to, value);
+  }
+
+  /**
+   * @notice Approves the spender to spend a specified amount of tokens on behalf of the owner.
+   * @param spender The address of the spender.
+   * @param value The amount of tokens to approve.
+   * @return A boolean indicating if the operation was successful.
+   * @dev This function approves the spender to spend a specified amount of tokens on behalf of the owner using the TokenLib.
+   */
+  function approve(address spender, uint256 value) public returns (bool ok) {
+    return token.approve(spender, value);
+  }
+
+  /**
+   * @notice Changes the approved amount for a spender by a specified value.
+   * @param spender The address of the spender.
+   * @param valueChange The amount to change the approval by.
+   * @param increase Whether to increase or decrease the approval.
+   * @return A boolean indicating if the operation was successful.
+   * @dev This function changes the approved amount for a spender by a specified value using the TokenLib.
+   */
+  function approveChange(address spender, uint256 valueChange, bool increase) public returns (bool) {
+    return token.approveChange(spender, valueChange, increase);
+  }
+
+  /**
+   * @notice Changes the owner of the token.
+   * @param newOwner The new owner address.
+   * @return A boolean indicating if the operation was successful.
+   * @dev This function changes the owner of the token using the TokenLib.
+   */
+  function changeOwner(address newOwner) public returns (bool ok) {
+    return token.changeOwner(newOwner);
+  }
+
+  /**
+   * @notice Burns a specified amount of tokens.
+   * @param amount The amount of tokens to burn.
+   * @return A boolean indicating if the operation was successful.
+   * @dev This function burns a specified amount of tokens using the TokenLib.
+   */
+  function burnToken(uint256 amount) public returns (bool ok) {
+    return token.burnToken(amount);
+  }
+
+  /**
+   * @notice Mints a specified amount of tokens. Can only be called by the owner if minting is allowed
+   * @param amount The amount of tokens to mint.
+   * @return A boolean indicating if the operation was successful.
+   * @dev This function mints a specified amount of tokens using the TokenLib.
+   */
+  function mintToken(uint256 amount) public returns (bool ok){
+      return token.mintToken(amount);
+  }
+
+    /**
+   * @notice closes minting functionality
+   * @return A boolean indicating if the operation was successful.
+   * @dev This function closes minting functionality using the TokenLib.
+   */
+  function closeMint() public returns (bool ok){
+      return token.closeMint();
+  }
+}
+```

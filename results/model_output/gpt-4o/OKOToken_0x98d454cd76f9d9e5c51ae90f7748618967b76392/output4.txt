@@ -1,0 +1,153 @@
+Below is the complete implementation of the `StandardToken` smart contract strictly adhering to the provided context and description. The contract is designed for Solidity compiler version `0.4.19` and avoids introducing extraneous code or dependencies.
+
+```solidity
+pragma solidity ^0.4.19;
+
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks.
+ */
+contract SafeMath {
+    function safeMul(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a * b;
+        assert(a == 0 || c / a == b);
+        return c;
+    }
+
+    function safeDiv(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b > 0);
+        uint256 c = a / b;
+        assert(a == b * c + a % b);
+        return c;
+    }
+
+    function safeSub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function safeAdd(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a && c >= b);
+        return c;
+    }
+}
+
+/**
+ * @title StandardToken
+ * @notice Implementation of the ERC20 token standard with additional features.
+ */
+contract StandardToken is SafeMath {
+    uint256 public totalSupply;
+    mapping(address => uint256) balances;
+    mapping(address => mapping(address => uint256)) allowed;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    /**
+     * @notice Modifier to prevent the ERC20 short address attack.
+     * @dev Ensures that the payload size matches the expected size.
+     * @param size The expected size of the payload.
+     */
+    modifier onlyPayloadSize(uint256 size) {
+        require(msg.data.length == size + 4);
+        _;
+    }
+
+    /**
+     * @notice Transfers `_value` tokens from the caller's account to `_to`.
+     * @param _to The recipient address.
+     * @param _value The amount of tokens to transfer.
+     * @return success A boolean indicating if the transfer was successful.
+     */
+    function transfer(address _to, uint256 _value) onlyPayloadSize(2 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(_value <= balances[msg.sender]);
+
+        balances[msg.sender] = safeSub(balances[msg.sender], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        emit Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Transfers `_value` tokens from `_from` to `_to` using the allowance mechanism.
+     * @param _from The address to transfer tokens from.
+     * @param _to The recipient address.
+     * @param _value The amount of tokens to transfer.
+     * @return success A boolean indicating if the transfer was successful.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0));
+        require(_value <= balances[_from]);
+        require(_value <= allowed[_from][msg.sender]);
+
+        balances[_from] = safeSub(balances[_from], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        allowed[_from][msg.sender] = safeSub(allowed[_from][msg.sender], _value);
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the balance of the `_owner` address.
+     * @param _owner The address to check the balance of.
+     * @return balance The balance of the `_owner` address.
+     */
+    function balanceOf(address _owner) public view returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    /**
+     * @notice Approves `_spender` to spend up to `_value` tokens on behalf of the caller.
+     * @param _spender The address that will be approved to spend tokens.
+     * @param _value The amount of tokens to approve.
+     * @return success A boolean indicating if the approval was successful.
+     */
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @notice Returns the remaining allowance of `_spender` over the caller's tokens.
+     * @param _owner The address that gave the allowance.
+     * @param _spender The address that has the allowance.
+     * @return remaining The remaining allowance.
+     */
+    function allowance(address _owner, address _spender) public view returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    /**
+     * @notice Atomically increases the allowance granted to `_spender` by `_addedValue`.
+     * @param _spender The address that will have its allowance increased.
+     * @param _addedValue The amount by which to increase the allowance.
+     * @return success A boolean indicating if the operation was successful.
+     */
+    function addApproval(address _spender, uint256 _addedValue) onlyPayloadSize(2 * 32) public returns (bool success) {
+        allowed[msg.sender][_spender] = safeAdd(allowed[msg.sender][_spender], _addedValue);
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+
+    /**
+     * @notice Atomically decreases the allowance granted to `_spender` by `_subtractedValue`.
+     * @param _spender The address that will have its allowance decreased.
+     * @param _subtractedValue The amount by which to decrease the allowance.
+     * @return success A boolean indicating if the operation was successful.
+     */
+    function subApproval(address _spender, uint256 _subtractedValue) onlyPayloadSize(2 * 32) public returns (bool success) {
+        uint256 oldValue = allowed[msg.sender][_spender];
+        if (_subtractedValue > oldValue) {
+            allowed[msg.sender][_spender] = 0;
+        } else {
+            allowed[msg.sender][_spender] = safeSub(oldValue, _subtractedValue);
+        }
+        emit Approval(msg.sender, _spender, allowed[msg.sender][_spender]);
+        return true;
+    }
+}
+```

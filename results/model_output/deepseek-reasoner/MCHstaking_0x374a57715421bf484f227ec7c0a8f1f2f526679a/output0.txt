@@ -1,0 +1,157 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.4;
+
+contract MCHstaking is MCHstakingInterface {
+    address private _owner;
+    mapping(address => bool) private _allowence;
+    IERC20 MCH;
+    contract2 MCF;
+
+    mapping(address => uint256) private _staking;
+    mapping(address => uint256) private _block;
+
+    uint256 private _totalStaked;
+
+    mapping(address => bool) private _blackListed;
+
+    event Stake(address indexed staker, uint256 indexed amount);
+
+    constructor(address MCHtoken) {
+        MCH = IERC20(MCHtoken);
+        _owner = msg.sender;
+        _allowence[msg.sender] = true;
+    }
+
+    function setMCFcontract(address contractAddress) external {
+        require(msg.sender == _owner, "Not owner");
+        MCF = contract2(contractAddress);
+    }
+
+    function stakingStats(address user) external view override returns(uint256 amount, uint256 stakingBlock) {
+        return (_staking[user], _block[user]);
+    }
+
+    function totalStaked() external view override returns(uint256) {
+        return _totalStaked;
+    }
+
+    function showBlackUser(address user) external view override returns(bool) {
+        require(_allowence[msg.sender], "Not allowed");
+        return _blackListed[user];
+    }
+
+    function allowance(address user) external view override returns(bool) {
+        require(_allowence[msg.sender], "Not allowed");
+        return _allowence[user];
+    }
+
+    function transferOwnership(address to) external override {
+        require(msg.sender == _owner, "Not owner");
+        _owner = to;
+    }
+
+    function giveAllowence(address user) external override {
+        require(msg.sender == _owner, "Not owner");
+        _allowence[user] = true;
+    }
+
+    function removeAllowence(address user) external override {
+        require(msg.sender == _owner, "Not owner");
+        _allowence[user] = false;
+    }
+
+    function addToBlackList(address user) external override {
+        require(msg.sender == _owner, "Not owner");
+        _blackListed[user] = true;
+    }
+
+    function removeFromBlackList(address user) external override {
+        require(msg.sender == _owner, "Not owner");
+        _blackListed[user] = false;
+    }
+
+    function stakeMCH(uint256 amount) external override {
+        require(!_blackListed[msg.sender], "Blacklisted");
+        require(MCH.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        _staking[msg.sender] += amount;
+        _totalStaked += amount;
+        _block[msg.sender] = block.number;
+        emit Stake(msg.sender, amount);
+    }
+
+    function unstake(address user, uint256 amount) external override {
+        require(_allowence[msg.sender], "Not allowed");
+        require(_staking[user] >= amount, "Insufficient staked");
+        _staking[user] -= amount;
+        _totalStaked -= amount;
+        require(MCH.transfer(user, amount), "Transfer failed");
+        require(MCF.claimRewards(user), "Claim failed");
+    }
+
+    function refreshBlock(address user) external override {
+        require(_allowence[msg.sender], "Not allowed");
+        _block[user] = block.number;
+    }
+
+    function setData(address user, uint256 staked, uint256 stakingBlock, uint256 stakedMCH) external override {
+        require(_allowence[msg.sender], "Not allowed");
+        _staking[user] = staked;
+        _block[user] = stakingBlock;
+        _totalStaked = stakedMCH;
+    }
+
+    function transferMCH(address to, uint256 amount) external override {
+        require(_allowence[msg.sender], "Not allowed");
+        require(MCH.transfer(to, amount), "Transfer failed");
+    }
+
+    function emergencyWithdraw(uint256 amount) external override {
+        require(msg.sender == _owner, "Not owner");
+        require(MCH.transfer(_owner, amount), "Transfer failed");
+    }
+}
+```
+
+**Step-by-Step Explanation:**
+
+1. **Contract Structure & Variables:**
+   - Inherits from `MCHstakingInterface` to implement required functions.
+   - Uses `IERC20` for MCH token interactions and `contract2` for MCF contract.
+   - Tracks staking data with mappings `_staking` and `_block`.
+   - Manages permissions with `_allowence` and `_blackListed` mappings.
+   - Maintains total staked amount in `_totalStaked`.
+
+2. **Constructor:**
+   - Initializes MCH token address and sets contract deployer as owner with allowance.
+
+3. **setMCFcontract:**
+   - Allows owner to set MCF contract address for reward claims.
+
+4. **Staking Stats & Totals:**
+   - `stakingStats` returns user's staked amount and last staking block.
+   - `totalStaked` provides total MCH staked across all users.
+
+5. **Permission & Blacklist Views:**
+   - `showBlackUser` and `allowance` include permission checks to ensure only authorized addresses can access sensitive information.
+
+6. **Ownership & Permissions Management:**
+   - `transferOwnership`, `giveAllowence`, and `removeAllowence` enforce owner-only access for critical permissions changes.
+   - Blacklist management functions (`addToBlackList`, `removeFromBlackList`) are similarly restricted to the owner.
+
+7. **Core Staking Logic:**
+   - `stakeMCH` transfers tokens from user to contract, updates staking data, and emits event.
+   - `unstake` handles token return, updates balances, and triggers reward claims through MCF contract.
+
+8. **State Management Functions:**
+   - `refreshBlock` allows updating user's staking timestamp.
+   - `setData` provides admin override capability for staking parameters.
+
+9. **Funds Management:**
+   - `transferMCH` enables authorized transfers from contract's token balance.
+   - `emergencyWithdraw` allows owner to retrieve tokens in urgent situations.
+
+10. **Security & Validation:**
+    - All state-changing functions include necessary access controls and input validations.
+    - ERC20 token operations use `require` to confirm transaction success.
+    - Blacklist checks prevent restricted users from staking.

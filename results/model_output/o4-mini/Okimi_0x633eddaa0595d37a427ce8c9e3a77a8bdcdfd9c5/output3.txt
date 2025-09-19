@@ -1,0 +1,167 @@
+Here is the completed Okimi contract. It targets Solidity 0.8.7, inherits only from the specified OpenZeppelin and ERC721A base contracts, and fills in all required functions without any extraneous code.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "erc721a/contracts/ERC721A.sol";
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    uint256 public immutable maxPerAddressDuringMint;
+    uint256 public immutable amountForDevs;
+    uint256 public immutable amountForSaleAndDev;
+    uint256 internal immutable collectionSize;
+    uint256 internal immutable maxBatchSize;
+
+    struct SaleConfig {
+        uint32 publicSaleStartTime;
+        uint64 publicPriceWei;
+    }
+    SaleConfig public saleConfig;
+
+    string private _baseTokenURI;
+
+    constructor()
+        ERC721A("Okimi", "OKM")
+    {
+        maxPerAddressDuringMint = 5;
+        maxBatchSize = 5;
+        collectionSize = 1500;
+        amountForDevs = 1500;
+        amountForSaleAndDev = 1500;
+        saleConfig.publicPriceWei = 5 ether / 1000; // 0.005 ETH
+        saleConfig.publicSaleStartTime = uint32(block.timestamp);
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function mint(uint256 quantity)
+        external
+        payable
+        callerIsUser
+    {
+        uint256 price = uint256(saleConfig.publicPriceWei) * quantity;
+        require(isSaleOn(saleConfig.publicPriceWei, saleConfig.publicSaleStartTime),
+                "Sale is not active");
+        require(quantity <= maxBatchSize, "Exceeds maxBatchSize");
+        require(totalSupply() + quantity <= amountForSaleAndDev, "Exceeds max supply");
+        require(_numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint,
+                "Exceeds max per address");
+
+        refundIfOver(price);
+        _safeMint(msg.sender, quantity);
+    }
+
+    function refundIfOver(uint256 price) private {
+        require(msg.value >= price, "Need to send more ETH");
+        if (msg.value > price) {
+            uint256 refund = msg.value - price;
+            (bool success, ) = payable(msg.sender).call{value: refund}("");
+            require(success, "Refund failed");
+        }
+    }
+
+    function isSaleOn(uint256 _price, uint256 _startTime)
+        public
+        view
+        returns (bool)
+    {
+        return _price != 0 && block.timestamp >= _startTime;
+    }
+
+    function getPrice() public view returns (uint256) {
+        return uint256(saleConfig.publicPriceWei);
+    }
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price)
+        external
+        onlyOwner
+    {
+        saleConfig.publicSaleStartTime = timestamp;
+        saleConfig.publicPriceWei = price;
+    }
+
+    function reserve(uint256 quantity)
+        external
+        onlyOwner
+    {
+        require(totalSupply() + quantity <= amountForDevs, "Exceeds dev allocation");
+        uint256 remaining = quantity;
+        while (remaining > 0) {
+            uint256 toMint = remaining > maxBatchSize ? maxBatchSize : remaining;
+            _safeMint(owner(), toMint);
+            remaining -= toMint;
+        }
+    }
+
+    function setBaseURI(string calldata baseURI)
+        external
+        onlyOwner
+    {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function withdraw()
+        external
+        onlyOwner
+        nonReentrant
+    {
+        uint256 bal = address(this).balance;
+        (bool success, ) = payable(owner()).call{value: bal}("");
+        require(success, "Withdraw failed");
+    }
+
+    function numberMinted(address ownerAddr)
+        public
+        view
+        returns (uint256)
+    {
+        return _numberMinted(ownerAddr);
+    }
+
+    function getOwnershipData(uint256 tokenId)
+        external
+        view
+        returns (TokenOwnership memory)
+    {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted()
+        public
+        view
+        returns (uint256)
+    {
+        return _totalMinted();
+    }
+
+    // Allow the contract to receive ETH
+    receive() external payable {}
+}
+```
+
+Explanation of key points:
+
+• The public `mint` function enforces  
+ – sale is active,  
+ – mint quantity ≤ `maxBatchSize`,  
+ – total supply ≤ `amountForSaleAndDev`,  
+ – per-address limit ≤ `maxPerAddressDuringMint`,  
+ – correct payment with `refundIfOver`.
+
+• `reserve` mints up to the dev allocation (`amountForDevs`) in batches of size `maxBatchSize` to avoid gas issues.
+
+• `setBaseURI` sets a private `_baseTokenURI` and we override `_baseURI()` in ERC721A to return it.
+
+• Withdraw sends the full balance to `owner()` under a reentrancy guard.
+
+• Utility views `numberMinted`, `getOwnershipData`, and `totalMinted` expose ERC721A internals as requested.

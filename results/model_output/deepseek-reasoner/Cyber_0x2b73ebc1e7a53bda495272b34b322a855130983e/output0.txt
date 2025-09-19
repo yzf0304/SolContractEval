@@ -1,0 +1,168 @@
+To solve this problem, we need to create an ERC721 token contract that supports cross-chain transfers using LayerZero. The contract should allow for public and huntlist minting, burning of tokens, and traversal of tokens across different chains. The contract must adhere to the ERC721 standard and integrate with LayerZero for cross-chain functionality.
+
+### Approach
+1. **Cross-Chain Transfers**: Utilize LayerZero's endpoints to send and receive tokens across chains. When a token is sent to another chain, it is burned on the source chain and minted on the destination chain.
+2. **Minting**: Implement public and huntlist minting phases with respective supply caps. The huntlist minting requires a Merkle proof for verification.
+3. **Burning**: Allow token owners to burn their tokens, reducing the total supply.
+4. **Ownership Management**: Ensure only the contract owner can configure settings such as mint phases, supply caps, and LayerZero parameters.
+5. **Security Checks**: Validate transactions to prevent unauthorized access and ensure supply limits are respected.
+
+### Solution Code
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity 0.8.14;
+
+contract Cyber is ERC721Omni {
+
+    string private _baseURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") { 
+        endpoint = ILayerZeroEndpoint(_lzEndpoint); 
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Contract Caller");
+        _;
+    }
+
+    function donate() external payable {}
+
+    function traverseChains(uint16 _chainId, uint tokenId) public payable {
+        require(msg.sender == ownerOf(tokenId), "Not owner");
+        require(trustedRemoteLookup[_chainId].length != 0, "Invalid chain");
+
+        _burn(tokenId);
+        totalSupply -= 1;
+
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        uint16 version = 1;
+        bytes memory adapterParams = abi.encodePacked(version, gasForLzReceive);
+
+        (uint nativeFee, ) = endpoint.estimateFees(_chainId, address(this), payload, false, adapterParams);
+        require(msg.value >= nativeFee, "Insufficient fee");
+
+        _lzSend(_chainId, payload, payable(msg.sender), address(0x0), adapterParams);
+    }
+
+    function _LzReceive(uint16 _srcChainId, bytes memory, uint64, bytes memory _payload) internal override {
+        (address to, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        require(totalSupply + 1 <= maximumSupply, "Max supply reached");
+        _mint(to, tokenId);
+        totalSupply += 1;
+    }
+
+    function publicMint() external callerIsUser {
+        require(publicStatus, "Public mint inactive");
+        require(!depreciatedMint, "Mint deprecated");
+        require(publicMinted + 1 <= publicMintedCap, "Public cap exceeded");
+        require(totalSupply + 1 <= maximumSupply, "Max supply reached");
+
+        publicMinted += 1;
+        totalSupply += 1;
+        _mint(msg.sender, totalSupply);
+    }
+
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        require(huntlistStatus, "Huntlist mint inactive");
+        require(!depreciatedMint, "Mint deprecated");
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(verifyProof(_proof, merkleRoot, leaf), "Invalid proof");
+        require(_addressData[msg.sender].huntlistMinted == 0, "Already minted");
+        require(totalSupply + 2 <= maximumSupply, "Max supply reached");
+
+        _addressData[msg.sender].huntlistMinted = 2;
+        totalSupply += 2;
+        _mint(msg.sender, totalSupply - 1);
+        _mint(msg.sender, totalSupply);
+    }
+
+    function verifyProof(bytes32[] memory proof, bytes32 root, bytes32 leaf) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash <= proofElement) {
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+        return computedHash == root;
+    }
+
+    function burnHunter(uint256 tokenId) external {
+        require(msg.sender == ownerOf(tokenId), "Not owner");
+        _burn(tokenId);
+        totalSupply -= 1;
+    }
+
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        require(_supply <= maximumSupply, "Exceeds max supply");
+        publicMintedCap = _supply;
+    }
+
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Already deprecated");
+        depreciatedMint = true;
+        publicStatus = false;
+        huntlistStatus = false;
+
+        uint256 remaining = 66;
+        require(totalSupply + remaining <= maximumSupply, "Exceeds max supply");
+        for (uint256 i = 0; i < remaining; i++) {
+            totalSupply += 1;
+            _mint(owner, totalSupply);
+        }
+    }
+
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseURI = _newURI;
+    }
+
+    function setGasForDestinationLzReceive(uint _newGasValue) external onlyOwner {
+        gasForLzReceive = _newGasValue;
+    }
+
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    function baseURI() override public view returns (string memory) {
+        return _baseURI;
+    }
+
+    function withdrawDonations() external onlyOwner {
+        payable(owner).transfer(address(this).balance);
+    }
+}
+```
+
+### Explanation
+1. **Cross-Chain Transfers**: The `traverseChains` function burns the token on the source chain and sends a message via LayerZero to the destination chain, where the token is minted.
+2. **Minting**: The `publicMint` and `huntlistMint` functions handle token creation with checks for active phases, supply limits, and Merkle proof verification for the huntlist.
+3. **Burning**: The `burnHunter` function allows token owners to burn their tokens, decrementing the total supply.
+4. **Ownership Management**: Functions like `setPublicState`, `setHuntlistState`, and `setPublicMintSupply` are restricted to the owner for configuring contract parameters.
+5. **Security**: The contract includes checks for valid transactions, supply limits, and correct fee payments for cross-chain transfers to ensure secure operations.

@@ -1,0 +1,150 @@
+Here's the complete implementation of the proxy contract based on the provided context and requirements:
+
+```solidity
+pragma solidity 0.6.12;
+
+interface marketManagerInterface {}
+interface interestModelInterface {}
+interface marketHandlerDataStorageInterface {}
+interface marketSIHandlerDataStorageInterface {}
+
+contract proxy  {
+    address payable owner;
+    uint256 handlerID;
+    string tokenName = "ether";
+    uint256 constant unifiedPoint = 10 ** 18;
+    marketManagerInterface marketManager;
+    interestModelInterface interestModelInstance;
+    marketHandlerDataStorageInterface handlerDataStorage;
+    marketSIHandlerDataStorageInterface SIHandlerDataStorage;
+    address public handler;
+    address public SI;
+    string DEPOSIT = "deposit(uint256,bool)";
+    string REDEEM = "withdraw(uint256,bool)";
+    string BORROW = "borrow(uint256,bool)";
+    string REPAY = "repay(uint256,bool)";
+
+    modifier onlyOwner {
+        require(msg.sender == owner, "Ownable: caller is not the owner");
+        _;
+    }
+
+    modifier onlyMarketManager {
+        address msgSender = msg.sender;
+        require((msgSender == address(marketManager)) || (msgSender == owner), "onlyMarketManager function");
+        _;
+    }
+
+    constructor () public {
+        owner = msg.sender;
+    }
+
+    function ownershipTransfer(address _owner) onlyOwner external returns (bool) {
+        owner = payable(_owner);
+        return true;
+    }
+
+    function initialize(uint256 _handlerID, address handlerAddr, address marketManagerAddr, address interestModelAddr, address marketDataStorageAddr, address siHandlerAddr, address SIHandlerDataStorageAddr) onlyOwner public returns (bool) {
+        handlerID = _handlerID;
+        handler = handlerAddr;
+        marketManager = marketManagerInterface(marketManagerAddr);
+        interestModelInstance = interestModelInterface(interestModelAddr);
+        handlerDataStorage = marketHandlerDataStorageInterface(marketDataStorageAddr);
+        SI = siHandlerAddr;
+        SIHandlerDataStorage = marketSIHandlerDataStorageInterface(SIHandlerDataStorageAddr);
+        return true;
+    }
+
+    function setHandlerID(uint256 _handlerID) onlyOwner public returns (bool) {
+        handlerID = _handlerID;
+        return true;
+    }
+
+    function setHandlerAddr(address handlerAddr) onlyOwner public returns (bool) {
+        handler = handlerAddr;
+        return true;
+    }
+
+    function setSiHandlerAddr(address siHandlerAddr) onlyOwner public returns (bool) {
+        SI = siHandlerAddr;
+        return true;
+    }
+
+    function getHandlerID() public view returns (uint256) {
+        return handlerID;
+    }
+
+    function getHandlerAddr() public view returns (address) {
+        return handler;
+    }
+
+    function getSiHandlerAddr() public view returns (address) {
+        return SI;
+    }
+
+    function migration(address payable target) onlyOwner public returns (bool) {
+        target.transfer(address(this).balance);
+        return true;
+    }
+
+    fallback () external payable {
+        require(msg.value > 0, "Cannot send zero Ether");
+    }
+
+    function deposit(uint256 unifiedTokenAmount, bool flag) public payable returns (bool) {
+        (bool success, ) = handler.delegatecall(abi.encodeWithSignature(DEPOSIT, unifiedTokenAmount, flag));
+        require(success, "Deposit failed");
+        return success;
+    }
+
+    function withdraw(uint256 unifiedTokenAmount, bool flag) public returns (bool) {
+        (bool success, ) = handler.delegatecall(abi.encodeWithSignature(REDEEM, unifiedTokenAmount, flag));
+        require(success, "Withdraw failed");
+        return success;
+    }
+
+    function borrow(uint256 unifiedTokenAmount, bool flag) public returns (bool) {
+        (bool success, ) = handler.delegatecall(abi.encodeWithSignature(BORROW, unifiedTokenAmount, flag));
+        require(success, "Borrow failed");
+        return success;
+    }
+
+    function repay(uint256 unifiedTokenAmount, bool flag) public payable returns (bool) {
+        (bool success, ) = handler.delegatecall(abi.encodeWithSignature(REPAY, unifiedTokenAmount, flag));
+        require(success, "Repay failed");
+        return success;
+    }
+
+    function handlerProxy(bytes memory data) onlyMarketManager external returns (bool, bytes memory) {
+        (bool success, bytes memory returnData) = handler.delegatecall(data);
+        return (success, returnData);
+    }
+
+    function handlerViewProxy(bytes memory data) external returns (bool, bytes memory) {
+        (bool success, bytes memory returnData) = handler.delegatecall(data);
+        return (success, returnData);
+    }
+
+    function siProxy(bytes memory data) onlyMarketManager external returns (bool, bytes memory) {
+        (bool success, bytes memory returnData) = SI.delegatecall(data);
+        return (success, returnData);
+    }
+
+    function siViewProxy(bytes memory data) external returns (bool, bytes memory) {
+        (bool success, bytes memory returnData) = SI.delegatecall(data);
+        return (success, returnData);
+    }
+}
+```
+
+This implementation:
+1. Maintains all specified access controls with modifiers
+2. Uses delegatecall for handler interactions
+3. Implements proper ownership transfer and initialization
+4. Includes fallback function with ETH value check
+5. Provides proxy functionality for both regular and view calls
+6. Follows Solidity 0.6.12 syntax requirements
+7. Maintains storage layout as per original structure
+8. Includes all specified interface interactions
+
+The contract enables secure delegation of calls to handler contracts while maintaining proper access controls and state management.

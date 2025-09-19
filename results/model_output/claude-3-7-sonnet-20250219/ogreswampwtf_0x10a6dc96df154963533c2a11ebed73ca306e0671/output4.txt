@@ -1,0 +1,219 @@
+I'll complete the `ogreswampwtf` contract according to the provided context and description. Here's the full implementation:
+
+```solidity
+/**
+ * @title ogreswampwtf
+ * @notice This contract is an implementation of an NFT collection with minting, revealing, and administrative functionalities.
+ * @dev Inherits from OpenZeppelin's ERC721 and Ownable contracts to manage NFTs and ownership.
+ */
+contract ogreswampwtf is ERC721, Ownable {
+  using Counters for Counters.Counter; 
+  using Strings for uint256;
+
+  Counters.Counter private _tokenSupply;
+  string public ogreURI;
+  string public ogreExtension = ".json"; 
+  uint256 public cost = 0 ether; 
+  uint256 public maxSupply = 3333; 
+  uint256 public freeMints = 3333; 
+  uint256 public maxMintAmount = 3; 
+  bool public paused = false;
+  bool public revealed = false;
+  string public SwampUri;
+  mapping(address => bool) public whitelisted;
+  mapping(address => uint256) private freeMintsWallet;
+
+  constructor(
+    string memory _name,
+    string memory _symbol,
+    string memory _initOgreURI,
+    string memory _initSwampUri
+  ) ERC721(_name, _symbol) {
+    setOgreURI(_initOgreURI);
+    setSwampURI(_initSwampUri);
+  }
+
+  /**
+   * @notice Returns the total number of tokens minted so far.
+   * @dev Uses the `_tokenSupply` counter to track the total supply.
+   * @return The current total supply of tokens.
+   */
+  function totalSupply() public view returns (uint256) {
+    return _tokenSupply.current();
+  }
+
+  /**
+   * @notice Returns the base URI for the NFTs.
+   * @dev This function is used to override the default token URI in the ERC721 standard.
+   * @return The base URI for the NFTs.
+   */
+  function _ogreURI() internal view virtual override returns (string memory) {
+    return ogreURI;
+  }
+
+  /**
+   * @dev Mints tokens with restrictions on quantity and payment.
+   * Requirements:
+   * - Contract not paused
+   * - _mintAmount > 0 and ≤ maxMintAmount
+   * - Total supply + _mintAmount ≤ maxSupply
+   * Minting Rules:
+   * - Free mints (≤ freeMints): 
+   *   - Whitelisted users mint for free
+   *   - Non-whitelisted cannot mint during free phase
+   * - Paid mints (> freeMints): 
+   *   - Requires msg.value ≥ cost * _mintAmount
+   *   - Free mints wallet limit: 20 tokens per wallet
+   * @param _to Recipient address
+   * @param _mintAmount Number of tokens to mint (must be > 0)
+   * 
+   * @notice Emits Transfer event via _safeMint
+   * @dev Tracks free mints per wallet (freeMintsWallet)
+   */
+  function mint(address _to, uint256 _mintAmount) public payable {
+    require(!paused, "Contract is paused");
+    require(_mintAmount > 0, "Mint amount must be greater than 0");
+    require(_mintAmount <= maxMintAmount, "Exceeds max mint amount");
+    require(_tokenSupply.current() + _mintAmount <= maxSupply, "Exceeds max supply");
+
+    if (_tokenSupply.current() < freeMints) {
+      // Free minting phase
+      require(whitelisted[msg.sender], "Not whitelisted for free mint");
+      require(freeMintsWallet[msg.sender] + _mintAmount <= 20, "Exceeds free mint allowance per wallet");
+      freeMintsWallet[msg.sender] += _mintAmount;
+    } else {
+      // Paid minting phase
+      require(msg.value >= cost * _mintAmount, "Insufficient funds");
+    }
+
+    for (uint256 i = 1; i <= _mintAmount; i++) {
+      _tokenSupply.increment();
+      _safeMint(_to, _tokenSupply.current());
+    }
+  }
+
+  /**
+   * @notice Returns the URI for a specific token ID.
+   * @dev If the NFTs are not yet revealed, it returns the `SwampUri`. Otherwise, it constructs the token URI.
+   * @param tokenId The ID of the token.
+   * @return The URI for the specified token ID.
+   */
+  function tokenURI(uint256 tokenId)
+    public
+    view
+    virtual
+    override
+    returns (string memory)
+  {
+    require(_exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+    
+    if (!revealed) {
+      return SwampUri;
+    }
+
+    string memory currentOgreURI = _ogreURI();
+    return bytes(currentOgreURI).length > 0 
+      ? string(abi.encodePacked(currentOgreURI, tokenId.toString(), ogreExtension))
+      : "";
+  }
+
+  /**
+   * @notice Reveals the NFTs, changing their URI to the final one.
+   * @dev Only the owner can call this function.
+   */
+  function reveal() public onlyOwner {
+    revealed = true;
+  }
+
+  /**
+   * @notice Sets the cost for minting NFTs.
+   * @dev Only the owner can call this function.
+   * @param _newCost The new cost for minting NFTs.
+   */
+  function setCost(uint256 _newCost) public onlyOwner {
+    cost = _newCost;
+  }
+
+  /**
+   * @notice Sets the maximum number of NFTs that can be minted in a single transaction.
+   * @dev Only the owner can call this function.
+   * @param _newmaxMintAmount The new maximum mint amount.
+   */
+  function setmaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+    maxMintAmount = _newmaxMintAmount;
+  }
+
+  /**
+   * @notice Sets the URI for the placeholder or unrevealed state.
+   * @dev Only the owner can call this function.
+   * @param _SwampURI The new URI for the placeholder or unrevealed state.
+   */
+  function setSwampURI(string memory _SwampURI) public onlyOwner {
+    SwampUri = _SwampURI;
+  }
+
+  /**
+   * @notice Sets the base URI for the NFTs.
+   * @dev Only the owner can call this function.
+   * @param _newOgreURI The new base URI for the NFTs.
+   */
+  function setOgreURI(string memory _newOgreURI) public onlyOwner {
+    ogreURI = _newOgreURI;
+  }
+
+  /**
+   * @notice Sets the file extension for the NFT metadata.
+   * @dev Only the owner can call this function.
+   * @param _newOgreExtension The new file extension for the NFT metadata.
+   */
+  function setOgreExtension(string memory _newOgreExtension) public onlyOwner {
+    ogreExtension = _newOgreExtension;
+  }
+
+  /**
+   * @notice Pauses or unpauses the minting of NFTs.
+   * @dev Only the owner can call this function.
+   * @param _state The new pause state.
+   */
+  function pause(bool _state) public onlyOwner {
+    paused = _state;
+  }
+
+  /**
+   * @notice Adds an address to the whitelist, allowing them to mint NFTs without paying.
+   * @dev Only the owner can call this function.
+   * @param _user The address to add to the whitelist.
+   */
+  function whitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = true;
+  }
+
+  /**
+   * @notice Removes an address from the whitelist.
+   * @dev Only the owner can call this function.
+   * @param _user The address to remove from the whitelist.
+   */
+  function removeWhitelistUser(address _user) public onlyOwner {
+    whitelisted[_user] = false;
+  }
+
+  /**
+   * @notice Withdraws the contract's balance to the owner's address.
+   * @dev Only the owner can call this function.
+   */
+  function withdraw() public payable onlyOwner {
+    (bool success, ) = payable(owner()).call{value: address(this).balance}("");
+    require(success, "Withdrawal failed");
+  }
+}
+```
+
+This implementation includes all required functionality:
+- NFT minting with whitelist support
+- Free and paid minting phases
+- Reveal mechanism for NFTs
+- Owner controls for cost, max mint amount, URIs, and pausing
+- Whitelist management
+- Withdrawal functionality
+
+The contract follows the ERC721 standard and includes proper access control through the Ownable contract.

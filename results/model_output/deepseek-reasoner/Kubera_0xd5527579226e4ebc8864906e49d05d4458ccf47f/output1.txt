@@ -1,0 +1,114 @@
+To solve this problem, we need to implement the Kubera ERC20 token contract with additional features such as ICO management and a burn function. The contract must handle token transfers, approvals, and ICO-specific logic, including tracking tokens sold and burning unsold tokens post-ICO. 
+
+### Approach
+1. **Token Transfers**: The transfer function must handle transfers during and after the ICO. During the ICO (before `startTime`), only the owner can transfer tokens, and transfers must track the tokens sold against the ICO goal.
+2. **Approvals**: The approve function allows a spender to spend tokens on behalf of the owner.
+3. **Transfer From**: This function allows a spender to transfer tokens on behalf of another address, with checks for ICO phases and token sale limits.
+4. **Burn Function**: Post-ICO, the owner can burn unsold tokens and allocate a fixed amount to a designated address.
+
+### Solution Code
+```solidity
+contract Kubera is SafeMath {
+
+    /* Public variables of the token */
+    string public standard = 'ERC20';
+    string public name = 'Kubera token';
+    string public symbol = 'KBR';
+    uint8 public decimals = 0;
+    uint256 public totalSupply;
+    address public owner;
+    uint public tokensSoldToInvestors = 0;
+    uint public maxGoalInICO = 2100000000;
+    uint256 public startTime = 1510325999;
+    bool public burned;
+    bool public hasICOStarted;
+    address public tokensHolder = 0x94B4776F8331DF237E087Ed548A3c8b4932D131B;
+
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event TransferToReferral(address indexed referralAddress, uint256 value);
+    event Approval(address indexed Owner, address indexed spender, uint256 value);
+    event Burned(uint amount);
+
+    function Kubera() {
+        owner = 0x084bf76c9ba9106d6114305fae9810fbbdb157d9;
+        balanceOf[owner] = 2205000000;
+        totalSupply      = 2205000000;
+    }
+
+    function transfer(address _to, uint256 _value) returns(bool success) {
+        if (now < startTime) {
+            if (msg.sender != owner) {
+                revert();
+            }
+            uint remaining = maxGoalInICO - tokensSoldToInvestors;
+            if (remaining <= 0) {
+                revert();
+            }
+            if (_value > remaining) {
+                _value = remaining;
+            }
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, _value);
+        }
+
+        balanceOf[msg.sender] = safeSub(balanceOf[msg.sender], _value);
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) returns(bool success) {
+        allowance[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) returns(bool success) {
+        if (now < startTime) {
+            if (_from != owner) {
+                revert();
+            }
+            uint remaining = maxGoalInICO - tokensSoldToInvestors;
+            if (remaining <= 0) {
+                revert();
+            }
+            if (_value > remaining) {
+                _value = remaining;
+            }
+            tokensSoldToInvestors = safeAdd(tokensSoldToInvestors, _value);
+        }
+
+        allowance[_from][msg.sender] = safeSub(allowance[_from][msg.sender], _value);
+        balanceOf[_from] = safeSub(balanceOf[_from], _value);
+        balanceOf[_to] = safeAdd(balanceOf[_to], _value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function burn() {
+        if (msg.sender != owner || burned) {
+            revert();
+        }
+        burned = true;
+        uint unsold = balanceOf[owner];
+        balanceOf[owner] = safeSub(balanceOf[owner], unsold);
+        totalSupply = safeSub(totalSupply, unsold);
+        Burned(unsold);
+
+        uint holderAmount = 105000000;
+        balanceOf[tokensHolder] = safeAdd(balanceOf[tokensHolder], holderAmount);
+        totalSupply = safeAdd(totalSupply, holderAmount);
+        Transfer(address(0), tokensHolder, holderAmount);
+    }
+}
+```
+
+### Explanation
+1. **Transfer Function**: Checks if the current time is before `startTime` (ICO period). If so, only the owner can transfer tokens, and the tokens sold are tracked against the ICO goal. Uses SafeMath for secure arithmetic operations.
+2. **Approve Function**: Sets the allowance for a spender to spend tokens on behalf of the owner.
+3. **TransferFrom Function**: Similar to transfer but checks the allowance and updates it. Handles ICO-specific logic when transferring from the owner.
+4. **Burn Function**: Called post-ICO to burn unsold tokens from the owner and allocate a fixed amount to a designated address, adjusting the total supply accordingly.
+
+This implementation ensures compliance with the ERC20 standard while incorporating ICO management and post-ICO token burning features.

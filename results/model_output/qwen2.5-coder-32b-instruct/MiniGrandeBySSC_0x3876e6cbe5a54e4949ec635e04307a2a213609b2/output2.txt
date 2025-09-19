@@ -1,0 +1,278 @@
+Certainly! Below is the complete implementation of the `MiniGrandeBySSC` smart contract based on the provided context and description:
+
+```solidity
+/**
+ * @title MiniGrandeBySSC
+ * @notice This contract is an NFT minting contract that supports both public and whitelist mints. It includes functionalities for setting prices, pausing the contract, and managing the whitelist.
+ * @dev The contract inherits from Ownable, ERC721A, and ReentrancyGuard. It uses a Merkle tree for whitelist verification and allows for different minting phases (presale and public sale).
+ */
+contract MiniGrandeBySSC is Ownable, ERC721A, ReentrancyGuard {
+
+    uint256 private _publicPrice = 0.007 ether;
+    uint256 private _presalePrice = 0 ether;
+    uint256 private _maxPurchaseDuringWhitelist = 1;
+    uint256 private _maxPurchaseDuringSale = 1;
+    uint256 private _maxPerTransaction = 1;
+    uint256 private _maxMint = 2000;
+    address private _team = 0x6FEf5A781A35d158096736dBc561F298ef47B86c;
+    bytes32 public merkleRoot = 0x8daf3296866531d8a9a23e382da52d37f29af1f17e5e9ed8a403c896de82be5f;
+    mapping(address => uint256) public presaleAddressMintCount;
+    mapping(address => uint256) public saleAddressMintCount;
+    uint32 public whitelistMinted = 0;
+    uint32 private _maxWhitelistMints = 200;
+
+    bool public isPaused = false;
+    bool public isPublicMint = false;
+    bool public isWhitelistMint = false;
+    string private _tokenURI = "ipfs://QmZzPHpPmtBHACKpu4MQ6XH2mNXJcJgRhdv1KYpnHqQ6q9/";
+
+    /**
+     * @notice Initializes the contract with the specified name, symbol, and minting parameters.
+     * @dev This function sets up the initial state of the contract and is called only once during deployment.
+     */
+    constructor() ERC721A("MiniGrandeBySecretSocietyClub", "MINIBYSSC", _maxPerTransaction, _maxMint) {}
+
+    /**
+     * @notice Sets the maximum number of whitelist mints.
+     * @dev Only the contract owner can call this function.
+     * @param val The new maximum number of whitelist mints.
+     */
+    function setMaxWhitelistMints (uint32 val) external onlyOwner {
+        _maxWhitelistMints = val;
+    }
+
+    /**
+     * @notice Sets the maximum number of mints per wallet during the whitelist phase.
+     * @dev Only the contract owner can call this function.
+     * @param val The new maximum number of mints per wallet during the whitelist phase.
+     */
+    function setMaxMintPerWalletWhitelist (uint256 val) external onlyOwner {
+        _maxPurchaseDuringWhitelist = val;
+    }
+
+    /**
+     * @notice Sets the maximum number of mints per wallet during the public sale phase.
+     * @dev Only the contract owner can call this function.
+     * @param val The new maximum number of mints per wallet during the public sale phase.
+     */
+    function setMaxMintPerWalletSale (uint256 val) external onlyOwner {
+        _maxPurchaseDuringSale = val;
+    }
+
+    /**
+     * @notice Checks if the public mint is currently active.
+     * @dev This function returns a boolean indicating whether the public mint is active.
+     * @return A boolean indicating whether the public mint is active.
+     */
+    function checkIsPublicMint () external view returns (bool) {
+        return isPublicMint;
+    }
+
+    /**
+     * @notice Pauses the contract, preventing further mints.
+     * @dev Only the contract owner can call this function.
+     */
+    function pause() external onlyOwner {
+        isPaused = true;
+    }
+
+    /**
+     * @notice Unpauses the contract, allowing mints to resume.
+     * @dev Only the contract owner can call this function.
+     */
+    function unpause() external onlyOwner {
+        isPaused = false;
+    }
+
+    /**
+     * @notice Sets the team's address for cashout.
+     * @dev Only the contract owner can call this function.
+     * @param team The new team's address.
+     */
+    function setTeam(address team) external onlyOwner {
+        _team = team;
+    }
+
+    /**
+     * @notice Gets the current public mint price.
+     * @dev This function returns the current public mint price.
+     * @return The current public mint price.
+     */
+    function getPublicPrice() external view returns(uint256) {
+        return _publicPrice;
+    }
+
+    /**
+     * @notice Sets the public mint status.
+     * @dev Only the contract owner can call this function.
+     * @param value The new public mint status.
+     */
+    function setPublicMint (bool value) external onlyOwner {
+        isPublicMint = value;
+    }
+
+    /**
+     * @notice Sets the whitelist mint status.
+     * @dev Only the contract owner can call this function.
+     * @param value The new whitelist mint status.
+     */
+    function setWhitelistMint (bool value) external onlyOwner {
+        isWhitelistMint = value;
+    }
+
+    /**
+     * @notice Sets the presale mint price.
+     * @dev Only the contract owner can call this function.
+     * @param price The new presale mint price.
+     */
+    function setPresalePrice (uint256 price) external onlyOwner {
+        _presalePrice = price;
+    }
+
+    /**
+     * @notice Sets the public mint price.
+     * @dev Only the contract owner can call this function.
+     * @param price The new public mint price.
+     */
+    function setPublicPrice (uint256 price) external onlyOwner {
+        _publicPrice = price;
+    }
+
+    /**
+     * @notice Sets the collection size.
+     * @dev Only the contract owner can call this function.
+     * @param size The new collection size.
+     */
+    function setCollectionSize (uint256 size) external onlyOwner {
+        require(size >= totalSupply(), "Size must be greater than or equal to current supply");
+        _maxMint = size;
+    }
+
+    /**
+     * @notice A modifier to guard against invalid mint conditions.
+     * @dev This modifier checks for various conditions such as paused state, transaction limits, and sufficient funds.
+     * @param tokenCount The number of tokens to mint.
+     */
+    modifier mintGuard(uint256 tokenCount) {
+        require(!isPaused, "Paused!");
+        require(tokenCount > 0 && tokenCount <= _maxPerTransaction, "Invalid token count");
+        require(msg.sender == tx.origin, "Sender not origin");
+        _;
+    }
+
+    /**
+     * @notice Mints tokens during the public sale phase.
+     * @dev This function mints tokens for the caller, ensuring all conditions are met.
+     * @param amount The number of tokens to mint.
+     */
+    function mint(uint256 amount) external payable mintGuard(amount) {
+        require(isPublicMint, "Public mint not active");
+        require(saleAddressMintCount[msg.sender] + amount <= _maxPurchaseDuringSale, "Exceeds max purchase");
+        require(msg.value >= _publicPrice * amount, "Insufficient funds");
+        require(totalSupply() + amount <= _maxMint, "Collection sold out");
+
+        saleAddressMintCount[msg.sender] += amount;
+        _safeMint(msg.sender, amount);
+    }
+
+    /**
+     * @notice Mints tokens during the presale phase.
+     * @dev This function mints tokens for the caller, ensuring they are on the whitelist and all other conditions are met.
+     * @param proof The Merkle proof for the whitelist.
+     * @param amount The number of tokens to mint.
+     */
+    function mintPresale(bytes32[] calldata proof, uint256 amount) external payable mintGuard(amount) {
+        require(isWhitelistMint, "Whitelist mint not active");
+        require(presaleAddressMintCount[msg.sender] + amount <= _maxPurchaseDuringWhitelist, "Exceeds max whitelist purchase");
+        require(msg.value >= _presalePrice * amount, "Insufficient funds");
+        require(MerkleProof.verify(proof, merkleRoot, keccak256(abi.encodePacked(msg.sender))), "Not whitelisted");
+        require(totalSupply() + amount <= _maxMint, "Collection sold out");
+        require(whitelistMinted + amount <= _maxWhitelistMints, "Whitelist limit reached");
+
+        presaleAddressMintCount[msg.sender] += amount;
+        whitelistMinted += uint32(amount);
+        _safeMint(msg.sender, amount);
+    }
+
+    /**
+     * @notice Sets the maximum batch size for minting.
+     * @dev Only the contract owner can call this function.
+     * @param val The new maximum batch size.
+     */
+    function setMaxBatchSize (uint256 val) external onlyOwner {
+        require(val > 0, "Batch size must be positive");
+        _maxPerTransaction = val;
+    }
+
+    /**
+     * @notice Transfers the contract's balance to the team's address.
+     * @dev Only the contract owner can call this function.
+     */
+    function cashout() external onlyOwner {
+        require(payable(_team).send(address(this).balance), "Cashout failed");
+    }
+
+    /**
+     * @notice Sets the team's address for cashout and returns the new address.
+     * @dev Only the contract owner can call this function.
+     * @param addr The new team's address.
+     * @return The new team's address.
+     */
+    function setCashout(address addr) external onlyOwner returns(address) {
+        _team = addr;
+        return _team;
+    }
+
+    /**
+     * @notice Mints tokens for the contract owner.
+     * @dev Only the contract owner can call this function.
+     * @param qty The number of tokens to mint.
+     */
+    function devMint(uint32 qty) external onlyOwner {
+        require(totalSupply() + qty <= _maxMint, "Collection sold out");
+        _safeMint(msg.sender, qty);
+    }
+
+    /**
+     * @notice Sets the Merkle root for the whitelist.
+     * @dev Only the contract owner can call this function.
+     * @param root The new Merkle root.
+     */
+    function setMerkleRoot(bytes32 root) external onlyOwner {
+        merkleRoot = root;
+    }
+
+    /**
+     * @notice Sets the maximum number of tokens that can be minted.
+     * @dev Only the contract owner can call this function.
+     * @param maxMint The new maximum number of tokens.
+     */
+    function setMaxMint(uint256 maxMint) external onlyOwner {
+        _maxMint = maxMint;
+    }
+
+    /**
+     * @notice Sets the base URI for the token metadata.
+     * @dev Only the contract owner can call this function.
+     * @param baseURI The new base URI.
+     */
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _tokenURI = baseURI;
+    }
+
+    /**
+     * @notice Returns the base URI for the token metadata.
+     * @dev This function is used by the ERC721A standard to fetch the base URI.
+     * @return The base URI for the token metadata.
+     */
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _tokenURI;
+    }
+}
+```
+
+### Key Features Implemented:
+- **Public and Presale Minting**: The contract supports two types of mints controlled by the `isPublicMint` and `isWhitelistMint` booleans.
+- **Whitelist Verification**: Uses a Merkle tree for secure whitelist management.
+- **Minting Limits**: Includes limits for maximum mints per wallet and overall collection size.
+- **Owner-Only Functions**: Several

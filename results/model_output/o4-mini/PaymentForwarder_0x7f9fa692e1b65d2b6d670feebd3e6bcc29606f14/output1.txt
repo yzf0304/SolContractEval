@@ -1,0 +1,119 @@
+pragma solidity ^0.4.18;
+
+/**
+ * @title PaymentForwarder
+ * @notice A contract to forward payments to a team multisig address, tracking the total amount transferred, number of customers, and individual customer and benefactor contributions.
+ * @dev This contract inherits from Haltable, allowing for emergency stops. It records payments and forwards them to a specified team multisig address.
+ */
+contract PaymentForwarder is Haltable {
+    /** Who will get all ETH in the end */
+    address public teamMultisig;
+
+    /** Total incoming money */
+    uint public totalTransferred;
+
+    /** How many distinct customers we have that have made a payment */
+    uint public customerCount;
+
+    /** Total incoming money per centrally tracked customer id */
+    mapping(uint128 => uint) public paymentsByCustomer;
+
+    /** Total incoming money per benefactor address */
+    mapping(address => uint) public paymentsByBenefactor;
+
+    /** A customer has made a payment */
+    event PaymentForwarded(address source, uint amount, uint128 customerId, address benefactor);
+
+    /**
+     * @notice Initializes the contract with the owner and team multisig addresses.
+     * @param _owner The address of the contract owner.
+     * @param _teamMultisig The address of the team multisig wallet.
+     */
+    function PaymentForwarder(address _owner, address _teamMultisig) {
+        require(_owner != address(0));
+        require(_teamMultisig != address(0));
+        owner = _owner;
+        teamMultisig = _teamMultisig;
+    }
+
+    /**
+     * @notice Allows a customer to make a payment without a checksum.
+     * @param customerId The unique identifier for the customer.
+     * @param benefactor The address that will benefit from the payment.
+     */
+    function payWithoutChecksum(uint128 customerId, address benefactor)
+        public
+        stopInEmergency
+        payable
+    {
+        _forwardPayment(customerId, benefactor);
+    }
+
+    /**
+     * @notice Allows a customer to make a payment on behalf of an address with a checksum.
+     * @param customerId The unique identifier for the customer.
+     * @param benefactor The address that will benefit from the payment.
+     * @param checksum The checksum to verify the payment.
+     */
+    function pay(uint128 customerId, address benefactor, bytes1 checksum)
+        public
+        stopInEmergency
+        payable
+    {
+        // verify checksum = first byte of keccak256(customerId, benefactor)
+        require(checksum == bytes1(keccak256(customerId, benefactor)));
+        _forwardPayment(customerId, benefactor);
+    }
+
+    /**
+     * @notice Allows a customer to make a payment on their own behalf with a checksum.
+     * @param customerId The unique identifier for the customer.
+     * @param checksum The checksum to verify the payment.
+     */
+    function payForMyselfWithChecksum(uint128 customerId, bytes1 checksum)
+        public
+        payable
+    {
+        // verify checksum = first byte of keccak256(customerId, msg.sender)
+        require(checksum == bytes1(keccak256(customerId, msg.sender)));
+        _forwardPayment(customerId, msg.sender);
+    }
+
+    /**
+     * @notice Allows a customer to make a payment on their own behalf without a checksum.
+     * @param customerId The unique identifier for the customer.
+     */
+    function payForMyself(uint128 customerId)
+        public
+        payable
+    {
+        _forwardPayment(customerId, msg.sender);
+    }
+
+    /**
+     * @dev Internal helper to record and forward a payment.
+     */
+    function _forwardPayment(uint128 customerId, address benefactor)
+        internal
+    {
+        require(msg.value > 0);
+        // first‐time customer?
+        if (paymentsByCustomer[customerId] == 0) {
+            customerCount += 1;
+        }
+        paymentsByCustomer[customerId] += msg.value;
+        paymentsByBenefactor[benefactor] += msg.value;
+        totalTransferred += msg.value;
+
+        // log and forward
+        PaymentForwarded(msg.sender, msg.value, customerId, benefactor);
+        teamMultisig.transfer(msg.value);
+    }
+
+    /**
+     * @notice Revert any plain Ether transfers to this contract.
+     */
+    function() public payable {
+        revert();
+    }
+}

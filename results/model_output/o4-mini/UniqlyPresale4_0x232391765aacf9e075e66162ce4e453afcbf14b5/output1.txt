@@ -1,0 +1,139 @@
+// SPDX-License-Identifier: Unlicense
+pragma solidity 0.8.2;
+
+abstract contract IERC20 {
+    function balanceOf(address _owner)
+        external
+        virtual
+        returns (uint256 balance);
+
+    function transfer(address _to, uint256 _value) external virtual;
+    // cannot 'returns (bool success);' because of USDT
+}
+
+contract UniqlyPresale4 {
+    // presale parameters
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+    uint256 constant failSafeTime = 2 weeks;
+    address public owner;
+
+    // presale state flags
+    bool public presaleStarted;
+    bool public presaleEnded;
+    bool public presaleFailed;
+
+    // contributions
+    mapping(address => uint256) private balances;
+
+    // for ownership handover
+    address public newOwner;
+
+    constructor(
+        uint256 _presaleLimit,
+        uint256 _minPerUser,
+        uint256 _maxPerUser,
+        uint256 _presaleEnd,
+        address _owner
+    ) {
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 totalForUser = balances[msg.sender] + msg.value;
+        require(totalForUser >= minPerUser, "Below buy-in");
+        require(totalForUser <= maxPerUser, "Over buy-in");
+
+        balances[msg.sender] = totalForUser;
+
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    function start() external {
+        require(msg.sender == owner, "Not owner");
+        require(!presaleStarted, "Already started");
+        presaleStarted = true;
+    }
+
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    function withdraw() external returns (bool) {
+        // if presale not ended and failsafe passed, mark failed
+        if (!presaleEnded && block.timestamp > presaleEnd + failSafeTime) {
+            presaleFailed = true;
+        }
+
+        // if presale failed: allow contributors to get back their ETH
+        if (presaleFailed) {
+            uint256 bal = balances[msg.sender];
+            if (bal == 0) {
+                return false;
+            }
+            balances[msg.sender] = 0;
+            send(msg.sender, bal);
+            return true;
+        }
+
+        // if presale ended successfully: owner may withdraw
+        if (presaleEnded) {
+            if (msg.sender != owner) {
+                return false;
+            }
+            uint256 contractBal = address(this).balance;
+            if (contractBal == 0) {
+                return false;
+            }
+            send(owner, contractBal);
+            return true;
+        }
+
+        // presale is ongoing and not failed
+        return false;
+    }
+
+    function send(address user, uint256 amount) private {
+        // send may fail silently
+        payable(user).send(amount);
+    }
+
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Not owner");
+        uint256 tokenBal = token.balanceOf(address(this));
+        if (tokenBal > 0) {
+            token.transfer(owner, tokenBal);
+        }
+    }
+
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Not owner");
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Not new owner");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}

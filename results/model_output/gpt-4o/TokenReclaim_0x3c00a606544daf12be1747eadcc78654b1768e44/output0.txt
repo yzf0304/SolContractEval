@@ -1,0 +1,134 @@
+Here’s the completed `TokenReclaim` smart contract based on the provided context and requirements. The implementation adheres to Solidity 0.4.23 syntax:
+
+```solidity
+pragma solidity ^0.4.23;
+
+contract TokenReclaim {
+    mapping (address => string) internal _ethToSphtx;
+    mapping (string => string) internal _accountToPubKey;
+
+    /**
+     * @notice Emitted when an account is registered.
+     * @param ethAccount The Ethereum address of the user.
+     * @param sphtxAccount The SPHTX name of the user.
+     * @param pubKey The public key associated with the user's SPHTX name.
+     */
+    event AccountRegister(address indexed ethAccount, string sphtxAccount, string pubKey);
+
+    /**
+     * @notice Registers an SPHTX name and associates it with a public key for the caller.
+     * @param name The SPHTX name to be registered. Must meet specific formatting requirements.
+     * @param pubKey The public key to be associated with the SPHTX name. Must meet length requirements.
+     */
+    function register(string memory name, string memory pubKey) public {
+        // Validate SPHTX name length
+        bytes memory nameBytes = bytes(name);
+        require(nameBytes.length >= 3 && nameBytes.length <= 16, "SPHTX name length invalid");
+
+        // Validate SPHTX name format
+        require(_isValidName(name), "SPHTX name format is invalid");
+
+        // Validate public key length
+        bytes memory pubKeyBytes = bytes(pubKey);
+        require(pubKeyBytes.length >= 50 && pubKeyBytes.length <= 64, "Public key length invalid");
+
+        // Ensure the caller's address is not already registered
+        require(bytes(_ethToSphtx[msg.sender]).length == 0, "Address already registered");
+
+        // Ensure the name is not already in use
+        require(bytes(_accountToPubKey[name]).length == 0, "SPHTX name already in use");
+
+        // Store mappings
+        _ethToSphtx[msg.sender] = name;
+        _accountToPubKey[name] = pubKey;
+
+        // Emit the registration event
+        emit AccountRegister(msg.sender, name, pubKey);
+    }
+
+    /**
+     * @notice Returns the SPHTX name associated with the given Ethereum address.
+     * @param addr The Ethereum address to query.
+     * @return The SPHTX name associated with the address.
+     */
+    function account(address addr) public view returns (string memory) {
+        return _ethToSphtx[addr];
+    }
+
+    /**
+     * @notice Returns the public key associated with the SPHTX name of the given Ethereum address.
+     * @param addr The Ethereum address to query.
+     * @return The public key associated with the SPHTX name.
+     */
+    function keys(address addr) public view returns (string memory) {
+        string memory sphtxName = _ethToSphtx[addr];
+        return _accountToPubKey[sphtxName];
+    }
+
+    /**
+     * @notice Checks if a SPHTX name is available for registration.
+     * @param name The SPHTX name to check availability for.
+     * @return bool True if the name is available, false otherwise.
+     */
+    function nameAvailable(string memory name) public view returns (bool) {
+        // Validate SPHTX name length
+        bytes memory nameBytes = bytes(name);
+        if (nameBytes.length < 3 || nameBytes.length > 16) {
+            return false;
+        }
+
+        // Validate SPHTX name format
+        if (!_isValidName(name)) {
+            return false;
+        }
+
+        // Check if the name is already in use
+        if (bytes(_accountToPubKey[name]).length != 0) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @dev Internal function to validate the SPHTX name format.
+     * @param name The SPHTX name to validate.
+     * @return bool True if the format is valid, false otherwise.
+     */
+    function _isValidName(string memory name) internal pure returns (bool) {
+        bytes memory nameBytes = bytes(name);
+
+        // Check first character (must be a lowercase letter or digit)
+        byte firstChar = nameBytes[0];
+        if (
+            !(firstChar >= 0x30 && firstChar <= 0x39) && // 0-9
+            !(firstChar >= 0x61 && firstChar <= 0x7A)    // a-z
+        ) {
+            return false;
+        }
+
+        // Check subsequent characters (must be lowercase letters, digits, hyphens, or periods)
+        for (uint i = 1; i < nameBytes.length; i++) {
+            byte char = nameBytes[i];
+            if (
+                !(char >= 0x30 && char <= 0x39) && // 0-9
+                !(char >= 0x61 && char <= 0x7A) && // a-z
+                !(char == 0x2D) &&                // hyphen (-)
+                !(char == 0x2E)                   // period (.)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+```
+
+### Key Points:
+1. **Register Function (`register`)**: Ensures name and public key meet the specified constraints. Performs checks to ensure uniqueness for SPHTX name and registration per address.
+2. **Name Validation (`_isValidName`)**: Enforces SPHTX name format and character rules.
+3. **Name Availability (`nameAvailable`)**: Checks if the SPHTX name is available and follows the same constraints as `register` without modifying the state.
+4. **View Functions (`account`, `keys`)**: Allow querying of registered SPHTX names and associated public keys. Returns an empty string if no entry exists.
+
+The contract strictly adheres to the provided description and formatting constraints for Solidity 0.4.23.

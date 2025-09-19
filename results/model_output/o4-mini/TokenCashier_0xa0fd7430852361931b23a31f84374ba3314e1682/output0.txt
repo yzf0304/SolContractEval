@@ -1,0 +1,183 @@
+```solidity
+pragma solidity 0.5.12;
+
+contract TokenCashier is Pausable {
+    event Receipt(
+        address indexed token,
+        uint256 indexed id,
+        address sender,
+        address recipient,
+        uint256 amount,
+        uint256 fee
+    );
+
+    ITokenList[] public tokenLists;
+    address[] public tokenSafes;
+    mapping(address => uint256) public counts;
+    uint256 public depositFee;
+    IWrappedCoin public wrappedCoin;
+
+    constructor(
+        IWrappedCoin _wrappedCoin,
+        ITokenList[] memory _tokenLists,
+        address[] memory _tokenSafes
+    ) public {
+        require(
+            _tokenLists.length == _tokenSafes.length,
+            "# of token lists is not equal to # of safes"
+        );
+        wrappedCoin = _wrappedCoin;
+        tokenLists = _tokenLists;
+        tokenSafes = _tokenSafes;
+    }
+
+    function() external {
+        revert();
+    }
+
+    function count(address _token) public view returns (uint256) {
+        return counts[_token];
+    }
+
+    function setDepositFee(uint256 _fee) public onlyOwner {
+        depositFee = _fee;
+    }
+
+    function depositTo(
+        address _token,
+        address _to,
+        uint256 _amount
+    ) public whenNotPaused payable {
+        require(_to != address(0), "Invalid recipient");
+        uint256 fee = depositFee;
+
+        // Handle native currency vs ERC20 fee requirements
+        if (_token == address(0)) {
+            // Native currency: user must send amount + fee
+            require(msg.value >= _amount + fee, "Insufficient ETH");
+        } else {
+            // ERC20: user must send exactly the fee
+            require(msg.value >= fee, "Insufficient fee");
+        }
+
+        // Wrap native currency if needed
+        address tokenForList = _token;
+        if (_token == address(0) && _amount > 0) {
+            // wrap ETH into wrappedCoin
+            wrappedCoin.deposit.value(_amount)();
+            tokenForList = address(wrappedCoin);
+        }
+
+        // Find a whitelist entry
+        uint256 listCount = tokenLists.length;
+        uint256 idx = listCount; // sentinel
+        for (uint256 i = 0; i < listCount; i++) {
+            if (tokenLists[i].isAllowed(tokenForList)) {
+                idx = i;
+                break;
+            }
+        }
+        require(idx < listCount, "Token not whitelisted");
+
+        // Check min / max amounts
+        uint256 minA = tokenLists[idx].minAmount(tokenForList);
+        uint256 maxA = tokenLists[idx].maxAmount(tokenForList);
+        require(_amount >= minA && _amount <= maxA, "Amount outside allowed limits");
+
+        // Forward or burn
+        address safe = tokenSafes[idx];
+        if (_amount > 0) {
+            if (safe != address(0)) {
+                // deposit into safe
+                if (_token == address(0)) {
+                    // wrappedCoin => safe
+                    require(
+                        safeTransfer(address(wrappedCoin), safe, _amount),
+                        "WrappedCoin transfer failed"
+                    );
+                } else {
+                    // pull tokens from user, then forward
+                    require(
+                        safeTransferFrom(_token, msg.sender, safe, _amount),
+                        "Token transferFrom failed"
+                    );
+                }
+            } else {
+                // burn
+                bytes4 burnSelector = 0x42966c68;
+                (bool success, ) = tokenForList.call(
+                    abi.encodeWithSelector(burnSelector, _amount)
+                );
+                require(success, "Burn failed");
+            }
+        }
+
+        // increment counter
+        uint256 id = counts[_token]++;
+        emit Receipt(_token, id, msg.sender, _to, _amount, fee);
+    }
+
+    function deposit(address _token, uint256 _amount) public payable {
+        depositTo(_token, msg.sender, _amount);
+    }
+
+    function withdraw() external onlyOwner {
+        msg.sender.transfer(address(this).balance);
+    }
+
+    function withdrawToken(address _token) public onlyOwner {
+        // balanceOf(this)
+        bytes4 balSel = 0x70a08231;
+        (bool ok, bytes memory ret) = _token.call(
+            abi.encodeWithSelector(balSel, address(this))
+        );
+        require(ok && ret.length >= 32, "balanceOf call failed");
+        uint256 bal = abi.decode(ret, (uint256));
+        if (bal > 0) {
+            require(safeTransfer(_token, owner, bal), "Token withdraw failed");
+        }
+    }
+
+    function safeTransferFrom(
+        address _token,
+        address _from,
+        address _to,
+        uint256 _amount
+    ) internal returns (bool) {
+        bytes memory data = abi.encodeWithSelector(
+            0x23b872dd,
+            _from,
+            _to,
+            _amount
+        );
+        (bool success, bytes memory ret) = _token.call(data);
+        if (!success) {
+            return false;
+        }
+        if (ret.length == 0) {
+            return true;
+        }
+        return abi.decode(ret, (bool));
+    }
+
+    function safeTransfer(
+        address _token,
+        address _to,
+        uint256 _amount
+    ) internal returns (bool) {
+        bytes memory data = abi.encodeWithSelector(
+            0xa9059cbb,
+            _to,
+            _amount
+        );
+        (bool success, bytes memory ret) = _token.call(data);
+        if (!success) {
+            return false;
+        }
+        if (ret.length == 0) {
+            return true;
+        }
+        return abi.decode(ret, (bool));
+    }
+}
+```

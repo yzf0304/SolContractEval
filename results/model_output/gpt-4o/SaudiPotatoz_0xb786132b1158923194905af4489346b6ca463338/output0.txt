@@ -1,0 +1,149 @@
+Here is the completed `SaudiPotatoz` contract implementation based on the provided context and contract description:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+contract SaudiPotatoz is ERC721A, Ownable, ReentrancyGuard {
+    string public baseURI;
+    uint public price = 0 ether;
+    uint public maxPerTx = 1;
+    uint public maxPerWallet = 1;
+    uint public totalFree = 0;
+    uint public maxSupply = 5000;
+    uint public nextOwnerToExplicitlySet;
+    bool public mintEnabled;
+
+    constructor() ERC721A("SaudiPotatoz", "SaudiPotatoz") {}
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function freeMint(uint256 amt) external callerIsUser {
+        require(mintEnabled, "Minting is not enabled");
+        require(totalSupply() + amt <= totalFree, "Exceeds total free supply");
+        require(_numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max free mints per wallet");
+
+        _safeMint(msg.sender, amt);
+    }
+
+    function mint(uint256 amt) external payable callerIsUser {
+        require(mintEnabled, "Minting is not enabled");
+        require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+        require(amt <= maxPerTx, "Exceeds max per transaction");
+        require(_numberMinted(msg.sender) + amt <= maxPerWallet, "Exceeds max mints per wallet");
+        require(msg.value >= amt * price, "Insufficient ETH sent");
+
+        _safeMint(msg.sender, amt);
+    }
+
+    function ownerBatchMint(uint256 amt) external onlyOwner {
+        require(totalSupply() + amt <= maxSupply, "Exceeds max supply");
+        _safeMint(msg.sender, amt);
+    }
+
+    function toggleMinting() external onlyOwner {
+        mintEnabled = !mintEnabled;
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function setBaseURI(string calldata baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    function setPrice(uint256 price_) external onlyOwner {
+        price = price_;
+    }
+
+    function setTotalFree(uint256 totalFree_) external onlyOwner {
+        totalFree = totalFree_;
+    }
+
+    function setMaxPerTx(uint256 maxPerTx_) external onlyOwner {
+        maxPerTx = maxPerTx_;
+    }
+
+    function setMaxPerWallet(uint256 maxPerWallet_) external onlyOwner {
+        maxPerWallet = maxPerWallet_;
+    }
+
+    function setmaxSupply(uint256 maxSupply_) external onlyOwner {
+        maxSupply = maxSupply_;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        (bool success, ) = payable(owner()).call{value: address(this).balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function setOwnersExplicit(uint256 quantity) external onlyOwner nonReentrant {
+        _setOwnersExplicit(quantity);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return ownershipOf(tokenId);
+    }
+
+    function _setOwnersExplicit(uint256 quantity) internal {
+        require(quantity > 0, "Quantity must be greater than zero");
+        require(currentIndex > 0, "No tokens minted yet");
+
+        uint256 endIndex = nextOwnerToExplicitlySet + quantity > currentIndex
+            ? currentIndex
+            : nextOwnerToExplicitlySet + quantity;
+
+        for (uint256 i = nextOwnerToExplicitlySet; i < endIndex; i++) {
+            if (_ownerships[i].addr == address(0) && _exists(i)) {
+                TokenOwnership memory ownership = ownershipOf(i);
+                _ownerships[i] = ownership;
+            }
+        }
+
+        nextOwnerToExplicitlySet = endIndex;
+    }
+}
+```
+
+### Explanation of the Implementation:
+
+1. **`freeMint`**:
+   - Ensures minting is enabled and the free mint limit (`totalFree`) is not exceeded.
+   - Enforces a per-wallet limit (`maxPerWallet`).
+
+2. **`mint`**:
+   - Enforces necessary checks: total supply limit (`maxSupply`), max mints per transaction (`maxPerTx`), and per-wallet limit (`maxPerWallet`).
+   - Verifies the sender has enough ETH (`amt * price`).
+
+3. **`ownerBatchMint`**:
+   - Allows the owner to mint multiple NFTs without limits on `maxPerTx` or `maxPerWallet`.
+
+4. **`toggleMinting`**:
+   - Enables or disables the minting functionality.
+
+5. **`numberMinted`**:
+   - Returns the number of NFTs minted by a specific address.
+
+6. **`_baseURI`**:
+   - Provides the `baseURI` for token metadata.
+
+7. **`withdraw`**:
+   - Allows the contract's owner to withdraw all ETH from the contract.
+   - Uses `nonReentrant` modifier to prevent reentrancy attacks.
+
+8. **`setOwnersExplicit` and `_setOwnersExplicit`**:
+   - Optimizes token ownership resolution for large-scale mints.
+   - Batch processes `TokenOwnership` data to ensure efficiency in `ownerOf` queries.
+
+9. **`getOwnershipData`**:
+   - Allows anyone to query ownership information for a given token ID.
+
+This implementation ensures compliance with the provided contract requirements while leveraging the `ERC721A` standard for gas-efficient batch minting and maintaining security features such as reentrancy guards.

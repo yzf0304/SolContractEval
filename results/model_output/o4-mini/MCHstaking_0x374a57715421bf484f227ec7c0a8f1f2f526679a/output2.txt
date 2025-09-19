@@ -1,0 +1,164 @@
+pragma solidity ^0.8.4;
+
+contract MCHstaking is MCHstakingInterface {
+    address private _owner;
+    mapping(address => bool) private _allowence;
+    IERC20 public MCH;
+    contract2 public MCF;
+
+    mapping(address => uint256) private _staking;
+    mapping(address => uint256) private _block;
+    uint256 private _totalStaked;
+    mapping(address => bool) private _blackListed;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor(address MCHtoken) {
+        require(MCHtoken != address(0), "Zero token address");
+        _owner = msg.sender;
+        _allowence[msg.sender] = true;
+        MCH = IERC20(MCHtoken);
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "Caller is not owner");
+        _;
+    }
+
+    modifier onlyAllowed() {
+        require(_allowence[msg.sender], "Caller has no allowance");
+        _;
+    }
+
+    function setMCFcontract(address contractAddress) external onlyOwner {
+        require(contractAddress != address(0), "Zero contract address");
+        MCF = contract2(contractAddress);
+    }
+
+    function stakingStats(address user)
+        external
+        view
+        override
+        returns (uint256 amount, uint256 stakingBlock)
+    {
+        amount = _staking[user];
+        stakingBlock = _block[user];
+    }
+
+    function totalStaked() external view override returns (uint256) {
+        return _totalStaked;
+    }
+
+    function showBlackUser(address user)
+        external
+        view
+        override
+        onlyAllowed
+        returns (bool)
+    {
+        return _blackListed[user];
+    }
+
+    function allowance(address user)
+        external
+        view
+        override
+        onlyAllowed
+        returns (bool)
+    {
+        return _allowence[user];
+    }
+
+    function transferOwnership(address to) external override onlyOwner {
+        require(to != address(0), "New owner is zero address");
+        emit OwnershipTransferred(_owner, to);
+        _owner = to;
+    }
+
+    function giveAllowence(address user) external override onlyOwner {
+        require(user != address(0), "Zero user address");
+        _allowence[user] = true;
+    }
+
+    function removeAllowence(address user) external override onlyOwner {
+        require(user != address(0), "Zero user address");
+        _allowence[user] = false;
+    }
+
+    function addToBlackList(address user) external override onlyOwner {
+        require(user != address(0), "Zero user address");
+        _blackListed[user] = true;
+    }
+
+    function removeFromBlackList(address user) external override onlyOwner {
+        require(user != address(0), "Zero user address");
+        _blackListed[user] = false;
+    }
+
+    function stakeMCH(uint256 amount) external override {
+        require(amount > 0, "Cannot stake zero");
+        require(!_blackListed[msg.sender], "User is blacklisted");
+        require(address(MCF) != address(0), "MCF contract not set");
+
+        // Claim pending rewards before updating stake
+        require(MCF.claimRewards(msg.sender), "Claim rewards failed");
+
+        // Transfer tokens from user to this contract
+        require(MCH.transferFrom(msg.sender, address(this), amount), "TransferFrom failed");
+
+        _staking[msg.sender] += amount;
+        _totalStaked += amount;
+        _block[msg.sender] = block.number;
+
+        emit Stake(msg.sender, amount);
+    }
+
+    function unstake(address user, uint256 amount) external override onlyAllowed {
+        require(user != address(0), "Zero user address");
+        require(amount > 0, "Cannot unstake zero");
+        require(!_blackListed[user], "User is blacklisted");
+        require(_staking[user] >= amount, "Insufficient staked amount");
+        require(address(MCF) != address(0), "MCF contract not set");
+
+        // Claim pending rewards before updating stake
+        require(MCF.claimRewards(user), "Claim rewards failed");
+
+        _staking[user] -= amount;
+        _totalStaked -= amount;
+        _block[user] = block.number;
+
+        require(MCH.transfer(user, amount), "Transfer failed");
+    }
+
+    function refreshBlock(address user) external override onlyAllowed {
+        require(user != address(0), "Zero user address");
+        _block[user] = block.number;
+    }
+
+    function setData(
+        address user,
+        uint256 staked,
+        uint256 stakingBlock,
+        uint256 stakedMCH
+    ) external override onlyAllowed {
+        require(user != address(0), "Zero user address");
+        _staking[user] = staked;
+        _block[user] = stakingBlock;
+        _totalStaked = stakedMCH;
+    }
+
+    function transferMCH(address to, uint256 amount) external override onlyAllowed {
+        require(to != address(0), "Zero recipient address");
+        require(amount > 0, "Zero amount");
+        uint256 bal = MCH.balanceOf(address(this));
+        require(bal >= amount, "Insufficient contract balance");
+        require(MCH.transfer(to, amount), "Transfer failed");
+    }
+
+    function emergencyWithdraw(uint256 amount) external override onlyOwner {
+        require(amount > 0, "Zero amount");
+        uint256 bal = MCH.balanceOf(address(this));
+        require(bal >= amount, "Insufficient balance");
+        require(MCH.transfer(_owner, amount), "Transfer failed");
+    }
+}

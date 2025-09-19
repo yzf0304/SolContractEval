@@ -1,0 +1,157 @@
+Here's the completed `MatBase` contract with all the necessary functionalities implemented according to the provided context and description. The contract is written for Solidity compiler version 0.4.17:
+
+```solidity
+contract MatBase is Ownable, MatToken, MatBonus {
+
+    using SafeMath for uint256;
+
+    uint256 public constant _START_DATE = 1508284800;
+    uint256 public constant _END_DATE = 1513641600;
+    uint256 public constant CROWDSALE_PRICE = 100;
+    address public constant ICO_ADDRESS = 0x6075a5A0620861cfeF593a51A01aF0fF179168C7;
+    address public constant PARTNERS_WALLET = 0x39467d5B39F1d24BC8479212CEd151ad469B0D7E;
+    address public constant TEAM_WALLET = 0xe1d32147b08b2a7808026D4A94707E321ccc7150;
+
+    uint256 public startTime;
+    uint256 public endTime;
+    address public wallet;
+    address public p_wallet;
+    address public t_wallet;
+    uint256 public totalCollected;
+    uint256 public rate;
+
+    event Mint(address indexed purchaser, uint256 amount);
+    event Bonus(address indexed purchaser, uint256 amount);
+
+    function MatBase() {
+        startTime = _START_DATE;
+        endTime = _END_DATE;
+        wallet = ICO_ADDRESS;
+        rate = CROWDSALE_PRICE;
+        p_wallet = PARTNERS_WALLET;
+        t_wallet = TEAM_WALLET;
+        balances[p_wallet] = MAT_PARTNERS_SUPPLY_LIMIT;
+        balances[t_wallet] = MAT_TEAM_SUPPLY_LIMIT;
+        totalSupply = MAT_PARTNERS_SUPPLY_LIMIT + MAT_TEAM_SUPPLY_LIMIT;
+        whiteListLimit = MAT_TOTAL_SUPPLY_LIMIT;
+    }
+
+    function setStartTime(uint256 _startTime) onlyOwner {
+        startTime = _startTime;
+    }
+
+    function setEndTime(uint256 _endTime) onlyOwner {
+        endTime = _endTime;
+    }
+
+    function hasEnded() public constant returns (bool) {
+        return now > endTime;
+    }
+
+    function mint(address _to, uint256 _tokens) internal returns (bool) {
+        require(totalSupply.add(_tokens) <= MAT_CROWDSALE_SUPPLY_LIMIT);
+        totalSupply = totalSupply.add(_tokens);
+        balances[_to] = balances[_to].add(_tokens);
+        Mint(_to, _tokens);
+        return true;
+    }
+
+    function forwardFunds() internal {
+        wallet.transfer(msg.value);
+    }
+
+    function validPurchase() internal constant returns (bool) {
+        bool withinPeriod = now >= startTime && now <= endTime;
+        bool nonZeroPurchase = msg.value != 0;
+        return withinPeriod && nonZeroPurchase && !hasEnded();
+    }
+
+    event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amountTokens, string referral);
+
+    function () payable {
+        buyTokens(msg.sender);
+    }
+
+    function buyTokens(address beneficiary) public payable {
+        buyTokensReferral(beneficiary, "");
+    }
+
+    function buyTokensReferral(address beneficiary, string referral) public payable {
+        require(beneficiary != 0x0);
+        require(validPurchase());
+
+        uint256 weiAmount = msg.value;
+        uint256 tokens = weiAmount.mul(rate);
+
+        // Update state
+        forwardFunds();
+        totalCollected = totalCollected.add(weiAmount);
+
+        // Mint tokens
+        mint(beneficiary, tokens);
+
+        // Apply bonus
+        uint256 bonusTokens = calcBonus(tokens);
+        if (bonusTokens > 0) {
+            mint(beneficiary, bonusTokens);
+            Bonus(beneficiary, bonusTokens);
+        }
+
+        TokenPurchase(msg.sender, beneficiary, weiAmount, tokens, referral);
+    }
+
+    bool isWhitelistOn;
+    uint256 public whiteListLimit;
+
+    enum WLS {notlisted, listed, fulfilled}
+
+    struct FundReservation {
+        WLS status;
+        uint256 reserved;
+    }
+
+    mapping (address => FundReservation) whitelist;
+
+    function stopWhitelistReservation() onlyOwner public {
+        isWhitelistOn = false;
+    }
+
+    function setWhiteListStatus(bool _isWhitelistOn) onlyOwner public {
+        isWhitelistOn = _isWhitelistOn;
+    }
+
+    function buyTokenWL(uint256 tokens) internal returns (bool) {
+        require(isWhitelistOn && whitelist[msg.sender].status == WLS.listed);
+        require(whitelist[msg.sender].reserved >= tokens);
+        mint(msg.sender, tokens);
+        whitelist[msg.sender].reserved = whitelist[msg.sender].reserved.sub(tokens);
+        if (whitelist[msg.sender].reserved == 0) {
+            whitelist[msg.sender].status = WLS.fulfilled;
+        }
+        return true;
+    }
+
+    event White(address indexed to, uint256 reservation);
+
+    function regWL(address wlmember, uint256 reservation) onlyOwner public returns (bool) {
+        require(reservation <= whiteListLimit);
+        whitelist[wlmember] = FundReservation(WLS.listed, reservation);
+        whiteListLimit = whiteListLimit.sub(reservation);
+        White(wlmember, reservation);
+        return true;
+    }
+
+    address public constant PRESALE_CONTRACT = 0x503FE694CE047eCB51952b79eCAB2A907Afe8ACd;
+
+    function convert(address _to, uint256 _pretokens, uint256 _tokens) onlyOwner public returns (bool) {
+        require(_to != 0x0);
+        require(totalSupply.add(_tokens) <= MAT_CROWDSALE_SUPPLY_LIMIT);
+        balances[PRESALE_CONTRACT] = balances[PRESALE_CONTRACT].sub(_pretokens);
+        totalSupply = totalSupply.add(_tokens);
+        balances[_to] = balances[_to].add(_tokens);
+        return true;
+    }
+}
+```
+
+This contract includes all the functionalities described in the documentation, such as setting start and end times, managing the whitelist, handling token purchases, and minting tokens with bonus calculations. Make sure to test this contract thoroughly in a safe environment before deploying it on the mainnet.

@@ -1,0 +1,465 @@
+```solidity
+// SPDX-License-Identifier: AGPL-3.0-only
+pragma solidity 0.8.10;
+
+/// @notice Modern, minimalist, and gas efficient ERC-721 implementation.
+/// @author Solmate (https://github.com/Rari-Capital/solmate/blob/main/src/tokens/ERC721.sol)
+/// @dev Note that balanceOf does not revert if passed the zero address, in defiance of the ERC.
+
+abstract contract ERC721 {
+    /*///////////////////////////////////////////////////////////////
+                                 EVENTS
+    //////////////////////////////////////////////////////////////*/
+
+    event Transfer(address indexed from, address indexed to, uint256 indexed id);
+
+    event Approval(address indexed owner, address indexed spender, uint256 indexed id);
+
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+    /*///////////////////////////////////////////////////////////////
+                          METADATA STORAGE/LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    string public name;
+
+    string public symbol;
+
+    function tokenURI(uint256 id) public view virtual returns (string memory);
+
+    /*///////////////////////////////////////////////////////////////
+                            ERC721 STORAGE                        
+    //////////////////////////////////////////////////////////////*/
+
+    mapping(address => uint256) public balanceOf;
+
+    mapping(uint256 => address) public ownerOf;
+
+    mapping(uint256 => address) public getApproved;
+
+    mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    /*///////////////////////////////////////////////////////////////
+                              CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                              ERC721 LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function approve(address spender, uint256 id) public virtual {
+        address owner = ownerOf[id];
+
+        require(msg.sender == owner || isApprovedForAll[owner][msg.sender], "NOT_AUTHORIZED");
+
+        getApproved[id] = spender;
+
+        emit Approval(owner, spender, id);
+    }
+
+    function setApprovalForAll(address operator, bool approved) public virtual {
+        isApprovedForAll[msg.sender][operator] = approved;
+
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 id
+    ) public virtual {
+        require(from == ownerOf[id], "WRONG_FROM");
+
+        require(to != address(0), "INVALID_RECIPIENT");
+
+        require(
+            msg.sender == from || msg.sender == getApproved[id] || isApprovedForAll[from][msg.sender],
+            "NOT_AUTHORIZED"
+        );
+
+        // Underflow of the sender's balance is impossible because we check for
+        // ownership above and the recipient's balance can't realistically overflow.
+        unchecked {
+            balanceOf[from]--;
+
+            balanceOf[to]++;
+        }
+
+        ownerOf[id] = to;
+
+        delete getApproved[id];
+
+        emit Transfer(from, to, id);
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id
+    ) public virtual {
+        transferFrom(from, to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, from, id, "") ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id,
+        bytes memory data
+    ) public virtual {
+        transferFrom(from, to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, from, id, data) ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                              ERC165 LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function supportsInterface(bytes4 interfaceId) public pure virtual returns (bool) {
+        return
+            interfaceId == 0x01ffc9a7 || // ERC165 Interface ID for ERC165
+            interfaceId == 0x80ac58cd || // ERC165 Interface ID for ERC721
+            interfaceId == 0x5b5e139f; // ERC165 Interface ID for ERC721Metadata
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                       INTERNAL MINT/BURN LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function _mint(address to, uint256 id) internal virtual {
+        require(to != address(0), "INVALID_RECIPIENT");
+
+        require(ownerOf[id] == address(0), "ALREADY_MINTED");
+
+        // Counter overflow is incredibly unrealistic.
+        unchecked {
+            balanceOf[to]++;
+        }
+
+        ownerOf[id] = to;
+
+        emit Transfer(address(0), to, id);
+    }
+
+    function _burn(uint256 id) internal virtual {
+        address owner = ownerOf[id];
+
+        require(ownerOf[id] != address(0), "NOT_MINTED");
+
+        // Ownership check above ensures no underflow.
+        unchecked {
+            balanceOf[owner]--;
+        }
+
+        delete ownerOf[id];
+
+        delete getApproved[id];
+
+        emit Transfer(owner, address(0), id);
+    }
+
+    /*///////////////////////////////////////////////////////////////
+                       INTERNAL SAFE MINT LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    function _safeMint(address to, uint256 id) internal virtual {
+        _mint(to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), id, "") ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    function _safeMint(
+        address to,
+        uint256 id,
+        bytes memory data
+    ) internal virtual {
+        _mint(to, id);
+
+        require(
+            to.code.length == 0 ||
+                ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), id, data) ==
+                ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+}
+
+/// @notice A generic interface for a contract which properly accepts ERC721 tokens.
+/// @author Solmate (https://github.com/Rari-Capital/solmate/blob/main/src/tokens/ERC721.sol)
+
+interface ERC721TokenReceiver {
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 id,
+        bytes calldata data
+    ) external returns (bytes4);
+}
+
+interface ERC20 {
+    function transferFrom(
+        address from,
+        address to,
+        uint256 amount
+    ) external returns (bool);
+
+    function transfer(address to, uint256 amount) external returns (bool);
+
+    function approve(address spender, uint256 amount) external returns (bool);
+}
+
+library SafeTransferLib {
+    function safeTransferETH(address to, uint256 amount) internal {
+        bool callStatus;
+
+        assembly {
+            // Transfer the ETH and store if it succeeded or not.
+            callStatus := call(gas(), to, amount, 0, 0, 0, 0)
+        }
+
+        require(callStatus, "ETH_TRANSFER_FAILED");
+    }
+
+    function didLastOptionalReturnCallSucceed(bool callStatus) private pure returns (bool success) {
+        assembly {
+            // Get how many bytes the call returned.
+            let returnDataSize := returndatasize()
+
+            // If the call reverted:
+            if iszero(callStatus) {
+                // Copy the revert message into memory.
+                returndatacopy(0, 0, returnDataSize)
+
+                // Revert with the same message.
+                revert(0, returnDataSize)
+            }
+
+            switch returnDataSize
+            case 32 {
+                // Copy the return data into memory.
+                returndatacopy(0, 0, returnDataSize)
+
+                // Set success to whether it returned true.
+                success := iszero(iszero(mload(0)))
+            }
+            case 0 {
+                // There was no return data.
+                success := 1
+            }
+            default {
+                // It returned some malformed input.
+                success := 0
+            }
+        }
+    }
+}
+
+abstract contract Ownable {
+    address internal _owner;
+
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+
+    constructor() {
+        _owner = msg.sender;
+    }
+
+    function owner() external view returns (address) {
+        return _owner;
+    }
+
+    function transferOwnership(address _newOwner) external {
+        require(msg.sender == _owner, "NotOwner");
+
+        _owner = _newOwner;
+    }
+
+    function renounceOwnership() public {
+        require(msg.sender == _owner, "NotOwner");
+
+        _owner = address(0);
+    }
+}
+
+interface IERC721 {
+    function getPhunksBelongingToOwner(address _owner) external view returns (uint256[] memory);
+}
+
+library Strings {
+    function toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) {
+            return "0";
+        }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+}
+
+contract xApe721 is Ownable, ERC721 {
+    using Strings for uint256;
+
+    uint256 public constant TOTAL_SUPPLY = 10_000;
+    uint256 public constant PRICE_PER_MINT = 0.05 ether;
+    uint256 public constant MAX_MINT_PER_TX = 20;
+
+    bool public mintActive;
+    uint256 public totalSupply;
+    uint256 internal nextMintableId = 10038;
+    string public baseURI;
+    IERC721 public oldContract;
+    address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+    constructor(
+        string memory name,
+        string memory symbol,
+        string memory _baseURI,
+        address _oldContract,
+        address[] memory recipients,
+        uint256[] memory tokens
+    ) ERC721(name, symbol) {
+        require(recipients.length == tokens.length, "Airdrop lengths");
+        baseURI = _baseURI;
+
+        if (_oldContract != address(0)) {
+            oldContract = IERC721(_oldContract);
+        }
+
+        uint256 length = tokens.length;
+        for (uint256 i; i < length; ++i) {
+            _mint(recipients[i], tokens[i]);
+            totalSupply++;
+        }
+    }
+
+    modifier onlyTeamWallet() {
+        require(msg.sender == teamWallet, "Not team wallet");
+        _;
+    }
+
+    function mint(uint16 amount) external payable {
+        require(mintActive, "Mint inactive");
+        require(amount > 0 && amount <= MAX_MINT_PER_TX, "Invalid amount");
+        require(msg.value == amount * PRICE_PER_MINT, "Incorrect ETH");
+        require(totalSupply + amount <= TOTAL_SUPPLY, "Exceeds supply");
+
+        for (uint256 i; i < amount; ++i) {
+            uint256 tokenId = _getNextUnusedID();
+            _mint(msg.sender, tokenId);
+            totalSupply++;
+            nextMintableId = tokenId + 1;
+        }
+    }
+
+    function claim(uint256 tokenId) external payable {
+        require(totalSupply < TOTAL_SUPPLY, "All tokens claimed");
+        require(oldContract.ownerOf(tokenId) == msg.sender, "Not owner");
+        require(ownerOf[tokenId] == address(0), "Already claimed");
+
+        _mint(msg.sender, tokenId);
+        totalSupply++;
+    }
+
+    function claimAll() external payable {
+        uint256[] memory tokens = oldContract.getPhunksBelongingToOwner(msg.sender);
+        uint256 length = tokens.length;
+        require(length > 0, "No tokens");
+        require(totalSupply + length <= TOTAL_SUPPLY, "Exceeds supply");
+
+        for (uint256 i; i < length; ++i) {
+            uint256 tokenId = tokens[i];
+            if (ownerOf[tokenId] == address(0)) {
+                _mint(msg.sender, tokenId);
+                totalSupply++;
+            }
+        }
+    }
+
+    function _getNextUnusedID() internal returns (uint256) {
+        while (true) {
+            uint256 currentId = nextMintableId;
+            if (ownerOf[currentId] == address(0)) {
+                try oldContract.ownerOf(currentId) returns (address owner) {
+                    if (owner == address(0)) {
+                        return currentId;
+                    }
+                } catch {
+                    return currentId;
+                }
+            }
+            nextMintableId++;
+        }
+    }
+
+    function tokenURI(uint256 id) public view override returns (string memory) {
+        require(ownerOf[id] != address(0), "Token does not exist");
+        return string(abi.encodePacked(baseURI, id.toString()));
+    }
+
+    function withdraw() external onlyTeamWallet {
+        SafeTransferLib.safeTransferETH(teamWallet, address(this).balance);
+    }
+
+    function pauseMint() external {
+        require(msg.sender == owner(), "Only owner");
+        mintActive = false;
+    }
+
+    function startMint() external {
+        require(msg.sender == owner(), "Only owner");
+        mintActive = true;
+    }
+
+    function setBaseURI(string memory _baseURI) external {
+        require(msg.sender == owner(), "Only owner");
+        baseURI = _baseURI;
+    }
+
+    function supportsInterface(bytes4 interfaceId) public pure override returns (bool) {
+        return super.supportsInterface(interfaceId);
+    }
+
+    function onERC721Received(
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external pure returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+    }
+}
+```

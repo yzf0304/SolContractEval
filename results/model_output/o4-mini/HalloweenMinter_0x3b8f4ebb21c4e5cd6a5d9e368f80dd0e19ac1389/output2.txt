@@ -1,0 +1,166 @@
+Here is the completed `HalloweenMinter` contract. It is written for Solidity 0.8.7, uses OpenZeppelin’s `Ownable` and `MerkleProof`, and strictly follows the requirements you provided—no extra contracts or dependencies have been introduced.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface iNFTCollection {
+    function externalMint(address _address, uint256 _amount) external payable;
+    function totalSupply() external view returns (uint256);
+}
+
+contract HalloweenMinter is Ownable {
+    using MerkleProof for bytes32[];
+
+    // ------------------------------------------------------------------------
+    //                                  STATE
+    // ------------------------------------------------------------------------
+    address public constant withdrawAddress = 0xdEcf4B112d4120B6998e5020a6B4819E490F7db6;
+    iNFTCollection public NFTCollection = iNFTCollection(0x2d3C8D1A84cA778A3bba0F4fC389330AB96AF3Be);
+
+    uint256 public cost = 0;
+    uint256 public maxSupply = 5000;
+    uint256 public maxMintAmountPerTransaction = 3;
+    uint256 public publicSaleMaxMintAmountPerAddress = 300;
+
+    bool public paused = true;
+    bool public onlyWhitelisted = true;
+    bool public mintCount = true;
+
+    bytes32 public merkleRoot;
+    bytes32 public constant AIRDROP_ROLE = keccak256("AIRDROP_ROLE");
+
+    mapping(address => uint256) public whitelistMintedAmount;
+    mapping(address => uint256) public publicSaleMintedAmount;
+
+    // ------------------------------------------------------------------------
+    //                                CONSTRUCTOR
+    // ------------------------------------------------------------------------
+    constructor() {
+        pause(false);
+        setMintCount(false);
+    }
+
+    // ------------------------------------------------------------------------
+    //                                MODIFIERS
+    // ------------------------------------------------------------------------
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract.");
+        _;
+    }
+
+    // ------------------------------------------------------------------------
+    //                                PUBLIC MINT
+    // ------------------------------------------------------------------------
+    /**
+     * @notice Allows users to mint NFTs, enforcing whitelist or public‐sale rules.
+     * @param _mintAmount Number of tokens to mint.
+     * @param _maxMintAmount Max allowance in the whitelist leaf.
+     * @param _merkleProof Merkle proof for whitelist verification.
+     */
+    function mint(
+        uint256 _mintAmount,
+        uint256 _maxMintAmount,
+        bytes32[] calldata _merkleProof
+    ) external payable callerIsUser {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0, "Must mint at least one");
+        require(_mintAmount <= maxMintAmountPerTransaction, "Exceeds per-tx limit");
+        require(NFTCollection.totalSupply() + _mintAmount <= maxSupply, "Max supply exceeded");
+        require(msg.value >= cost * _mintAmount, "Insufficient funds");
+
+        if (onlyWhitelisted) {
+            // Whitelist phase
+            bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _maxMintAmount));
+            require(_merkleProof.verify(merkleRoot, leaf), "Invalid Merkle Proof");
+
+            if (mintCount) {
+                require(
+                    whitelistMintedAmount[msg.sender] + _mintAmount <= _maxMintAmount,
+                    "Exceeds whitelist allowance"
+                );
+                whitelistMintedAmount[msg.sender] += _mintAmount;
+            }
+        } else {
+            // Public sale
+            if (mintCount) {
+                require(
+                    publicSaleMintedAmount[msg.sender] + _mintAmount <= publicSaleMaxMintAmountPerAddress,
+                    "Exceeds public sale allowance"
+                );
+                publicSaleMintedAmount[msg.sender] += _mintAmount;
+            }
+        }
+
+        // Forward mint to the NFT collection contract
+        NFTCollection.externalMint{value: msg.value}(msg.sender, _mintAmount);
+    }
+
+    // ------------------------------------------------------------------------
+    //                               OWNER FUNCTIONS
+    // ------------------------------------------------------------------------
+    function setMaxSupply(uint256 _maxSupply) external onlyOwner {
+        maxSupply = _maxSupply;
+    }
+
+    function totalSupply() external view returns (uint256) {
+        return NFTCollection.totalSupply();
+    }
+
+    function setMerkleRoot(bytes32 _merkleRoot) external onlyOwner {
+        merkleRoot = _merkleRoot;
+    }
+
+    function setPublicSaleMaxMintAmountPerAddress(uint256 _publicSaleMaxMintAmountPerAddress)
+        external
+        onlyOwner
+    {
+        publicSaleMaxMintAmountPerAddress = _publicSaleMaxMintAmountPerAddress;
+    }
+
+    function setCost(uint256 _newCost) external onlyOwner {
+        cost = _newCost;
+    }
+
+    function setOnlyWhitelisted(bool _state) external onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    function setMaxMintAmountPerTransaction(uint256 _maxMintAmountPerTransaction)
+        external
+        onlyOwner
+    {
+        maxMintAmountPerTransaction = _maxMintAmountPerTransaction;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function setMintCount(bool _state) public onlyOwner {
+        mintCount = _state;
+    }
+
+    function setNFTCollection(address _address) external onlyOwner {
+        NFTCollection = iNFTCollection(_address);
+    }
+
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "Nothing to withdraw");
+        payable(withdrawAddress).transfer(balance);
+    }
+}
+```
+
+Explanation of key points:
+1. We use OpenZeppelin’s `Ownable` (for owner‐only controls) and `MerkleProof` (for whitelist verification).  
+2. The `mint` function first checks pause status, per‐transaction limits, total supply, and payment.  
+3. If `onlyWhitelisted == true`, we verify the caller’s leaf (`keccak256(abi.encodePacked(msg.sender, _maxMintAmount))`) against the stored `merkleRoot`. If `mintCount == true`, we enforce per‐address caps from `whitelistMintedAmount`.  
+4. If `onlyWhitelisted == false`, we enforce the public‐sale per‐address cap via `publicSaleMintedAmount`, when `mintCount` is on.  
+5. We forward all ETH to `NFTCollection.externalMint` in a single call, so that collection handles the actual mint.  
+6. Administrative setters (e.g. `setCost`, `pause`, `setMerkleRoot`) are `onlyOwner`.  
+7. `withdraw` sends the contract’s ETH balance to the fixed `withdrawAddress`.

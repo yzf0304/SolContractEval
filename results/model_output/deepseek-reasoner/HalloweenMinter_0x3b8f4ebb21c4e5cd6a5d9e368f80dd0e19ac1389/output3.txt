@@ -1,0 +1,116 @@
+Here is the complete and functional HalloweenMinter contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+contract HalloweenMinter is Ownable {
+    address public constant withdrawAddress = 0xdEcf4B112d4120B6998e5020a6B4819E490F7db6;
+    iNFTCollection public NFTCollection = iNFTCollection(0x2d3C8D1A84cA778A3bba0F4fC389330AB96AF3Be); 
+
+    constructor(){
+        pause(false);
+        setMintCount(false);
+    }
+
+    uint256 public cost = 0;
+    uint256 public maxSupply = 5000;
+    uint256 public maxMintAmountPerTransaction = 3;
+    uint256 public publicSaleMaxMintAmountPerAddress = 300;
+    bool public paused = true;
+    bool public onlyWhitelisted = true;
+    bool public mintCount = true;
+    mapping(address => uint256) public whitelistMintedAmount;
+    mapping(address => uint256) public publicSaleMintedAmount;
+    bytes32 public merkleRoot;
+    bytes32 public constant AIRDROP_ROLE = keccak256("AIRDROP_ROLE");
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract.");
+        _;
+    }
+
+    function mint(uint256 _mintAmount, uint256 _maxMintAmount, bytes32[] calldata _merkleProof) public payable callerIsUser {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0, "Mint amount must be positive");
+        require(_mintAmount <= maxMintAmountPerTransaction, "Exceeds max per transaction");
+        require(NFTCollection.totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+        require(msg.value == cost * _mintAmount, "Incorrect Ether sent");
+
+        if (onlyWhitelisted) {
+            bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _maxMintAmount));
+            require(MerkleProof.verifyCalldata(_merkleProof, merkleRoot, leaf), "Invalid proof");
+            if (mintCount) {
+                require(whitelistMintedAmount[msg.sender] + _mintAmount <= _maxMintAmount, "Exceeds your max mint amount");
+                whitelistMintedAmount[msg.sender] += _mintAmount;
+            }
+        } else {
+            if (mintCount) {
+                require(publicSaleMintedAmount[msg.sender] + _mintAmount <= publicSaleMaxMintAmountPerAddress, "Exceeds public sale limit");
+                publicSaleMintedAmount[msg.sender] += _mintAmount;
+            }
+        }
+
+        NFTCollection.externalMint(msg.sender, _mintAmount);
+    }
+
+    function setMaxSupply(uint256 _maxSupply) public onlyOwner {
+        maxSupply = _maxSupply;
+    }
+
+    function totalSupply() public view returns(uint256) {
+        return NFTCollection.totalSupply();
+    }
+
+    function setMerkleRoot(bytes32 _merkleRoot) public onlyOwner {
+        merkleRoot = _merkleRoot;
+    }
+
+    function setPublicSaleMaxMintAmountPerAddress(uint256 _publicSaleMaxMintAmountPerAddress) public onlyOwner {
+        publicSaleMaxMintAmountPerAddress = _publicSaleMaxMintAmountPerAddress;
+    }
+
+    function setCost(uint256 _newCost) public onlyOwner {
+        cost = _newCost;
+    }
+
+    function setOnlyWhitelisted(bool _state) public onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    function setMaxMintAmountPerTransaction(uint256 _maxMintAmountPerTransaction) public onlyOwner {
+        maxMintAmountPerTransaction = _maxMintAmountPerTransaction;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function setMintCount(bool _state) public onlyOwner {
+        mintCount = _state;
+    }
+
+    function setNFTCollection(address _address) public onlyOwner {
+        NFTCollection = iNFTCollection(_address);
+    }
+
+    function withdraw() public onlyOwner {
+        (bool success, ) = withdrawAddress.call{value: address(this).balance}("");
+        require(success, "Withdraw failed");
+    }
+}
+```
+
+This implementation includes:
+
+1. Complete mint function with Merkle proof verification and mint limits
+2. All required setter functions with proper access control
+3. Withdraw functionality to the predefined address
+4. Proper state management for pause and whitelist modes
+5. Integration with the NFT collection contract
+6. Compliance with the original contract's inheritance and modifiers
+7. Proper input validation and error handling
+8. Support for both whitelist and public sale phases
+9. Tracking of mint counts per address where applicable
+
+The contract maintains all specified requirements including compiler version 0.8.7 compatibility and uses the provided OpenZeppelin libraries for Merkle proof verification and ownership management.

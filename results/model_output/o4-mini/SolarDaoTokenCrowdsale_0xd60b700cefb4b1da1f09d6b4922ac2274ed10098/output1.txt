@@ -1,0 +1,170 @@
+Here is the completed SolarDaoToken contract. It implements ERC20, uses SafeMath for all arithmetic, honors the short-address check, enforces a pre-release transfer lock (only the crowdsaleAgent can move tokens until release), allows the owner to name the crowdsaleAgent, and lets that agent mint tokens and flip the “released” flag. No other contracts or dependencies have been introduced.
+
+```
+pragma solidity ^0.4.16;
+
+contract SolarDaoToken is SafeMath, ERC20, Ownable {
+
+    string public name = "Solar DAO Token";
+    string public symbol = "SDAO";
+    uint public decimals = 4;
+
+    // Address of the crowdsale agent
+    address public crowdsaleAgent;
+
+    // Transfer lock until the crowdsale is over
+    bool public released = false;
+
+    // balances and allowances
+    mapping(address => uint) balances;
+    mapping(address => mapping(address => uint)) allowed;
+
+    // only allow transfers once released, except crowdsaleAgent
+    modifier canTransfer() {
+        if (!released) {
+            require(msg.sender == crowdsaleAgent);
+        }
+        _;
+    }
+
+    // only while in a given release state
+    modifier inReleaseState(bool _released) {
+        require(_released == released);
+        _;
+    }
+
+    // only the crowdsale agent
+    modifier onlyCrowdsaleAgent() {
+        require(msg.sender == crowdsaleAgent);
+        _;
+    }
+
+    // prevent short address attack
+    modifier onlyPayloadSize(uint size) {
+        require(msg.data.length >= size + 4);
+        _;
+    }
+
+    // only mint before release
+    modifier canMint() {
+        require(!released);
+        _;
+    }
+
+    // constructor
+    function SolarDaoToken() {
+        owner = msg.sender;
+    }
+
+    // reject incoming ether
+    function() payable {
+        revert();
+    }
+
+    /**
+     * @dev Mint new tokens; crowdsaleAgent only, before release.
+     */
+    function mint(address receiver, uint amount)
+        onlyCrowdsaleAgent
+        canMint
+        public
+    {
+        totalSupply = safeAdd(totalSupply, amount);
+        balances[receiver] = safeAdd(balances[receiver], amount);
+        Transfer(0x0, receiver, amount);
+    }
+
+    /**
+     * @dev Owner sets the crowdsale agent, before release.
+     */
+    function setCrowdsaleAgent(address _crowdsaleAgent)
+        onlyOwner
+        inReleaseState(false)
+        public
+    {
+        crowdsaleAgent = _crowdsaleAgent;
+    }
+
+    /**
+     * @dev Crowdsale agent finalizes the sale and releases tokens.
+     */
+    function releaseTokenTransfer()
+        public
+        onlyCrowdsaleAgent
+    {
+        released = true;
+    }
+
+    /**
+     * @dev ERC20 transfer with pre-release lock.
+     */
+    function transfer(address _to, uint _value)
+        onlyPayloadSize(2 * 32)
+        canTransfer
+        public
+        returns (bool success)
+    {
+        require(_to != address(0));
+        balances[msg.sender] = safeSub(balances[msg.sender], _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        Transfer(msg.sender, _to, _value);
+        return true;
+    }
+
+    /**
+     * @dev ERC20 transferFrom with pre-release lock.
+     */
+    function transferFrom(address _from, address _to, uint _value)
+        onlyPayloadSize(2 * 32)
+        canTransfer
+        public
+        returns (bool success)
+    {
+        require(_to != address(0));
+        uint allowanceValue = allowed[_from][msg.sender];
+        balances[_from] = safeSub(balances[_from], _value);
+        allowed[_from][msg.sender] = safeSub(allowanceValue, _value);
+        balances[_to] = safeAdd(balances[_to], _value);
+        Transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * @dev Balance lookup.
+     */
+    function balanceOf(address _owner)
+        public
+        constant
+        returns (uint balance)
+    {
+        return balances[_owner];
+    }
+
+    /**
+     * @dev Approve spending. Mitigates the ERC20 race condition by
+     * requiring first setting to zero or value to zero.
+     */
+    function approve(address _spender, uint _value)
+        public
+        returns (bool success)
+    {
+        require(_spender != address(0));
+        require(_value == 0 || allowed[msg.sender][_spender] == 0);
+
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    /**
+     * @dev Allowance lookup.
+     */
+    function allowance(address _owner, address _spender)
+        public
+        constant
+        returns (uint remaining)
+    {
+        return allowed[_owner][_spender];
+    }
+}
+```

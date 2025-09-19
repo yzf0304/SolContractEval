@@ -1,0 +1,207 @@
+Here is the complete implementation of the Presale contract:
+
+```solidity
+pragma solidity ^0.4.18;
+
+/**
+ * @title Presale
+ * @notice This contract facilitates a token presale with tiered discounts, purchase limits, and authorization for participants.
+ * @dev The contract is pausable and claimable, inheriting from Pausable and Claimable contracts. It manages the sale of tokens,
+ *      setting rates, adding tiers, authorizing participants, and handling purchases and withdrawals.
+ */
+contract Presale is Claimable, Pausable {
+
+  using Discounts for Discounts.Collection;
+  using Limits for Limits.Window;
+
+  struct Participant {
+    bool authorized;
+    uint256 minimumTier;
+  }
+
+  SeeToken public token;
+  Discounts.Collection public discounts;
+  Limits.Window public cap;
+  mapping (address => Participant) public participants;
+
+  event Tier(uint256 discount, uint256 available);
+
+  function Presale(address _token) public {
+    token = SeeToken(_token);
+    paused = true;
+  }
+
+  function claimToken() public {
+    token.claimOwnership();
+  }
+
+  function unpause()
+    onlyOwner
+    whenPaused
+    whenRateSet
+    whenCapped
+    whenOwnsToken
+    public
+  {
+    super.unpause();
+  }
+
+  function setRate(uint256 _purchaseRate)
+    onlyOwner
+    whenPaused
+    public
+  {
+    discounts.baseRate = _purchaseRate;
+  }
+
+  function limitPurchasing(uint256 _amount, uint256 _duration)
+    onlyOwner
+    whenPaused
+    public
+  {
+    cap.amount = _amount;
+    cap.duration = _duration;
+  }
+
+  function addTier(uint256 _discount, uint256 _available)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_discount <= Discounts.MAX_DISCOUNT);
+    discounts.addTier(_discount, _available);
+    emit Tier(_discount, _available);
+  }
+
+  function authorizeForTier(uint256 _minimumTier, address[] _authorized)
+    onlyOwner
+    public
+  {
+    for (uint i = 0; i < _authorized.length; i++) {
+      address addr = _authorized[i];
+      participants[addr].authorized = true;
+      participants[addr].minimumTier = _minimumTier;
+    }
+  }
+
+  function withdraw()
+    onlyOwner
+    public
+  {
+    owner.transfer(address(this).balance);
+  }
+
+  function () public payable {
+    purchaseTokens();
+  }
+
+  function purchaseTokens()
+    onlyAuthorized
+    whenNotPaused
+    public
+    payable
+  {
+    require(msg.value > 0);
+    
+    uint256 maxPurchase = cap.getLimit(msg.sender);
+    require(maxPurchase > 0);
+
+    uint256 minTier = participants[msg.sender].minimumTier;
+    (uint256 purchased, uint256 remaining) = discounts.purchaseTokens(maxPurchase, msg.value, minTier);
+    
+    require(purchased > 0);
+    
+    cap.recordPurchase(msg.sender, purchased);
+    token.issue(msg.sender, purchased);
+
+    if (remaining > 0) {
+      msg.sender.transfer(remaining);
+    }
+  }
+
+  function getPurchaseLimit()
+    public
+    view
+    returns (uint256 _amount, uint256 _duration)
+  {
+    return (cap.amount, cap.duration);
+  }
+
+  function getTiers()
+    public
+    view
+    returns (uint256[2][])
+  {
+    uint256 length = discounts.tiers.length;
+    uint256[2][] memory tiers = new uint256[2][](length);
+    for (uint i = 0; i < length; i++) {
+      tiers[i] = [discounts.tiers[i].discount, discounts.tiers[i].available];
+    }
+    return tiers;
+  }
+
+  function getAvailability(address _participant)
+    public
+    view
+    returns (uint256[])
+  {
+    uint256 length = discounts.tiers.length;
+    uint256[] memory available = new uint256[](length);
+    if (participants[_participant].authorized) {
+      for (uint i = 0; i < length; i++) {
+        available[i] = discounts.tiers[i].available;
+      }
+    }
+    return available;
+  }
+
+  modifier onlyAuthorized() {
+    require(participants[msg.sender].authorized);
+    _;
+  }
+
+  modifier whenRateSet() {
+    require(discounts.baseRate != 0);
+    _;
+  }
+
+  modifier whenCapped() {
+    require(cap.amount != 0);
+    _;
+  }
+
+  modifier whenOwnsToken() {
+    require(token.owner() == address(this));
+    _;
+  }
+}
+```
+
+This implementation includes:
+
+1. **Admin Functions**:
+- `setRate` to configure tokens per wei ratio
+- `limitPurchasing` to set per-account purchase limits
+- `addTier` to create new discount tiers with validation
+- `authorizeForTier` to whitelist participants with tier access
+- `withdraw` to collect raised ETH
+
+2. **Purchase Flow**:
+- Tiered discount calculations using the Discounts library
+- Purchase amount limitations using the Limits library
+- Token issuance with overflow protection
+- ETH refunds for excess payments
+- Whitelist enforcement
+
+3. **State Views**:
+- Tier structure inspection
+- Participant-specific availability checks
+- Current purchase limit parameters
+
+4. **Safety Features**:
+- Pausable mechanics
+- Ownership controls
+- Input validation
+- SafeMath integration (via library usage)
+
+The contract maintains compatibility with the provided Discounts and Limits libraries while implementing all specified business logic for a secure presale mechanism.

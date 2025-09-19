@@ -1,0 +1,97 @@
+```solidity
+pragma solidity 0.4.23;
+
+contract TokenReclaim {
+    mapping (address => string) internal _ethToSphtx;
+    mapping (string => string) internal _accountToPubKey;
+
+    event AccountRegister(address ethAccount, string sphtxAccount, string pubKey);
+
+    function register(string memory name, string memory pubKey) public {
+        // Validate name length
+        bytes memory nameBytes = bytes(name);
+        require(nameBytes.length >= 3 && nameBytes.length <= 16, "Invalid name length");
+
+        // Validate first character
+        bytes1 firstChar = nameBytes[0];
+        require(
+            (firstChar >= 0x30 && firstChar <= 0x39) || // 0-9
+            (firstChar >= 0x61 && firstChar <= 0x7a),   // a-z
+            "Invalid first character"
+        );
+
+        // Validate remaining characters
+        for (uint i = 1; i < nameBytes.length; i++) {
+            bytes1 char = nameBytes[i];
+            require(
+                (char >= 0x30 && char <= 0x39) || // 0-9
+                (char >= 0x61 && char <= 0x7a) || // a-z
+                char == 0x2d || // -
+                char == 0x2e,   // .
+                "Invalid character in name"
+            );
+        }
+
+        // Validate public key length
+        bytes memory pubKeyBytes = bytes(pubKey);
+        require(pubKeyBytes.length >= 50 && pubKeyBytes.length <= 64, "Invalid pubKey length");
+
+        // Check existing registration
+        require(
+            keccak256(bytes(_ethToSphtx[msg.sender])) == keccak256(bytes("")),
+            "Address already registered"
+        );
+
+        // Check name availability
+        require(
+            keccak256(bytes(_accountToPubKey[name])) == keccak256(bytes("")),
+            "Name already taken"
+        );
+
+        // Store mappings
+        _ethToSphtx[msg.sender] = name;
+        _accountToPubKey[name] = pubKey;
+
+        // Emit event
+        emit AccountRegister(msg.sender, name, pubKey);
+    }
+
+    function account(address addr) public view returns (string memory) {
+        return _ethToSphtx[addr];
+    }
+
+    function keys(address addr) public view returns (string memory) {
+        string memory sphtxName = _ethToSphtx[addr];
+        if (keccak256(bytes(sphtxName)) == keccak256(bytes(""))) {
+            return "";
+        }
+        return _accountToPubKey[sphtxName];
+    }
+
+    function nameAvailable(string memory name) public view returns (bool) {
+        bytes memory nameBytes = bytes(name);
+        if (nameBytes.length < 3 || nameBytes.length > 16) {
+            return false;
+        }
+
+        bytes1 firstChar = nameBytes[0];
+        if (!((firstChar >= 0x30 && firstChar <= 0x39) || (firstChar >= 0x61 && firstChar <= 0x7a))) {
+            return false;
+        }
+
+        for (uint i = 1; i < nameBytes.length; i++) {
+            bytes1 char = nameBytes[i];
+            if (!(
+                (char >= 0x30 && char <= 0x39) ||
+                (char >= 0x61 && char <= 0x7a) ||
+                char == 0x2d ||
+                char == 0x2e
+            )) {
+                return false;
+            }
+        }
+
+        return keccak256(bytes(_accountToPubKey[name])) == keccak256(bytes(""));
+    }
+}
+```

@@ -1,0 +1,105 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
+
+contract PepeYogaClub is ERC721A, Ownable {
+    string public baseURI =
+        "ipfs://QmTLWN9WPq5L9eS9EKcTn2rqUCzr9QK5sd8DYVkkL7yguL/";
+    string public contractURI =
+        "ipfs://QmUvB8sKL4XFTxbMkL9FykiqLgrXeBV1mUkdzWMWhachvD";
+
+    uint256 public MAX_PER_WALLET = 11;
+    uint256 public constant MAX_SUPPLY = 2069;
+    uint256 public price = 0.0069 ether;
+
+    bool public paused = true;
+
+    constructor() ERC721A("PepeYogaClub", "PYC") {}
+
+    /// @notice Mint `_amount` tokens to msg.sender.
+    function mint(uint256 _amount) external payable {
+        require(!paused, "Minting is paused");
+        require(_amount > 0, "Must mint at least one");
+        require(totalSupply() + _amount <= MAX_SUPPLY, "Exceeds max supply");
+        require(
+            minted(msg.sender) + _amount <= MAX_PER_WALLET,
+            "Exceeds max per wallet"
+        );
+        require(msg.value >= price * _amount, "Incorrect Ether value");
+
+        _safeMint(msg.sender, _amount);
+    }
+
+    /// @dev Start token IDs at 1 instead of 0
+    function _startTokenId() internal pure override returns (uint256) {
+        return 1;
+    }
+
+    /// @notice Number of tokens minted by `_owner`
+    function minted(address _owner) public view returns (uint256) {
+        return _numberMinted(_owner);
+    }
+
+    /// @notice Withdraw all ETH to owner
+    function withdraw() external onlyOwner {
+        payable(owner()).transfer(address(this).balance);
+    }
+
+    /// @notice Owner can mint in bulk to multiple addresses
+    function teamMint(address[] calldata _to, uint256[] calldata _amount)
+        external
+        onlyOwner
+    {
+        require(_to.length == _amount.length, "Length mismatch");
+        for (uint256 i = 0; i < _to.length; ) {
+            require(
+                totalSupply() + _amount[i] <= MAX_SUPPLY,
+                "Exceeds max supply"
+            );
+            _safeMint(_to[i], _amount[i]);
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /// @notice Update max mints per wallet
+    function setMaxPerWallet(uint256 _max) external onlyOwner {
+        MAX_PER_WALLET = _max;
+    }
+
+    /// @notice Update mint price
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    /// @notice Pause/unpause public mint
+    function toggleMint() external onlyOwner {
+        paused = !paused;
+    }
+
+    /// @notice Update the base URI
+    function setBaseURI(string calldata baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    /// @notice Update the contract-level metadata URI
+    function setContractURI(string calldata _contractURI)
+        external
+        onlyOwner
+    {
+        contractURI = _contractURI;
+    }
+
+    /// @notice Token metadata URI
+    function tokenURI(uint256 _tokenId)
+        public
+        view
+        override
+        returns (string memory)
+    {
+        require(_exists(_tokenId), "URI query for nonexistent token");
+        return string(abi.encodePacked(baseURI, _toString(_tokenId)));
+    }
+}
+```

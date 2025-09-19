@@ -1,0 +1,93 @@
+To solve this problem, we need to implement a Solidity smart contract called HEXToken that manages the staking, transferring, and approval of HEX tokens. The contract should allow users to stake tokens for a specified duration, transfer tokens between addresses, approve other addresses to spend tokens on their behalf, and end existing stakes. Additionally, the contract should provide functionality to check the current day and the number of active stakes for a given address.
+
+### Approach
+1. **currentDay Function**: This function returns the current day calculated from the block timestamp, which helps in tracking the staking duration.
+2. **stakeStart Function**: Users can stake tokens by specifying the amount and duration. The staked tokens are deducted from their balance and recorded in a struct along with the stake details.
+3. **approve and transfer Functions**: These functions follow the ERC20 standard for token approvals and transfers, ensuring compatibility with wallets and other contracts.
+4. **stakeEnd Function**: Allows users to end their stakes, returning the staked tokens to their balance after the specified duration has elapsed.
+5. **stakeCount Function**: Returns the number of stakes for a given address, helping users track their active stakes.
+
+### Solution Code
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    struct Stake {
+        uint256 stakedHearts;
+        uint256 stakedDays;
+        uint256 startDay;
+        uint40 stakeId;
+        bool ended;
+    }
+
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+    mapping(address => Stake[]) private stakes;
+    uint40 private stakeIdCounter;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    function currentDay() external view returns (uint256) {
+        return block.timestamp / 1 days;
+    }
+
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "HEXToken: Cannot stake 0 hearts");
+        require(newStakedDays > 0, "HEXToken: Cannot stake for 0 days");
+        require(_balances[msg.sender] >= newStakedHearts, "HEXToken: Insufficient balance");
+
+        _balances[msg.sender] -= newStakedHearts;
+        uint256 startDay = currentDay();
+        uint40 stakeId = stakeIdCounter++;
+        stakes[msg.sender].push(Stake({
+            stakedHearts: newStakedHearts,
+            stakedDays: newStakedDays,
+            startDay: startDay,
+            stakeId: stakeId,
+            ended: false
+        }));
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        _allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(recipient != address(0), "HEXToken: transfer to the zero address");
+        require(_balances[msg.sender] >= amount, "HEXToken: Insufficient balance");
+
+        _balances[msg.sender] -= amount;
+        _balances[recipient] += amount;
+        emit Transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < stakes[msg.sender].length, "HEXToken: Stake index out of bounds");
+        Stake storage userStake = stakes[msg.sender][stakeIndex];
+        require(userStake.stakeId == stakeIdParam, "HEXToken: Stake ID mismatch");
+        require(!userStake.ended, "HEXToken: Stake already ended");
+        require(block.timestamp / 1 days >= userStake.startDay + userStake.stakedDays, "HEXToken: Stake not mature");
+
+        userStake.ended = true;
+        _balances[msg.sender] += userStake.stakedHearts;
+    }
+
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return stakes[stakerAddr].length;
+    }
+}
+```
+
+### Explanation
+- **currentDay**: This function calculates the current day by dividing the block timestamp by the number of seconds in a day (86400), providing a simple way to track time within the contract.
+- **stakeStart**: Users can stake tokens by specifying the amount and duration. The tokens are deducted from their balance, and a new stake record is created with a unique ID and start day.
+- **approve and transfer**: These functions follow the ERC20 standard, allowing users to approve others to spend tokens and transfer tokens directly. Events are emitted to log these actions for transparency.
+- **stakeEnd**: Ends a stake by checking if the staking period has elapsed and the stake is valid. The staked tokens are returned to the user's balance, and the stake is marked as ended.
+- **stakeCount**: Returns the number of stakes for a given address, helping users track their active stakes.
+
+This implementation ensures that users can manage their HEX tokens securely and efficiently, with clear functions for staking, transferring, and approving tokens, while maintaining compatibility with ERC20 standards.

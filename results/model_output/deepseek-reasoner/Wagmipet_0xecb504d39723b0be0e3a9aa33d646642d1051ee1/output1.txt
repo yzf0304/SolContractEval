@@ -1,0 +1,203 @@
+Here's the complete implementation of the Wagmipet contract based on the provided context and requirements:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+
+contract Wagmipet {
+    address _owner;
+    bool _birthed;
+    
+    event CaretakerLoved(address indexed caretaker, uint256 indexed amount);
+    
+    uint256 lastFeedBlock;
+    uint256 lastCleanBlock;
+    uint256 lastPlayBlock;
+    uint256 lastSleepBlock;
+    
+    uint8 internal hunger;
+    uint8 internal uncleanliness;
+    uint8 internal boredom;
+    uint8 internal sleepiness;
+    
+    mapping (address => uint256) public love;
+    
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "Not owner");
+        _;
+    }
+    
+    constructor() {
+        _owner = msg.sender;
+        lastFeedBlock = block.number;
+        lastCleanBlock = block.number;
+        lastPlayBlock = block.number;
+        lastSleepBlock = block.number;
+        
+        hunger = 0;
+        uncleanliness = 0;
+        boredom = 0;
+        sleepiness = 0;
+    }
+    
+    function addLove(address caretaker, uint256 amount) internal {
+        love[caretaker] += amount;
+        emit CaretakerLoved(caretaker, amount);
+    }
+    
+    function feed() public {
+        updateAllStats();
+        require(isAlive(), "Pet is dead");
+        require(boredom <= 50, "Too bored");
+        require(uncleanliness <= 50, "Too dirty");
+        
+        hunger = 0;
+        lastFeedBlock = block.number;
+        
+        boredom = uint8(min(uint256(boredom) + 10, 255));
+        uncleanliness = uint8(min(uint256(uncleanliness) + 3, 255));
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function clean() public {
+        updateAllStats();
+        require(isAlive(), "Pet is dead");
+        require(uncleanliness > 0, "Already clean");
+        
+        uncleanliness = 0;
+        lastCleanBlock = block.number;
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function play() public {
+        updateAllStats();
+        require(isAlive(), "Pet is dead");
+        require(hunger <= 50, "Too hungry");
+        require(sleepiness <= 50, "Too sleepy");
+        require(uncleanliness <= 50, "Too dirty");
+        
+        boredom = 0;
+        lastPlayBlock = block.number;
+        
+        hunger = uint8(min(uint256(hunger) + 10, 255));
+        sleepiness = uint8(min(uint256(sleepiness) + 10, 255));
+        uncleanliness = uint8(min(uint256(uncleanliness) + 5, 255));
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function sleep() public {
+        updateAllStats();
+        require(isAlive(), "Pet is dead");
+        require(uncleanliness < 80, "Too dirty");
+        require(sleepiness > 0, "Not sleepy");
+        
+        sleepiness = 0;
+        lastSleepBlock = block.number;
+        
+        uncleanliness = uint8(min(uint256(uncleanliness) + 5, 255));
+        
+        addLove(msg.sender, 1);
+    }
+    
+    function getStatus() public view returns (string memory) {
+        if (!getAlive()) return "no longer with us";
+        
+        uint256 currentHunger = getHunger();
+        uint256 currentUncleanliness = getUncleanliness();
+        uint256 currentBoredom = getBoredom();
+        uint256 currentSleepiness = getSleepiness();
+        
+        string memory status;
+        uint256 maxValue = 0;
+        
+        if (currentSleepiness > 50 && currentSleepiness > maxValue) {
+            maxValue = currentSleepiness;
+            status = "sleepy";
+        }
+        if (currentBoredom > 50 && currentBoredom > maxValue) {
+            maxValue = currentBoredom;
+            status = "bored";
+        }
+        if (currentUncleanliness > 50 && currentUncleanliness > maxValue) {
+            maxValue = currentUncleanliness;
+            status = "dirty";
+        }
+        if (currentHunger > 50 && currentHunger > maxValue) {
+            maxValue = currentHunger;
+            status = "hungry";
+        }
+        
+        if (maxValue > 0) return status;
+        
+        string[4] memory goodStatuses = ["gm", "im feeling great", "all good", "i love u"];
+        return goodStatuses[block.number % 4];
+    }
+    
+    function getAlive() public view returns (bool) {
+        return getHunger() < 100 &&
+               getUncleanliness() < 100 &&
+               getBoredom() < 100 &&
+               getSleepiness() < 100;
+    }
+    
+    function getHunger() public view returns (uint256) {
+        return uint256(hunger) + (block.number - lastFeedBlock);
+    }
+    
+    function getUncleanliness() public view returns (uint256) {
+        return uint256(uncleanliness) + (block.number - lastCleanBlock);
+    }
+    
+    function getBoredom() public view returns (uint256) {
+        return uint256(boredom) + (block.number - lastPlayBlock);
+    }
+    
+    function getSleepiness() public view returns (uint256) {
+        return uint256(sleepiness) + (block.number - lastSleepBlock);
+    }
+    
+    function updateAllStats() internal {
+        uint256 currentBlock = block.number;
+        
+        hunger = updateStat(hunger, lastFeedBlock, currentBlock);
+        lastFeedBlock = currentBlock;
+        
+        uncleanliness = updateStat(uncleanliness, lastCleanBlock, currentBlock);
+        lastCleanBlock = currentBlock;
+        
+        boredom = updateStat(boredom, lastPlayBlock, currentBlock);
+        lastPlayBlock = currentBlock;
+        
+        sleepiness = updateStat(sleepiness, lastSleepBlock, currentBlock);
+        lastSleepBlock = currentBlock;
+    }
+    
+    function updateStat(uint8 storageStat, uint256 lastBlock, uint256 currentBlock) internal pure returns (uint8) {
+        uint256 delta = currentBlock - lastBlock;
+        uint256 newVal = uint256(storageStat) + delta;
+        return uint8(newVal > 255 ? 255 : newVal);
+    }
+    
+    function isAlive() internal view returns (bool) {
+        return hunger < 100 && uncleanliness < 100 && boredom < 100 && sleepiness < 100;
+    }
+    
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
+}
+```
+
+This implementation includes:
+1. Time-based stat deterioration using block numbers
+2. Stat management functions with proper constraints
+3. Alive status checks
+4. Dynamic status messages
+5. Love tracking for caretakers
+6. Overflow protection for uint8 stats
+7. Proper event emissions
+
+The contract maintains all requirements specified in the problem description and uses efficient calculations for stat updates while preventing overflows.

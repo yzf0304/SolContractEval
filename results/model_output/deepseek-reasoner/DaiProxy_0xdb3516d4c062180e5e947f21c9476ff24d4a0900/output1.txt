@@ -1,0 +1,289 @@
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity 0.5.12;
+
+contract ReserveLike {
+    function depositToken(address, string memory, bytes memory, uint) public;
+}
+
+contract WrappedDaiLike {
+    function setProxy(address) public;
+    function setReserve(address) public;
+
+    uint public totalSupply;
+    function approve(address, uint) public returns (bool);
+
+    function mint(address, uint) public;
+    function burn(address, uint) public;
+}
+
+contract DaiLike {
+    function approve(address, uint) public returns (bool);
+    function transferFrom(address, address, uint) public returns (bool);
+}
+
+contract JoinLike {
+    VatLike public vat;
+    DaiLike public dai;
+
+    function join(address, uint) public;
+    function exit(address, uint) public;
+}
+
+contract PotLike {
+    mapping(address => uint) public pie;
+    uint public chi;
+
+    VatLike public vat;
+    uint public rho;
+
+    function drip() public returns (uint);
+
+    function join(uint) public;
+    function exit(uint) public;
+}
+
+contract VatLike {
+    mapping(address => uint) public dai;
+
+    function hope(address) public;
+    function move(address, address, uint) public;
+}
+
+contract DaiProxy {
+    string public constant version = "0511";
+
+    address public owner;
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+    event SetOwner(address owner);
+
+    enum State { Ready, Running, Killed }
+    State public state = State.Ready;
+    modifier notStarted {
+        require(state == State.Ready);
+        _;
+    }
+    modifier notPaused {
+        require(state == State.Running);
+        _;
+    }
+
+    uint constant ONE = 10 ** 27;
+
+    function add(uint a, uint b) private pure returns (uint) {
+        uint c = a + b;
+        require(c >= a, "add-overflow");
+        return c;
+    }
+
+    function sub(uint a, uint b) private pure returns (uint) {
+        require(b <= a, "sub-underflow");
+        return a - b;
+    }
+
+    function mul(uint a, uint b) private pure returns (uint) {
+        if (a == 0) return 0;
+        uint c = a * b;
+        require(c / a == b, "mul-overflow");
+        return c;
+    }
+
+    function div(uint a, uint b) private pure returns (uint) {
+        require(b > 0, "div-zero");
+        return a / b;
+    }
+
+    function ceil(uint a, uint b) private pure returns (uint) {
+        require(b > 0, "ceil-zero");
+        uint c = a / b;
+        if (a % b != 0) c += 1;
+        return c;
+    }
+
+    function muldiv(uint a, uint b, uint c) private pure returns (uint) {
+        return div(mul(a, b), c);
+    }
+
+    DaiLike public Dai;
+    JoinLike public Join;
+    PotLike public Pot;
+    VatLike public Vat;
+
+    ReserveLike public Reserve;
+
+    WrappedDaiLike public EDai;
+    WrappedDaiLike public ODai;
+
+    event SetReserve(address reserve);
+
+    constructor(address dai, address join, address pot, address vat, address eDai, address oDai) public {
+        owner = msg.sender;
+
+        Dai = DaiLike(dai);
+        Join = JoinLike(join);
+        Pot = PotLike(pot);
+        Vat = VatLike(vat);
+
+        EDai = WrappedDaiLike(eDai);
+        ODai = WrappedDaiLike(oDai);
+
+        require(address(Join.dai()) == dai);
+        require(address(Join.vat()) == vat);
+        require(address(Pot.vat()) == vat);
+
+        Vat.hope(pot);
+        Vat.hope(join);
+
+        require(Dai.approve(join, uint(-1)));
+    }
+
+    function setOwner(address _owner) public onlyOwner {
+        owner = _owner;
+        emit SetOwner(_owner);
+    }
+
+    function setReserve(address reserve) public onlyOwner {
+        Reserve = ReserveLike(reserve);
+        EDai.setProxy(reserve);
+        EDai.setReserve(reserve);
+        ODai.setProxy(reserve);
+        ODai.setReserve(reserve);
+        require(EDai.approve(reserve, uint(-1)));
+        require(ODai.approve(reserve, uint(-1)));
+        emit SetReserve(reserve);
+    }
+
+    modifier onlyEDai {
+        require(msg.sender == address(EDai));
+        _;
+    }
+
+    modifier onlyODai {
+        require(msg.sender == address(ODai));
+        _;
+    }
+
+    function chi() private returns (uint) {
+        Pot.drip();
+        return Pot.chi();
+    }
+
+    function joinDai(uint dai) private {
+        Join.join(address(this), dai);
+        Pot.join(dai);
+    }
+
+    function exitDai(address to, uint dai) private {
+        uint chi_ = chi();
+        uint pie = muldiv(dai, ONE, chi_);
+        Pot.exit(pie);
+        Join.exit(to, dai);
+    }
+
+    function mintODai(address to, uint dai) private returns (uint) {
+        joinDai(dai);
+        uint chi_ = chi();
+        uint oDaiAmount = muldiv(dai, chi_, ONE);
+        ODai.mint(to, oDaiAmount);
+        return oDaiAmount;
+    }
+
+    function depositEDai(string memory toChain, uint dai, bytes memory to) public notPaused {
+        require(Dai.transferFrom(msg.sender, address(this), dai), "transfer failed");
+        joinDai(dai);
+        EDai.mint(address(this), dai);
+        Reserve.depositToken(address(EDai), toChain, to, dai);
+    }
+
+    function depositODai(string memory toChain, uint dai, bytes memory to) public notPaused {
+        uint oDaiAmount = mintODai(address(this), dai);
+        Reserve.depositToken(address(ODai), toChain, to, oDaiAmount);
+    }
+
+    function swapFromEDai(address from, address to, uint dai) private {
+        EDai.burn(from, dai);
+        exitDai(to, dai);
+    }
+
+    function swapFromODai(address from, address to, uint wad) private {
+        ODai.burn(from, wad);
+        uint chi_ = chi();
+        uint dai = muldiv(wad, ONE, chi_);
+        exitDai(to, dai);
+    }
+
+    function withdrawEDai(address to, uint dai) public onlyEDai notPaused {
+        swapFromEDai(msg.sender, to, dai);
+    }
+
+    function withdrawODai(address to, uint wad) public onlyODai notPaused {
+        swapFromODai(msg.sender, to, wad);
+    }
+
+    function swapToEDai(uint dai) public notPaused {
+        require(Dai.transferFrom(msg.sender, address(this), dai), "transfer failed");
+        joinDai(dai);
+        EDai.mint(msg.sender, dai);
+    }
+
+    function swapToODai(uint dai) public notPaused {
+        require(Dai.transferFrom(msg.sender, address(this), dai), "transfer failed");
+        mintODai(msg.sender, dai);
+    }
+
+    function swapFromEDai(uint dai) public notPaused {
+        swapFromEDai(msg.sender, msg.sender, dai);
+    }
+
+    function swapFromODai(uint wad) public notPaused {
+        swapFromODai(msg.sender, msg.sender, wad);
+    }
+
+    DaiProxy public NewProxy;
+    event SetNewProxy(address proxy);
+    event StartProxy(address prev);
+    event KillProxy(address next, bool mig);
+
+    modifier onlyNewProxy {
+        require(msg.sender == address(NewProxy));
+        _;
+    }
+
+    function setNewProxy(address proxy) public onlyOwner {
+        NewProxy = DaiProxy(proxy);
+        emit SetNewProxy(proxy);
+    }
+
+    function killProxy(address to) public notPaused onlyOwner {
+        state = State.Killed;
+        uint pie = Pot.pie(address(this));
+        Pot.exit(pie);
+        uint vatDai = Vat.dai(address(this));
+        Join.exit(to, vatDai);
+        emit KillProxy(address(NewProxy), NewProxy != address(0));
+    }
+
+    function migrateProxy() public notPaused onlyNewProxy {
+        require(state == State.Running, "not running");
+        uint pie = Pot.pie(address(this));
+        Pot.exit(pie);
+        uint vatDai = Vat.dai(address(this));
+        Join.exit(address(NewProxy), vatDai);
+        EDai.setProxy(address(NewProxy));
+        ODai.setProxy(address(NewProxy));
+        state = State.Killed;
+    }
+
+    function startProxy(address oldProxy) public notStarted onlyOwner {
+        state = State.Running;
+        if (oldProxy != address(0)) {
+            DaiProxy old = DaiProxy(oldProxy);
+            old.migrateProxy();
+        }
+        emit StartProxy(oldProxy);
+    }
+}
+```

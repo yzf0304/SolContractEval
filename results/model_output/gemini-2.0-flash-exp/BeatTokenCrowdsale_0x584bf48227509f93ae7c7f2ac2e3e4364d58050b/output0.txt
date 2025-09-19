@@ -1,0 +1,438 @@
+```solidity
+pragma solidity ^0.4.18;
+
+/**
+ * @notice This contract is a crowdsale for BeatToken, which includes different ICO phases with varying bonus percentages.
+ * @dev The contract manages the token distribution, stages of the ICO, and finalization. It uses SafeMath for arithmetic operations.
+ */
+contract BeatTokenCrowdsale is Ownable {
+
+    /**
+     * @notice Enum representing the different stages of the crowdsale.
+     * @dev Used to track the current stage of the ICO.
+     */
+    enum Stages {
+        Deployed,
+        PreIco,
+        IcoPhase1,
+        IcoPhase2,
+        IcoPhase3,
+        IcoEnded,
+        Finalized
+    }
+
+    Stages public stage;
+
+    using SafeMath for uint256;
+
+    /**
+     * @notice The BeatToken contract instance.
+     * @dev Token contract that will be minted and distributed during the ICO.
+     */
+    BeatToken public token;
+
+    /**
+     * @notice Timestamp when the contract was started.
+     * @dev Used to determine the start time of the ICO.
+     */
+    uint256 public contractStartTime;
+
+    /**
+     * @notice Timestamp when the Pre-ICO phase ends.
+     * @dev Used to determine the end time of the Pre-ICO phase.
+     */
+    uint256 public preIcoEndTime;
+
+    /**
+     * @notice Timestamp when the ICO Phase 1 ends.
+     * @dev Used to determine the end time of the ICO Phase 1.
+     */
+    uint256 public icoPhase1EndTime;
+
+    /**
+     * @notice Timestamp when the ICO Phase 2 ends.
+     * @dev Used to determine the end time of the ICO Phase 2.
+     */
+    uint256 public icoPhase2EndTime;
+
+    /**
+     * @notice Timestamp when the ICO Phase 3 ends.
+     * @dev Used to determine the end time of the ICO Phase 3.
+     */
+    uint256 public icoPhase3EndTime;
+
+    /**
+     * @notice Timestamp when the entire ICO ends.
+     * @dev Used to determine the end time of the entire ICO.
+     */
+    uint256 public contractEndTime;
+
+    /**
+     * @notice Wallet address for the ETH team.
+     * @dev ETH raised during the ICO will be sent to this wallet.
+     */
+    address public ethTeamWallet;
+
+    /**
+     * @notice Wallet address for the BEAT team.
+     * @dev Unsold tokens after the ICO will be minted and sent to this wallet.
+     */
+    address public beatTeamWallet;
+
+    /**
+     * @notice Total amount of ETH (in wei) raised during the ICO.
+     * @dev Tracks the total ETH raised.
+     */
+    uint256 public ethWeiRaised;
+
+    /**
+     * @notice Mapping to store the balance of each participant.
+     * @dev Maps addresses to their respective BEAT token balances.
+     */
+    mapping(address => uint256) public balanceOf;
+
+    /**
+     * @notice Duration of the Pre-ICO phase.
+     * @dev Constant value set to 28 days.
+     */
+    uint public constant PRE_ICO_PERIOD = 28 days;
+
+    /**
+     * @notice Duration of the ICO Phase 1.
+     * @dev Constant value set to 28 days.
+     */
+    uint public constant ICO_PHASE1_PERIOD = 28 days;
+
+    /**
+     * @notice Duration of the ICO Phase 2.
+     * @dev Constant value set to 28 days.
+     */
+    uint public constant ICO_PHASE2_PERIOD = 28 days;
+
+    /**
+     * @notice Duration of the ICO Phase 3.
+     * @dev Constant value set to 28 days.
+     */
+    uint public constant ICO_PHASE3_PERIOD = 28 days;
+
+    /**
+     * @notice Bonus percentage for the Pre-ICO phase.
+     * @dev Constant value set to 100%.
+     */
+    uint256 public constant PRE_ICO_BONUS_PERCENTAGE = 100;
+
+    /**
+     * @notice Bonus percentage for the ICO Phase 1.
+     * @dev Constant value set to 75%.
+     */
+    uint256 public constant ICO_PHASE1_BONUS_PERCENTAGE = 75;
+
+    /**
+     * @notice Bonus percentage for the ICO Phase 2.
+     * @dev Constant value set to 50%.
+     */
+    uint256 public constant ICO_PHASE2_BONUS_PERCENTAGE = 50;
+
+    /**
+     * @notice Bonus percentage for the ICO Phase 3.
+     * @dev Constant value set to 25%.
+     */
+    uint256 public constant ICO_PHASE3_BONUS_PERCENTAGE = 25;
+
+    /**
+     * @notice Total amount of tokens available in the Pre-ICO phase.
+     * @dev Constant value set to 5.0 billion tokens.
+     */
+    uint256 public constant PRE_ICO_AMOUNT = 5000 * (10 ** 6) * (10 ** 18);
+
+    /**
+     * @notice Total amount of tokens available in the ICO Phase 1.
+     * @dev Constant value set to 7.0 billion tokens.
+     */
+    uint256 public constant ICO_PHASE1_AMOUNT = 7000 * (10 ** 6) * (10 ** 18);
+
+    /**
+     * @notice Total amount of tokens available in the ICO Phase 2.
+     * @dev Constant value set to 10.5 billion tokens.
+     */
+    uint256 public constant ICO_PHASE2_AMOUNT = 10500 * (10 ** 6) * (10 ** 18);
+
+    /**
+     * @notice Total amount of tokens available in the ICO Phase 3.
+     * @dev Constant value set to 11.875 billion tokens.
+     */
+    uint256 public constant ICO_PHASE3_AMOUNT = 11875 * (10 ** 6) * (10 ** 18);
+
+    /**
+     * @notice Limit of tokens for the Pre-ICO phase.
+     * @dev Constant value set to the total amount of tokens in the Pre-ICO phase.
+     */
+    uint256 public constant PRE_ICO_LIMIT = PRE_ICO_AMOUNT;
+
+    /**
+     * @notice Limit of tokens for the ICO Phase 1.
+     * @dev Constant value set to the sum of Pre-ICO and ICO Phase 1 tokens.
+     */
+    uint256 public constant ICO_PHASE1_LIMIT = PRE_ICO_LIMIT + ICO_PHASE1_AMOUNT;
+
+    /**
+     * @notice Limit of tokens for the ICO Phase 2.
+     * @dev Constant value set to the sum of Pre-ICO, ICO Phase 1, and ICO Phase 2 tokens.
+     */
+    uint256 public constant ICO_PHASE2_LIMIT = ICO_PHASE1_LIMIT + ICO_PHASE2_AMOUNT;
+
+    /**
+     * @notice Limit of tokens for the ICO Phase 3.
+     * @dev Constant value set to the sum of all tokens in all phases.
+     */
+    uint256 public constant ICO_PHASE3_LIMIT = ICO_PHASE2_LIMIT + ICO_PHASE3_AMOUNT;
+
+    /**
+     * @notice Hard cap of the ICO.
+     * @dev Constant value set to 230 billion tokens.
+     */
+    uint256 public constant HARD_CAP = 230 * (10 ** 9) * (10 ** 18);
+
+    /**
+     * @notice Price of ETH in Euro cents.
+     * @dev Used to calculate the amount of BEAT tokens to be minted.
+     */
+    uint256 public ethPriceInEuroCent;
+
+    /**
+     * @notice Event emitted when BEAT tokens are purchased.
+     * @dev Logs the purchaser, beneficiary, ETH amount, and BEAT amount.
+     */
+    event BeatTokenPurchased(address indexed purchaser, address indexed beneficiary, uint256 ethWeiAmount, uint256 beatWeiAmount);
+
+    /**
+     * @notice Event emitted when the ETH price in Euro cents is changed.
+     * @dev Logs the new ETH price.
+     */
+    event BeatTokenEthPriceChanged(uint256 newPrice);
+
+    /**
+     * @notice Event emitted when the Pre-ICO phase starts.
+     * @dev Logs the start of the Pre-ICO phase.
+     */
+    event BeatTokenPreIcoStarted();
+
+    /**
+     * @notice Event emitted when the ICO Phase 1 starts.
+     * @dev Logs the start of the ICO Phase 1.
+     */
+    event BeatTokenIcoPhase1Started();
+
+    /**
+     * @notice Event emitted when the ICO Phase 2 starts.
+     * @dev Logs the start of the ICO Phase 2.
+     */
+    event BeatTokenIcoPhase2Started();
+
+    /**
+     * @notice Event emitted when the ICO Phase 3 starts.
+     * @dev Logs the start of the ICO Phase 3.
+     */
+    event BeatTokenIcoPhase3Started();
+
+    /**
+     * @notice Event emitted when the ICO is finalized.
+     * @dev Logs the finalization of the ICO.
+     */
+    event BeatTokenIcoFinalized();
+
+    /**
+     * @notice Constructor to initialize the crowdsale contract.
+     * @dev Sets up the initial state and parameters of the contract.
+     * @param _ethTeamWallet The wallet address for the ETH team.
+     * @param _beatTeamWallet The wallet address for the BEAT team.
+     */
+    function BeatTokenCrowdsale(address _ethTeamWallet, address _beatTeamWallet) public {
+        require(_ethTeamWallet != address(0));
+        require(_beatTeamWallet != address(0));
+
+        token = new BeatToken(HARD_CAP);
+        stage = Stages.Deployed;
+        ethTeamWallet = _ethTeamWallet;
+        beatTeamWallet = _beatTeamWallet;
+        ethPriceInEuroCent = 0;
+
+        contractStartTime = 0;
+        preIcoEndTime = 0;
+        icoPhase1EndTime = 0;
+        icoPhase2EndTime = 0;
+        icoPhase3EndTime = 0;
+        contractEndTime = 0;
+    }
+
+    /**
+     * @notice Function to set the ETH price in Euro cents.
+     * @dev Only the owner can call this function.
+     * @param _ethPriceInEuroCent The new ETH price in Euro cents.
+     */
+    function setEtherPriceInEuroCent(uint256 _ethPriceInEuroCent) onlyOwner public {
+        require(_ethPriceInEuroCent > 0);
+        ethPriceInEuroCent = _ethPriceInEuroCent;
+        BeatTokenEthPriceChanged(_ethPriceInEuroCent);
+    }
+
+    /**
+     * @notice Function to start the ICO.
+     * @dev Only the owner can call this function.
+     */
+    function start() onlyOwner public {
+        require(stage == Stages.Deployed);
+        require(ethPriceInEuroCent > 0);
+
+        contractStartTime = now;
+        preIcoEndTime = contractStartTime.add(PRE_ICO_PERIOD);
+        icoPhase1EndTime = preIcoEndTime.add(ICO_PHASE1_PERIOD);
+        icoPhase2EndTime = icoPhase1EndTime.add(ICO_PHASE2_PERIOD);
+        icoPhase3EndTime = icoPhase2EndTime.add(ICO_PHASE3_PERIOD);
+        contractEndTime = icoPhase3EndTime;
+
+        stage = Stages.PreIco;
+        BeatTokenPreIcoStarted();
+    }
+
+    /**
+     * @notice Function to finalize the ICO.
+     * @dev Only the owner can call this function.
+     */
+    function finalize() onlyOwner public {
+        require(stage != Stages.Finalized);
+        require(stage == Stages.IcoEnded || now > contractEndTime);
+
+        stage = Stages.Finalized;
+
+        uint256 remainingTokens = HARD_CAP.sub(token.getTotalSupply());
+        token.mint(beatTeamWallet, remainingTokens);
+
+        BeatTokenIcoFinalized();
+    }
+
+    /**
+     * @notice Fallback function to allow buying tokens by sending ETH directly.
+     * @dev Calls the `buyTokens` function with the sender as the beneficiary.
+     */
+    function() payable public {
+        buyTokens(msg.sender);
+    }
+
+    /**
+     * @notice Function to buy BEAT tokens.
+     * @dev Ensures the ICO is in a valid phase, calculates the token amount, and mints the tokens.
+     * @param beneficiary The address to receive the BEAT tokens.
+     */
+    function buyTokens(address beneficiary) payable public {
+        require(beneficiary != address(0));
+        require(msg.value > 0);
+        require(isWithinValidIcoPhase());
+
+        uint256 ethWeiAmount = msg.value;
+        uint256 beatWeiAmount = calculateBeatWeiAmount(ethWeiAmount);
+        require(isWithinTokenAllocLimit(beatWeiAmount));
+
+        ethWeiRaised = ethWeiRaised.add(ethWeiAmount);
+        balanceOf[beneficiary] = balanceOf[beneficiary].add(beatWeiAmount);
+
+        token.mint(beneficiary, beatWeiAmount);
+        ethTeamWallet.transfer(ethWeiAmount);
+
+        determineCurrentStage(beatWeiAmount);
+
+        BeatTokenPurchased(msg.sender, beneficiary, ethWeiAmount, beatWeiAmount);
+    }
+
+    /**
+     * @notice Internal function to check if the ICO is in a valid phase.
+     * @dev Returns true if the ICO is in one of the valid phases.
+     * @return bool True if the ICO is in a valid phase, false otherwise.
+     */
+    function isWithinValidIcoPhase() internal view returns (bool) {
+        return (stage == Stages.PreIco || stage == Stages.IcoPhase1 || stage == Stages.IcoPhase2 || stage == Stages.IcoPhase3);
+    }
+
+    /**
+     * @notice Internal function to calculate the BEAT token amount based on the ETH amount.
+     * @dev Applies the bonus percentage based on the current ICO phase.
+     * @param ethWeiAmount The amount of ETH (in wei) sent.
+     * @return uint256 The calculated BEAT token amount.
+     */
+    function calculateBeatWeiAmount(uint256 ethWeiAmount) internal view returns (uint256) {
+        uint256 baseAmount = ethWeiAmount.mul(ethPriceInEuroCent); // Amount in EuroCents
+        uint256 bonusPercentage;
+
+        if (stage == Stages.PreIco) {
+            bonusPercentage = PRE_ICO_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase1) {
+            bonusPercentage = ICO_PHASE1_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase2) {
+            bonusPercentage = ICO_PHASE2_BONUS_PERCENTAGE;
+        } else if (stage == Stages.IcoPhase3) {
+            bonusPercentage = ICO_PHASE3_BONUS_PERCENTAGE;
+        }
+
+        return baseAmount.add(baseAmount.mul(bonusPercentage).div(100));
+    }
+
+    /**
+     * @notice Internal function to check if the token allocation is within the limit.
+     * @dev Ensures the total supply does not exceed the ICO phase limit.
+     * @param beatWeiAmount The amount of BEAT tokens to be minted.
+     * @return bool True if the token allocation is within the limit, false otherwise.
+     */
+    function isWithinTokenAllocLimit(uint256 beatWeiAmount) internal view returns (bool) {
+        uint256 currentTotalSupply = token.getTotalSupply();
+        uint256 potentialTotalSupply = currentTotalSupply.add(beatWeiAmount);
+
+        if (stage == Stages.PreIco) {
+            return potentialTotalSupply <= PRE_ICO_LIMIT;
+        } else if (stage == Stages.IcoPhase1) {
+            return potentialTotalSupply <= ICO_PHASE1_LIMIT;
+        } else if (stage == Stages.IcoPhase2) {
+            return potentialTotalSupply <= ICO_PHASE2_LIMIT;
+        } else if (stage == Stages.IcoPhase3) {
+            return potentialTotalSupply <= ICO_PHASE3_LIMIT;
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * @dev Updates the ICO stage based on token supply and time.
+     * @param beatWeiAmount Wei amount to be converted to tokens
+     * @dev Transitions between stages when:
+     *   - PreICO ends: supply > PRE_ICO_LIMIT or time exceeds PRE_ICO_PERIOD
+     *   - Phase 1 ends: supply > ICO_PHASE1_LIMIT or time exceeds phase duration
+     *   - Phase 2 ends: supply > ICO_PHASE2_LIMIT or time exceeds phase duration
+     *   - Phase 3 ends: supply reaches limit or time expires
+     * @dev Updates stage timestamps and emits corresponding events
+     */
+    function determineCurrentStage(uint256 beatWeiAmount) internal {
+        uint256 currentTotalSupply = token.getTotalSupply();
+        uint256 potentialTotalSupply = currentTotalSupply.add(beatWeiAmount);
+
+        if (stage == Stages.PreIco) {
+            if (potentialTotalSupply > PRE_ICO_LIMIT || now > preIcoEndTime) {
+                stage = Stages.IcoPhase1;
+                BeatTokenIcoPhase1Started();
+            }
+        } else if (stage == Stages.IcoPhase1) {
+            if (potentialTotalSupply > ICO_PHASE1_LIMIT || now > icoPhase1EndTime) {
+                stage = Stages.IcoPhase2;
+                BeatTokenIcoPhase2Started();
+            }
+        } else if (stage == Stages.IcoPhase2) {
+            if (potentialTotalSupply > ICO_PHASE2_LIMIT || now > icoPhase2EndTime) {
+                stage = Stages.IcoPhase3;
+                BeatTokenIcoPhase3Started();
+            }
+        } else if (stage == Stages.IcoPhase3) {
+            if (potentialTotalSupply >= ICO_PHASE3_LIMIT || now > icoPhase3EndTime) {
+                stage = Stages.IcoEnded;
+            }
+        }
+    }
+}
+```

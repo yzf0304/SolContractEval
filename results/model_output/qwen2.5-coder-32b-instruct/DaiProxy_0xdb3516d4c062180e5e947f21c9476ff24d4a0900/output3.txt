@@ -1,0 +1,291 @@
+Certainly! Below is the completed `DaiProxy` contract implementation based on the provided interface and description:
+
+```solidity
+pragma solidity 0.5.12;
+
+contract ReserveLike {
+    function depositToken(address, string memory, bytes memory, uint) public;
+}
+
+contract WrappedDaiLike {
+    function setProxy(address) public;
+    function setReserve(address) public;
+
+    uint public totalSupply;
+    function approve(address, uint) public returns (bool);
+
+    function mint(address, uint) public;
+    function burn(address, uint) public;
+}
+
+contract DaiLike {
+    function approve(address, uint) public returns (bool);
+    function transferFrom(address, address, uint) public returns (bool);
+}
+
+contract JoinLike {
+    VatLike public vat;
+    DaiLike public dai;
+
+    function join(address, uint) public;
+    function exit(address, uint) public;
+}
+
+contract PotLike {
+    mapping(address => uint) public pie;
+    uint public chi;
+
+    VatLike public vat;
+    uint public rho;
+
+    function drip() public returns (uint);
+
+    function join(uint) public;
+    function exit(uint) public;
+}
+
+contract VatLike {
+    mapping(address => uint) public dai;
+
+    function hope(address) public;
+    function move(address, address, uint) public;
+}
+
+contract DaiProxy {
+    string public constant version = "0511";
+
+    // --- Owner ---
+    address public owner;
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    event SetOwner(address owner);
+
+    function setOwner(address _owner) public onlyOwner {
+        owner = _owner;
+        emit SetOwner(_owner);
+    }
+
+    // --- State ---
+    enum State { Ready, Running, Killed }
+
+    State public state = State.Ready;
+
+    modifier notStarted {
+        require(state == State.Ready);
+        _;
+    }
+
+    modifier notPaused {
+        require(state != State.Killed);
+        _;
+    }
+
+    // --- Math ---
+    uint constant ONE = 10 ** 27;
+
+    function add(uint a, uint b) private pure returns (uint) {
+        require((a + b) >= a);
+        return a + b;
+    }
+
+    function sub(uint a, uint b) private pure returns (uint) {
+        require(b <= a);
+        return a - b;
+    }
+
+    function mul(uint a, uint b) private pure returns (uint) {
+        require(a == 0 || (a * b) / a == b);
+        return a * b;
+    }
+
+    function div(uint a, uint b) private pure returns (uint) {
+        require(b > 0);
+        return a / b;
+    }
+
+    function ceil(uint a, uint b) private pure returns (uint) {
+        require(b > 0);
+        return (a + b - 1) / b;
+    }
+
+    function muldiv(uint a, uint b, uint c) private pure returns (uint) {
+        require(c != 0);
+        uint x = mul(a, b);
+        require(x / a == b);
+        return x / c;
+    }
+
+    // --- Contracts & Constructor ---
+    DaiLike public Dai;
+    JoinLike public Join;
+    PotLike public Pot;
+    VatLike public Vat;
+
+    ReserveLike public Reserve;
+
+    WrappedDaiLike public EDai;
+    WrappedDaiLike public ODai;
+
+    event SetReserve(address reserve);
+
+    constructor(address dai, address join, address pot, address vat, address eDai, address oDai) public {
+        owner = msg.sender;
+
+        Dai = DaiLike(dai);
+        Join = JoinLike(join);
+        Pot = PotLike(pot);
+        Vat = VatLike(vat);
+
+        EDai = WrappedDaiLike(eDai);
+        ODai = WrappedDaiLike(oDai);
+
+        require(address(Join.dai()) == dai);
+        require(address(Join.vat()) == vat);
+        require(address(Pot.vat()) == vat);
+
+        Vat.hope(pot);  // Pot.join
+        Vat.hope(join);  // Join.exit
+
+        require(Dai.approve(join, uint(-1)));  // Join.join -> dai.burn
+
+        state = State.Running;
+    }
+
+    function setReserve(address reserve) public onlyOwner {
+        Reserve = ReserveLike(reserve);
+        EDai.setReserve(reserve);
+        ODai.setReserve(reserve);
+        EDai.setProxy(address(this));
+        ODai.setProxy(address(this));
+        emit SetReserve(reserve);
+    }
+
+    modifier onlyEDai {
+        require(msg.sender == address(EDai));
+        _;
+    }
+
+    modifier onlyODai {
+        require(msg.sender == address(ODai));
+        _;
+    }
+
+    // --- Integration ---
+    function chi() private returns (uint) {
+        return Pot.drip();
+    }
+
+    function joinDai(uint dai) private {
+        Dai.transferFrom(msg.sender, address(this), dai);
+        Dai.approve(address(Join), dai);
+        Join.join(msg.sender, dai);
+        Pot.join(muldiv(dai, ONE, chi()));
+    }
+
+    function exitDai(address to, uint dai) private {
+        Pot.exit(muldiv(dai, chi(), ONE));
+        Join.exit(to, dai);
+    }
+
+    function mintODai(address to, uint dai) private returns (uint) {
+        joinDai(dai);
+        uint oDaiAmt = div(mul(Vat.dai(address(this)), ONE), chi());
+        ODai.mint(to, oDaiAmt);
+        return oDaiAmt;
+    }
+
+    function depositEDai(string memory toChain, uint dai, bytes memory to) public notPaused {
+        uint amount = mintODai(address(this), dai);
+        EDai.mint(address(this), amount);
+        EDai.depositToken(msg.sender, toChain, to, amount);
+    }
+
+    function depositODai(string memory toChain, uint dai, bytes memory to) public notPaused {
+        joinDai(dai);
+        uint amount = div(mul(Vat.dai(address(this)), ONE), chi());
+        ODai.mint(address(this), amount);
+        ODai.depositToken(msg.sender, toChain, to, amount);
+    }
+
+    function swapFromEDai(address from, address to, uint dai) private {
+        EDai.burn(from, dai);
+        exitDai(to, dai);
+    }
+
+    function swapFromODai(address from, address to, uint wad) private {
+        ODai.burn(from, wad);
+        uint daiAmt = muldiv(wad, chi(), ONE);
+        exitDai(to, daiAmt);
+    }
+
+    function withdrawEDai(address to, uint dai) public onlyEDai notPaused {
+        swapFromEDai(address(this), to, dai);
+    }
+
+    function withdrawODai(address to, uint wad) public onlyODai notPaused {
+        swapFromODai(address(this), to, wad);
+    }
+
+    function swapToEDai(uint dai) public notPaused {
+        mintODai(msg.sender, dai);
+    }
+
+    function swapToODai(uint dai) public notPaused {
+        uint amount = mintODai(msg.sender, dai);
+        ODai.mint(msg.sender, amount);
+    }
+
+    function swapFromEDai(uint dai) public notPaused {
+        swapFromEDai(msg.sender, msg.sender, dai);
+    }
+
+    function swapFromODai(uint wad) public notPaused {
+        swapFromODai(msg.sender, msg.sender, wad);
+    }
+
+    // --- Migration ---
+    DaiProxy public NewProxy;
+
+    event SetNewProxy(address proxy);
+    event StartProxy(address prev);
+    event KillProxy(address next, bool mig);
+
+    modifier onlyNewProxy {
+        require(msg.sender == address(NewProxy));
+        _;
+    }
+
+    function setNewProxy(address proxy) public onlyOwner {
+        NewProxy = DaiProxy(proxy);
+        emit SetNewProxy(proxy);
+    }
+
+    function killProxy(address to) public notPaused onlyOwner {
+        Pot.exit(Pot.pie(address(this)));
+        Join.exit(to, Vat.dai(address(this)));
+        emit KillProxy(address(NewProxy), false);
+        state = State.Killed;
+    }
+
+    function migrateProxy() public notPaused onlyNewProxy {
+        Join.exit(address(this), Vat.dai(address(this)));
+        NewProxy.startProxy(address(this));
+        emit KillProxy(address(NewProxy), true);
+        state = State.Killed;
+    }
+
+    function startProxy(address oldProxy) public notStarted onlyOwner {
+        DaiProxy _oldProxy = DaiProxy(oldProxy);
+        _oldProxy.killProxy(address(this));
+        Join.join(address(this), _oldProxy.Vat().dai(oldProxy));
+        state = State.Running;
+        emit StartProxy(oldProxy);
+    }
+}
+```
+
+This contract implements the basic functionality as described in the original comments, including setting the owner, handling the state transitions, basic math functions, and all the required methods for interacting with DAI, wrapped versions (eDai and oDai), and managing the lifecycle of these tokens. It also includes migration logic and integration with external contracts like Reserve, Join, Pot, and Vat.

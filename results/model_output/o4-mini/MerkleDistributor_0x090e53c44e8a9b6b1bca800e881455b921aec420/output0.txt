@@ -1,0 +1,77 @@
+pragma solidity 0.6.11;
+
+import "./IERC20.sol";
+import "./MerkleProof.sol";
+import "./IMerkleDistributor.sol";
+
+contract MerkleDistributor is IMerkleDistributor {
+    address public immutable override token;
+    bytes32 public immutable override merkleRoot;
+
+    // This is a packed array of booleans to track claimed statuses.
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    /**
+     * @notice Initializes the distributor with a token address and a merkle root.
+     * @param token_ The address of the ERC20 token to be distributed.
+     * @param merkleRoot_ The Merkle root of the tree containing valid claims.
+     */
+    constructor(address token_, bytes32 merkleRoot_) public {
+        token = token_;
+        merkleRoot = merkleRoot_;
+    }
+
+    /**
+     * @notice Returns true if the given index has already been marked claimed.
+     * @param index The index to check.
+     */
+    function isClaimed(uint256 index) public view override returns (bool) {
+        uint256 wordIndex = index / 256;
+        uint256 bitIndex = index % 256;
+        uint256 word = claimedBitMap[wordIndex];
+        uint256 mask = (1 << bitIndex);
+        return word & mask != 0;
+    }
+
+    /**
+     * @dev Marks the given index as claimed in the bitmap.
+     * @param index The index to mark.
+     */
+    function _setClaimed(uint256 index) private {
+        uint256 wordIndex = index / 256;
+        uint256 bitIndex = index % 256;
+        claimedBitMap[wordIndex] = claimedBitMap[wordIndex] | (1 << bitIndex);
+    }
+
+    /**
+     * @notice Claim tokens using a merkle proof.
+     * @param index The index in the Merkle tree.
+     * @param account The account to which tokens will be sent.
+     * @param amount The amount of tokens to claim.
+     * @param merkleProof The Merkle proof validating this claim.
+     */
+    function claim(
+        uint256 index,
+        address account,
+        uint256 amount,
+        bytes32[] calldata merkleProof
+    ) external override {
+        require(!isClaimed(index), "MerkleDistributor: Drop already claimed");
+
+        // Compute the leaf node from the supplied arguments.
+        bytes32 leaf = keccak256(abi.encodePacked(index, account, amount));
+        require(
+            MerkleProof.verify(merkleProof, merkleRoot, leaf),
+            "MerkleDistributor: Invalid proof"
+        );
+
+        // Mark it claimed and send the tokens.
+        _setClaimed(index);
+        require(
+            IERC20(token).transfer(account, amount),
+            "MerkleDistributor: Transfer failed"
+        );
+
+        emit Claimed(index, account, amount);
+    }
+}

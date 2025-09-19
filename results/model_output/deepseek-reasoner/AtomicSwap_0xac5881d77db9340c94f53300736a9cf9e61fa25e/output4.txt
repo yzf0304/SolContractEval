@@ -1,0 +1,221 @@
+Here is the complete implementation of the AtomicSwap contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.5.16;
+
+interface IERC20 {
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+}
+
+library Address {
+    function isContract(address account) internal view returns (bool) {
+        uint256 size;
+        assembly { size := extcodesize(account) }
+        return size > 0;
+    }
+}
+
+contract ReentrancyGuard {
+    bool private _notEntered;
+
+    constructor () internal {
+        _notEntered = true;
+    }
+
+    modifier nonReentrant() {
+        require(_notEntered, "ReentrancyGuard: reentrant call");
+        _notEntered = false;
+        _;
+        _notEntered = true;
+    }
+}
+
+contract AtomicSwap is ReentrancyGuard {
+    using SafeMath for uint;
+    using SafeERC20 for IERC20;
+
+    enum State { Empty, Initiated, Redeemed, Refunded }
+
+    struct Swap {
+        bytes32 hashedSecret;
+        bytes32 secret;
+        address contractAddr;
+        address participant;
+        address payable initiator;
+        uint refundTimestamp;
+        uint countdown;
+        uint value;
+        uint payoff;
+        bool active;
+        State state;
+    }
+    
+    event Initiated(
+        bytes32 indexed _hashedSecret,
+        address indexed _contract,
+        address indexed _participant,
+        address _initiator,
+        uint _refundTimestamp,
+        uint _countdown,
+        uint _value,
+        uint _payoff,
+        bool _active
+    );
+    event Added(
+        bytes32 indexed _hashedSecret,
+        address _sender,
+        uint _value  
+    );
+    event Activated(
+        bytes32 indexed _hashedSecret
+    );
+    event Redeemed(
+        bytes32 indexed _hashedSecret,
+        bytes32 _secret
+    );
+    event Refunded(
+        bytes32 indexed _hashedSecret
+    );
+
+    mapping(bytes32 => Swap) public swaps;
+
+    modifier onlyByInitiator(bytes32 _hashedSecret) {
+        require(msg.sender == swaps[_hashedSecret].initiator, "sender is not the initiator");
+        _;
+    }
+
+    modifier isInitiatable(bytes32 _hashedSecret, address _participant, uint _refundTimestamp, uint _countdown) {
+        require(_participant != address(0), "invalid participant address");
+        require(swaps[_hashedSecret].state == State.Empty, "swap for this hash is initiated");
+        require(block.timestamp <= _refundTimestamp, "invalid refundTimestamp");
+        require(_countdown < _refundTimestamp, "invalid countdown");
+        _;
+    }
+    
+    modifier isInitiated(bytes32 _hashedSecret) {
+        require(swaps[_hashedSecret].state == State.Initiated, "swap for this hash is empty or spent");
+        _;
+    }
+
+    modifier isAddable(bytes32 _hashedSecret) {
+        require(block.timestamp <= swaps[_hashedSecret].refundTimestamp, "refundTimestamp has come");
+        _;
+    }
+        
+    modifier isActivated(bytes32 _hashedSecret) {
+        require(swaps[_hashedSecret].active, "swap is not active");
+        _;
+    }    
+    
+    modifier isNotActivated(bytes32 _hashedSecret) {
+        require(!swaps[_hashedSecret].active, "swap is active");
+        _;
+    }
+
+    modifier isRedeemable(bytes32 _hashedSecret, bytes32 _secret) {
+        require(block.timestamp <= swaps[_hashedSecret].refundTimestamp, "refundTimestamp has come");
+        require(sha256(abi.encodePacked(sha256(abi.encodePacked(_secret))) == _hashedSecret, "secret is not correct");
+        _;
+    }
+
+    modifier isRefundable(bytes32 _hashedSecret) {
+        require(block.timestamp > swaps[_hashedSecret].refundTimestamp, "refundTimestamp has not come");
+        _;
+    }
+
+    function initiate(bytes32 _hashedSecret, address _contract, address _participant, uint _refundTimestamp, uint _countdown, uint _value, uint _payoff, bool _active)
+        public nonReentrant isInitiatable(_hashedSecret, _participant, _refundTimestamp, _countdown)
+    {
+        IERC20 token = IERC20(_contract);
+        uint totalAmount = _value.add(_payoff);
+        token.safeTransferFrom(msg.sender, address(this), totalAmount);
+
+        swaps[_hashedSecret] = Swap({
+            hashedSecret: _hashedSecret,
+            secret: bytes32(0),
+            contractAddr: _contract,
+            participant: _participant,
+            initiator: msg.sender,
+            refundTimestamp: _refundTimestamp,
+            countdown: _countdown,
+            value: _value,
+            payoff: _payoff,
+            active: _active,
+            state: State.Initiated
+        });
+
+        emit Initiated(
+            _hashedSecret,
+            _contract,
+            _participant,
+            msg.sender,
+            _refundTimestamp,
+            _countdown,
+            _value,
+            _payoff,
+            _active
+        );
+    }
+
+    function add(bytes32 _hashedSecret, uint _value)
+        public nonReentrant isInitiated(_hashedSecret) isAddable(_hashedSecret)    
+    {
+        Swap storage swap = swaps[_hashedSecret];
+        IERC20 token = IERC20(swap.contractAddr);
+        token.safeTransferFrom(msg.sender, address(this), _value);
+        swap.value = swap.value.add(_value);
+        emit Added(_hashedSecret, msg.sender, _value);
+    }
+
+    function activate(bytes32 _hashedSecret)
+        public nonReentrant isInitiated(_hashedSecret) isNotActivated(_hashedSecret) onlyByInitiator(_hashedSecret)
+    {
+        swaps[_hashedSecret].active = true;
+        emit Activated(_hashedSecret);
+    }
+
+    function redeem(bytes32 _hashedSecret, bytes32 _secret) 
+        public nonReentrant isInitiated(_hashedSecret) isActivated(_hashedSecret) isRedeemable(_hashedSecret, _secret) 
+    {
+        Swap storage swap = swaps[_hashedSecret];
+        swap.secret = _secret;
+        swap.state = State.Redeemed;
+        swap.active = false;
+
+        IERC20 token = IERC20(swap.contractAddr);
+        uint totalAmount = swap.value.add(swap.payoff);
+        token.safeTransfer(swap.participant, totalAmount);
+
+        emit Redeemed(_hashedSecret, _secret);
+    }
+
+    function refund(bytes32 _hashedSecret)
+        public nonReentrant isInitiated(_hashedSecret) isRefundable(_hashedSecret) 
+    {
+        Swap storage swap = swaps[_hashedSecret];
+        swap.state = State.Refunded;
+        swap.active = false;
+
+        IERC20 token = IERC20(swap.contractAddr);
+        uint totalAmount = swap.value.add(swap.payoff);
+        token.safeTransfer(swap.initiator, totalAmount);
+
+        emit Refunded(_hashedSecret);
+    }
+}
+```
+
+This implementation:
+1. Uses SafeMath and SafeERC20 for secure operations
+2. Implements all required state transitions and checks
+3. Properly handles ERC20 token transfers
+4. Enforces atomic swap logic with proper time-based conditions
+5. Includes all necessary modifiers and security checks
+6. Follows the exact compiler version and dependency requirements specified
+7. Maintains strict non-reentrancy protection
+
+The contract allows secure atomic swaps between parties using a hash-time-locked mechanism with proper fund management and state transitions.

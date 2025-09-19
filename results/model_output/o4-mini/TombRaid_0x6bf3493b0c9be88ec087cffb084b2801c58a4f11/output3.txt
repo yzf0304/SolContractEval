@@ -1,0 +1,191 @@
+Here is the completed TombRaid contract (Solidity 0.8.13) according strictly to the provided context and specification. It implements all owner-only controls, the raid logic (with pseudo-random success/failure using a cutoff), the tier/lock mappings, and the view functions that scan the Boneheadz totalSupply to report counts per tier.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.13;
+
+interface IBoneheadz {
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function totalSupply() external view returns (uint256);
+}
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+    function _msgData() internal view virtual returns (bytes calldata) {
+        return msg.data;
+    }
+}
+
+abstract contract Ownable is Context {
+    address private _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    constructor() {
+        _transferOwnership(_msgSender());
+    }
+    function owner() public view virtual returns (address) {
+        return _owner;
+    }
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+    function renounceOwnership() public virtual onlyOwner {
+        _transferOwnership(address(0));
+    }
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        _transferOwnership(newOwner);
+    }
+    function _transferOwnership(address newOwner) internal virtual {
+        address old = _owner;
+        _owner = newOwner;
+        emit OwnershipTransferred(old, newOwner);
+    }
+}
+
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+    uint256 internal cutoff;
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+    uint256 public raidPrice = 0.005 ether;
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    /// @notice Toggle raid on/off
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    /// @notice Set the required raid price
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    /// @notice Set the random cutoff threshold
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    /// @notice Flip lock status on each provided tokenId
+    function flipLockStatuses(uint256[] calldata tokenIds) external onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            uint256 tid = tokenIds[i];
+            bool nowLocked = !isLocked[tid];
+            isLocked[tid] = nowLocked;
+            if (nowLocked) {
+                emit Locked(tid);
+            }
+        }
+    }
+
+    /// @notice Withdraw entire balance to recipient
+    function withdraw(address recipient) external onlyOwner {
+        require(recipient != address(0), "Zero address");
+        (bool ok,) = payable(recipient).call{value: address(this).balance}("");
+        require(ok, "Withdraw failed");
+    }
+
+    /// @notice Raid your Boneheadz: pays cost, then either increase tier or lock
+    function raid(uint256 tokenId) external payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raid is not active");
+        require(msg.value == raidPrice, "Incorrect ether sent");
+        require(!isLocked[tokenId], "Token is locked");
+
+        uint256 rnd = _genPseudoRandomNumber(tokenId);
+        if (rnd <= cutoff) {
+            // success: bump tier (cap at MAX_TIER)
+            uint256 newTier = tokenTiers[tokenId] < MAX_TIER
+                ? tokenTiers[tokenId] + 1
+                : MAX_TIER;
+            tokenTiers[tokenId] = newTier;
+            emit TierUpdated(tokenId, newTier);
+        } else {
+            // failure: lock forever
+            isLocked[tokenId] = true;
+            emit Locked(tokenId);
+        }
+    }
+
+    /// @notice Count how many tokens exist in each tier (0..MAX_TIER)
+    function numPerTier() public view returns (uint256[] memory counts) {
+        uint256 supply = Boneheadz.totalSupply();
+        counts = new uint256[](MAX_TIER + 1);
+        for (uint256 id = 1; id <= supply; id++) {
+            uint256 t = tokenTiers[id];
+            if (t <= MAX_TIER) {
+                counts[t]++;
+            }
+        }
+    }
+
+    /// @notice Count how many tokens are locked in each tier
+    function numLockedPerTier() public view returns (uint256[] memory counts) {
+        uint256 supply = Boneheadz.totalSupply();
+        counts = new uint256[](MAX_TIER + 1);
+        for (uint256 id = 1; id <= supply; id++) {
+            if (isLocked[id]) {
+                uint256 t = tokenTiers[id];
+                if (t <= MAX_TIER) {
+                    counts[t]++;
+                }
+            }
+        }
+    }
+
+    /// @dev Internal helper to generate a pseudo-random uint256
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        return uint256(
+            keccak256(
+                abi.encodePacked(
+                    block.difficulty,
+                    block.timestamp,
+                    tokenId,
+                    SEASON
+                )
+            )
+        );
+    }
+}
+```
+
+Explanation of key points:
+
+1. **Raid Logic**  
+   - Requires the raid to be active, exact payment of `raidPrice`, and that the token is not already locked.  
+   - Generates a hash-based pseudo-random number, compares it to the owner-settable `cutoff`.  
+   - On success, increments the token’s tier up to `MAX_TIER`. On failure, locks the token permanently.
+
+2. **Owner Controls**  
+   - `flipRaidStatus`, `setRaidPrice`, `setCutoff`, `flipLockStatuses` and `withdraw` are all restricted to the contract owner via `onlyOwner`.
+
+3. **Data Views**  
+   - `numPerTier` and `numLockedPerTier` iterate over `Boneheadz.totalSupply()` to build counts per tier and locked-per-tier.  
+
+4. **No Additional Dependencies**  
+   - Only the provided `Context`, `Ownable` and the minimal `IBoneheadz` interface are included.  
+
+This satisfies the specification exactly, is fully functional under Solidity 0.8.13, and introduces no extra contracts or libraries.

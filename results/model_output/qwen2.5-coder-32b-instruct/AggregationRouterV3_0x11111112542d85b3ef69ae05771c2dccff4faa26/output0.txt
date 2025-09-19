@@ -1,0 +1,156 @@
+Below is the complete implementation of the `AggregationRouterV3` contract based on the provided context and description. The implementation includes the logic for the `discountedSwap`, `swap`, `rescueFunds`, and `destroy` functions.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.6.12;
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    IChi private immutable chiToken;
+
+    constructor(IChi _chiToken) public {
+        chiToken = _chiToken;
+    }
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     * @dev This function calls the `swap` function internally and handles CHI token burning based on the provided flags.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     * @return chiSpent The amount of CHI tokens burned.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 chiBefore = chiToken.balanceOf(address(this));
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+        uint256 chiAfter = chiToken.balanceOf(address(this));
+        
+        if (desc.flags & _BURN_FROM_MSG_SENDER != 0) {
+            chiSpent = chiBefore.sub(chiAfter);
+            chiToken.burnFrom(desc.srcReceiver, chiSpent);
+        } else if (desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+            chiSpent = chiBefore.sub(chiAfter);
+            chiToken.burnFrom(tx.origin, chiSpent);
+        } else {
+            chiSpent = 0;
+        }
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     * @dev This function checks the validity of the input parameters and performs the swap using the specified aggregation executor.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        require(address(caller) != address(0), "AggregationRouterV3: caller is zero address");
+        require(address(desc.srcToken) != address(0), "AggregationRouterV3: srcToken is zero address");
+        require(address(desc.dstToken) != address(0), "AggregationRouterV3: dstToken is zero address");
+        require(desc.amount > 0, "AggregationRouterV3: amount is zero");
+        require(desc.minReturnAmount > 0, "AggregationRouterV3: minReturnAmount is zero");
+
+        if (desc.flags & _REQUIRES_EXTRA_ETH != 0) {
+            require(msg.value > 0, "AggregationRouterV3: requires extra ETH");
+        }
+
+        _permit(desc.srcToken, desc.amount, desc.permit);
+
+        if (desc.flags & _SHOULD_CLAIM != 0) {
+            desc.srcToken.universalTransferFrom(desc.srcReceiver, address(this), desc.amount);
+        }
+
+        if (desc.flags & _PARTIAL_FILL != 0) {
+            caller.callBytes{value: msg.value}(data);
+            returnAmount = desc.dstToken.balanceOf(desc.dstReceiver);
+        } else {
+            uint256 balanceBefore = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+            caller.callBytes{value: msg.value}(data);
+            uint256 balanceAfter = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+            returnAmount = balanceAfter.sub(balanceBefore);
+        }
+
+        require(returnAmount >= desc.minReturnAmount, "AggregationRouterV3: minReturnAmount not reached");
+
+        emit Swapped(msg.sender, desc.srcToken, desc.dstToken, desc.dstReceiver, desc.amount, returnAmount);
+
+        gasLeft = gasleft();
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     * @dev This function transfers the specified amount of a given token to the owner.
+     * @param token The token to be rescued.
+     * @param amount The amount of the token to be transferred.
+     */
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        require(address(token) != address(0), "AggregationRouterV3: token is zero address");
+        token.universalTransfer(owner(), amount);
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send any remaining ETH to the owner.
+     * @dev This function self-destructs the contract and sends the remaining ETH to the owner.
+     */
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```
+
+### Key Points:
+- **discountedSwap** function includes logic to burn CHI tokens based on the flags.
+- **swap** function handles the actual swapping of tokens and checks for minimum return amounts.
+- **rescueFunds** allows the owner to withdraw any accidentally sent tokens.
+- **destroy** function allows the owner to terminate the contract and reclaim any remaining funds.
+
+This implementation assumes that the `IChi` interface is correctly implemented and available in the context where `AggregationRouterV3` is deployed.

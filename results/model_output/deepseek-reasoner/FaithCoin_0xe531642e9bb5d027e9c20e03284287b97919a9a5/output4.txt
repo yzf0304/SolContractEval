@@ -1,0 +1,134 @@
+Here is the complete implementation of the FaithCoin contract based on the provided context and specifications:
+
+```solidity
+pragma solidity ^0.4.19;
+
+contract ForeignToken {
+    function balanceOf(address _owner) public constant returns (uint256);
+    function transfer(address _to, uint256 _value) public returns (bool);
+}
+
+contract ERC20Basic {
+    uint256 public totalSupply;
+    function balanceOf(address who) public constant returns (uint256);
+    function transfer(address to, uint256 value) public returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+
+contract ERC20 is ERC20Basic {
+    function allowance(address owner, address spender) public constant returns (uint256);
+    function transferFrom(address from, address to, uint256 value) public returns (bool);
+    function approve(address spender, uint256 value) public returns (bool);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+contract FaithCoin is ERC20 {
+    address owner = msg.sender;
+    mapping (address => uint256) balances;
+    mapping (address => mapping (address => uint256)) allowed;
+    uint256 public totalSupply = 25000000 * 10**8;
+    bool public distributionFinished = false;
+    
+    function name() public constant returns (string) { return "FaithCoin"; }
+    function symbol() public constant returns (string) { return "FAITH"; }
+    function decimals() public constant returns (uint8) { return 8; }
+
+    event DistrFinished();
+
+    modifier canDistr() {
+        require(!distributionFinished);
+        _;
+    }
+
+    function FaithCoin() public {
+        owner = msg.sender;
+        balances[msg.sender] = totalSupply;
+    }
+
+    modifier onlyOwner { 
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        owner = newOwner;
+    }
+
+    function getEthBalance(address _addr) constant public returns(uint) {
+        return _addr.balance;
+    }
+
+    function distributeFAITH(address[] addresses, uint256 _value, uint256 _ethbal) onlyOwner canDistr public {
+        for (uint i = 0; i < addresses.length; i++) {
+            if (addresses[i].balance >= _ethbal) {
+                require(balances[owner] >= _value);
+                balances[owner] -= _value;
+                balances[addresses[i]] += _value;
+                Transfer(owner, addresses[i], _value);
+            }
+        }
+    }
+
+    function balanceOf(address _owner) constant public returns (uint256) {
+        return balances[_owner];
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        assert(msg.data.length >= size + 4);
+        _;
+    }
+
+    function transfer(address _to, uint256 _amount) onlyPayloadSize(2 * 32) public returns (bool success) {
+        require(balances[msg.sender] >= _amount);
+        balances[msg.sender] -= _amount;
+        balances[_to] += _amount;
+        Transfer(msg.sender, _to, _amount);
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _amount) onlyPayloadSize(3 * 32) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _amount);
+        require(balances[_from] >= _amount);
+        balances[_from] -= _amount;
+        allowed[_from][msg.sender] -= _amount;
+        balances[_to] += _amount;
+        Transfer(_from, _to, _amount);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        Approval(msg.sender, _spender, _value);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) constant public returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    function finishDistribution() onlyOwner public returns (bool) {
+        distributionFinished = true;
+        DistrFinished();
+        return true;
+    }
+
+    function withdrawForeignTokens(address _tokenContract) onlyOwner public returns (bool) {
+        ForeignToken token = ForeignToken(_tokenContract);
+        uint256 amount = token.balanceOf(address(this));
+        require(token.transfer(owner, amount));
+        return true;
+    }
+}
+```
+
+This implementation includes all required ERC20 functionality along with the additional features specified in the original context. Key features include:
+
+1. ERC20 compliance with name, symbol, and decimals
+2. Ownership management with transferOwnership
+3. Controlled token distribution with minimum ETH balance requirement
+4. Protection against short address attacks
+5. Ability to withdraw foreign tokens sent to the contract
+6. Distribution finalization control
+7. Custom token distribution mechanism
+
+The contract maintains compatibility with Solidity 0.4.19 syntax and follows all specifications from the original problem statement.

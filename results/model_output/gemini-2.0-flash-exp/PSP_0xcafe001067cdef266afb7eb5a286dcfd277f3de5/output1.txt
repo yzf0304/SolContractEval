@@ -1,0 +1,506 @@
+```solidity
+pragma solidity ^0.5.17;
+
+/**
+ * @title PSP Token Contract
+ * @notice This contract implements the ERC-20 standard with additional features such as minting, delegation, and voting.
+ * @dev The contract includes functionalities for token management, minting, and voting. It also supports EIP-712 for secure off-chain approvals.
+ */
+contract PSP {
+    using SafeMath for uint256;
+
+    /// @notice EIP-20 token name for this token
+    string public constant name = "ParaSwap";
+
+    /// @notice EIP-20 token symbol for this token
+    string public constant symbol = "PSP";
+
+    /// @notice EIP-20 token decimals for this token
+    uint8 public constant decimals = 18;
+
+    /// @notice Total number of tokens in circulation
+    uint public totalSupply = 2_000_000_000e18; // 2 billion PSP
+
+    /// @notice Address which may mint new tokens
+    address public minter;
+
+    /// @notice The timestamp after which minting may occur
+    uint public mintingAllowedAfter;
+
+    /// @notice Minimum time between mints
+    uint32 public constant minimumTimeBetweenMints = 1 days * 365;
+
+    /// @notice Cap on the percentage of totalSupply that can be minted at each mint
+    uint8 public constant mintCap = 2;
+
+    /// @notice Allowance amounts on behalf of others
+    mapping (address => mapping (address => uint96)) internal allowances;
+
+    /// @notice Official record of token balances for each account
+    mapping (address => uint96) internal balances;
+
+    /// @notice A record of each accounts delegate
+    mapping (address => address) public delegates;
+
+    /// @notice A checkpoint for marking number of votes from a given block
+    struct Checkpoint {
+        uint32 fromBlock;
+        uint96 votes;
+    }
+
+    /// @notice A record of votes checkpoints for each account, by index
+    mapping (address => mapping (uint32 => Checkpoint)) public checkpoints;
+
+    /// @notice The number of checkpoints for each account
+    mapping (address => uint32) public numCheckpoints;
+
+    /// @notice The EIP-712 typehash for the contract's domain
+    bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
+
+    /// @notice The EIP-712 typehash for the delegation struct used by the contract
+    bytes32 public constant DELEGATION_TYPEHASH = keccak256("Delegation(address delegatee,uint256 nonce,uint256 expiry)");
+
+    /// @notice The EIP-712 typehash for the permit struct used by the contract
+    bytes32 public constant PERMIT_TYPEHASH = keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+
+    /// @notice A record of states for signing / validating signatures
+    mapping (address => uint) public nonces;
+
+    /// @notice An event thats emitted when the minter address is changed
+    event MinterChanged(address minter, address newMinter);
+
+    /// @notice An event thats emitted when an account changes its delegate
+    event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
+
+    /// @notice An event thats emitted when a delegate account's vote balance changes
+    event DelegateVotesChanged(address indexed delegate, uint previousBalance, uint newBalance);
+
+    /// @notice The standard EIP-20 transfer event
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+
+    /// @notice The standard EIP-20 approval event
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+
+    /**
+     * @notice Construct a new PSP token
+     * @param account The initial account to grant all the tokens
+     * @param minter_ The account with minting ability
+     * @param mintingAllowedAfter_ The timestamp after which minting may occur
+     */
+    constructor(address account, address minter_, uint mintingAllowedAfter_) public {
+        require(mintingAllowedAfter_ >= block.timestamp, "PSP::constructor: minting can only begin after deployment");
+
+        balances[account] = uint96(totalSupply);
+        emit Transfer(address(0), account, totalSupply);
+        minter = minter_;
+        emit MinterChanged(address(0), minter);
+        mintingAllowedAfter = mintingAllowedAfter_;
+    }
+
+    /**
+     * @notice Change the minter address
+     * @param minter_ The address of the new minter
+     */
+    function setMinter(address minter_) external {
+        require(msg.sender == minter, "PSP::setMinter: only the minter can change the minter");
+        emit MinterChanged(minter, minter_);
+        minter = minter_;
+    }
+
+    /**
+     * @notice Mint new tokens
+     * @param dst The address of the destination account
+     * @param rawAmount The number of tokens to be minted
+     * @dev
+     * - Only callable by the designated minter
+     * - Checks minting is allowed (timestamp >= mintingAllowedAfter)
+     * - Prevents minting to zero address
+     * - Updates minting cooldown period
+     * - Validates mint amount against cap (percentage of total supply)
+     * - Ensures total supply and recipient balance don't overflow 96-bit limits
+     * - Emits Transfer event (from 0 address)
+     * - Updates token delegation tracking
+     * @notice Uses safe math operations for 96-bit values
+     */
+    function mint(address dst, uint rawAmount) external {
+        require(msg.sender == minter, "PSP::mint: only the minter can mint");
+        require(block.timestamp >= mintingAllowedAfter, "PSP::mint: minting is not allowed yet");
+        require(dst != address(0), "PSP::mint: cannot mint to the zero address");
+
+        uint mintCapAmount = totalSupply.mul(mintCap).div(100);
+        require(rawAmount <= mintCapAmount, "PSP::mint: amount exceeds mint cap");
+
+        totalSupply = totalSupply.add(rawAmount);
+        require(totalSupply <= uint96(-1), "PSP::mint: total supply exceeds 96-bit limit");
+
+        uint96 amount = safe96(rawAmount, "PSP::mint: amount exceeds 96-bit limit");
+
+        balances[dst] = add96(balances[dst], amount, "PSP::mint: recipient balance exceeds 96-bit limit");
+        emit Transfer(address(0), dst, rawAmount);
+
+        _moveDelegates(address(0), delegates[dst], amount);
+
+        mintingAllowedAfter = block.timestamp + minimumTimeBetweenMints;
+    }
+
+    /**
+     * @notice Get the number of tokens `spender` is approved to spend on behalf of `account`
+     * @param account The address of the account holding the funds
+     * @param spender The address of the account spending the funds
+     * @return The number of tokens approved
+     */
+    function allowance(address account, address spender) external view returns (uint) {
+        return allowances[account][spender];
+    }
+
+    /**
+     * @notice Approve `spender` to transfer up to `amount` from `src`
+     * @dev This will overwrite the approval amount for `spender`
+     *  and is subject to issues noted [here](https://eips.ethereum.org/EIPS/eip-20#approve)
+     * @param spender The address of the account which may transfer tokens
+     * @param rawAmount The number of tokens that are approved (2^256-1 means infinite)
+     * @return Whether or not the approval succeeded
+     */
+    function approve(address spender, uint rawAmount) external returns (bool) {
+        uint96 amount = rawAmount > uint96(-1) ? uint96(-1) : safe96(rawAmount, "PSP::approve: amount exceeds 96-bit limit");
+
+        allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, rawAmount);
+        return true;
+    }
+
+    /**
+     * @notice Allows an owner to approve a spender via signature (EIP-2612 permit).
+     * @dev Implements the ERC-2612 permit extension for gasless approvals.
+     * @param owner The address granting approval (must sign the transaction)
+     * @param spender The address being approved to spend tokens
+     * @param rawAmount The amount of tokens approved (use uint(-1) for infinite allowance)
+     * @param deadline Timestamp after which the signature expires
+     * @param v ECDSA signature recovery byte (27 or 28)
+     * @param r First half of the ECDSA signature
+     * @param s Second half of the ECDSA signature
+     * @dev
+     * - Validates the signature and checks against replay attacks using nonces
+     * - Supports both finite and infinite allowances (using uint(-1))
+     * - Uses EIP-712 typed structured data for signature validation
+     * - Includes chain ID in domain separator for cross-chain protection
+     * - Emits Approval event upon successful verification
+     * - Reverts for invalid signatures, unauthorized owners, or expired deadlines
+     * @notice This function follows the ERC-2612 standard for token approvals via   signatures.
+     *         It allows off-chain signature-based approvals without requiring an on-chain   transaction from the owner.
+     *         The signature includes the owner, spender, amount, nonce, and deadline.
+     *         The nonce is incremented after each successful approval to prevent replay     attacks.
+     */
+    function permit(address owner, address spender, uint rawAmount, uint deadline, uint8 v, bytes32 r, bytes32 s) external {
+        require(deadline >= block.timestamp, "PSP::permit: signature expired");
+
+        uint96 amount = rawAmount > uint96(-1) ? uint96(-1) : safe96(rawAmount, "PSP::permit: amount exceeds 96-bit limit");
+
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                keccak256(
+                    abi.encode(
+                        DOMAIN_TYPEHASH,
+                        keccak256(bytes(name)),
+                        getChainId(),
+                        address(this)
+                    )
+                ),
+                keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, rawAmount, nonces[owner], deadline))
+            )
+        );
+
+        address recoveredAddress = ecrecover(digest, v, r, s);
+        require(recoveredAddress != address(0) && recoveredAddress == owner, "PSP::permit: invalid signature");
+
+        allowances[owner][spender] = amount;
+        nonces[owner] = nonces[owner].add(1);
+        emit Approval(owner, spender, rawAmount);
+    }
+
+    /**
+     * @notice Get the number of tokens held by the `account`
+     * @param account The address of the account to get the balance of
+     * @return The number of tokens held
+     */
+    function balanceOf(address account) external view returns (uint) {
+        return balances[account];
+    }
+
+    /**
+     * @notice Transfer `amount` tokens from `msg.sender` to `dst`
+     * @param dst The address of the destination account
+     * @param rawAmount The number of tokens to transfer
+     * @return Whether or not the transfer succeeded
+     */
+    function transfer(address dst, uint rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP::transfer: amount exceeds 96-bit limit");
+        _transferTokens(msg.sender, dst, amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfer `amount` tokens from `src` to `dst`
+     * @param src The address of the source account
+     * @param dst The address of the destination account
+     * @param rawAmount The number of tokens to transfer
+     * @return Whether or not the transfer succeeded
+     */
+    function transferFrom(address src, address dst, uint rawAmount) external returns (bool) {
+        address spender = msg.sender;
+        uint96 amount = safe96(rawAmount, "PSP::transferFrom: amount exceeds 96-bit limit");
+
+        uint96 allowed = allowances[src][spender];
+        if (allowed != uint96(-1)) {
+            uint96 newAllowance = sub96(allowed, amount, "PSP::transferFrom: insufficient allowance");
+            allowances[src][spender] = newAllowance;
+        }
+
+        _transferTokens(src, dst, amount);
+        return true;
+    }
+
+    /**
+     * @notice Delegate votes from `msg.sender` to `delegatee`
+     * @param delegatee The address to delegate votes to
+     */
+    function delegate(address delegatee) public {
+        _delegate(msg.sender, delegatee);
+    }
+
+    /**
+     * @notice Delegates votes from signatory to `delegatee`
+     * @param delegatee The address to delegate votes to
+     * @param nonce The contract state required to match the signature
+     * @param expiry The time at which to expire the signature
+     * @param v The recovery byte of the signature
+     * @param r Half of the ECDSA signature pair
+     * @param s Half of the ECDSA signature pair
+     */
+    function delegateBySig(address delegatee, uint nonce, uint expiry, uint8 v, bytes32 r, bytes32 s) public {
+        require(expiry >= block.timestamp, "PSP::delegateBySig: signature expired");
+
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                keccak256(
+                    abi.encode(
+                        DOMAIN_TYPEHASH,
+                        keccak256(bytes(name)),
+                        getChainId(),
+                        address(this)
+                    )
+                ),
+                keccak256(abi.encode(DELEGATION_TYPEHASH, delegatee, nonce, expiry))
+            )
+        );
+
+        address recoveredAddress = ecrecover(digest, v, r, s);
+        require(recoveredAddress != address(0) && recoveredAddress == msg.sender, "PSP::delegateBySig: invalid signature");
+
+        require(nonces[msg.sender] == nonce, "PSP::delegateBySig: invalid nonce");
+        nonces[msg.sender] = nonces[msg.sender].add(1);
+
+        _delegate(msg.sender, delegatee);
+    }
+
+    /**
+     * @notice Gets the current votes balance for `account`
+     * @param account The address to get votes balance
+     * @return The number of current votes for `account`
+     */
+    function getCurrentVotes(address account) external view returns (uint96) {
+        uint32 nCheckpoints = numCheckpoints[account];
+        return nCheckpoints > 0 ? checkpoints[account][nCheckpoints - 1].votes : 0;
+    }
+
+    /**
+     * @notice Determine the prior number of votes for an account as of a block number
+     * @dev Block number must be a finalized block or else this function will revert to prevent misinformation.
+     * @param account The address of the account to check
+     * @param blockNumber The block number to get the vote balance at
+     * @return The number of votes the account had as of the given block
+     */
+    function getPriorVotes(address account, uint blockNumber) public view returns (uint96) {
+        require(blockNumber < block.number, "PSP::getPriorVotes: not yet determined");
+
+        uint32 nCheckpoints = numCheckpoints[account];
+        if (nCheckpoints == 0) {
+            return 0;
+        }
+
+        // First check most recent balance
+        if (checkpoints[account][nCheckpoints - 1].fromBlock <= blockNumber) {
+            return checkpoints[account][nCheckpoints - 1].votes;
+        }
+
+        // Binary search to find the desired block
+        uint32 lower = 0;
+        uint32 upper = nCheckpoints - 1;
+        while (lower < upper) {
+            uint32 center = lower + (upper - lower) / 2;
+            Checkpoint memory cp = checkpoints[account][center];
+            if (cp.fromBlock == blockNumber) {
+                return cp.votes;
+            } else if (cp.fromBlock < blockNumber) {
+                lower = center + 1;
+            } else {
+                upper = center;
+            }
+        }
+        return checkpoints[account][lower].votes;
+    }
+
+    /**
+     * @notice Delegates voting power from one address to another.
+     * @param delegator The address delegating its voting power
+     * @param delegatee The address receiving the delegated voting power
+     * @dev Updates the delegator's delegate and emits a DelegateChanged event
+     *      Moves existing voting power from previous delegate to new delegate
+     */
+    function _delegate(address delegator, address delegatee) internal {
+        address currentDelegate = delegates[delegator];
+        if (currentDelegate != delegatee) {
+            uint96 delegatorBalance = balances[delegator];
+            delegates[delegator] = delegatee;
+
+            emit DelegateChanged(delegator, currentDelegate, delegatee);
+
+            _moveDelegates(currentDelegate, delegatee, delegatorBalance);
+        }
+    }
+
+    /**
+     * @notice Transfers tokens between accounts and updates voting power delegation.
+     * @param src The source address (must not be zero address)
+     * @param dst The destination address (must not be zero address)
+     * @param amount The amount of tokens to transfer
+     * @dev
+     * - Validates source and destination addresses
+     * - Updates balances and emits Transfer event
+     * - Moves voting power delegation from source to destination
+     */
+    function _transferTokens(address src, address dst, uint96 amount) internal {
+        require(src != address(0), "PSP::_transferTokens: cannot transfer from the zero address");
+        require(dst != address(0), "PSP::_transferTokens: cannot transfer to the zero address");
+
+        balances[src] = sub96(balances[src], amount, "PSP::_transferTokens: insufficient balance");
+        balances[dst] = add96(balances[dst], amount, "PSP::_transferTokens: recipient balance exceeds 96-bit limit");
+        emit Transfer(src, dst, amount);
+        _moveDelegates(delegates[src], delegates[dst], amount);
+    }
+
+    /**
+     * @notice Moves voting power delegation between delegates.
+     * @param srcRep The current delegate address
+     * @param dstRep The new delegate address
+     * @param amount The amount of voting power to transfer
+     * @dev
+     * - Only executes if source and destination delegates are different and amount > 0
+     * - Handles both source and destination delegate checkpoint updates
+     * - Prevents underflow/overflow with safe math operations
+     */
+    function _moveDelegates(address srcRep, address dstRep, uint96 amount) internal {
+        if (srcRep != dstRep && amount > 0) {
+            if (srcRep != address(0)) {
+                uint32 nCheckpoints = numCheckpoints[srcRep];
+                uint96 oldVotes = nCheckpoints > 0 ? checkpoints[srcRep][nCheckpoints - 1].votes : 0;
+                uint96 newVotes = sub96(oldVotes, amount, "PSP::_moveDelegates: vote amount underflows");
+                _writeCheckpoint(srcRep, nCheckpoints, oldVotes, newVotes);
+            }
+
+            if (dstRep != address(0)) {
+                uint32 nCheckpoints = numCheckpoints[dstRep];
+                uint96 oldVotes = nCheckpoints > 0 ? checkpoints[dstRep][nCheckpoints - 1].votes : 0;
+                uint96 newVotes = add96(oldVotes, amount, "PSP::_moveDelegates: vote amount overflows");
+                _writeCheckpoint(dstRep, nCheckpoints, oldVotes, newVotes);
+            }
+        }
+    }
+
+    /**
+     * @notice Writes a voting power checkpoint for a delegate.
+     * @param delegatee The delegate address
+     * @param nCheckpoints The current checkpoint count
+     * @param oldVotes The previous voting power amount
+     * @param newVotes The updated voting power amount
+     * @dev
+     * - Creates a new checkpoint if block number differs
+     * - Updates existing checkpoint if same block number
+     * - Emits DelegateVotesChanged event
+     */
+    function _writeCheckpoint(address delegatee, uint32 nCheckpoints, uint96 oldVotes,  uint96 newVotes) internal {
+        uint32 blockNumber = safe32(block.number, "PSP::_writeCheckpoint: block number exceeds 32-bit limit");
+
+        if (nCheckpoints > 0 && checkpoints[delegatee][nCheckpoints - 1].fromBlock == blockNumber) {
+            checkpoints[delegatee][nCheckpoints - 1].votes = newVotes;
+        } else {
+            checkpoints[delegatee][nCheckpoints] = Checkpoint(blockNumber, newVotes);
+            numCheckpoints[delegatee] = nCheckpoints + 1;
+        }
+
+        emit DelegateVotesChanged(delegatee, oldVotes, newVotes);
+    }
+
+    /**
+     * @notice Safely converts a uint to uint32, reverting if value exceeds 32 bits.
+     * @param n The value to convert
+     * @param errorMessage The error message for revert
+     * @return uint32 The converted value
+     */
+    function safe32(uint n, string memory errorMessage) internal pure returns (uint32) {
+        require(n < 2**32, errorMessage);
+        return uint32(n);
+    }
+
+    /**
+     * @notice Safely converts a uint to uint96, reverting if value exceeds 96 bits.
+     * @param n The value to convert
+     * @param errorMessage The error message for revert
+     * @return uint96 The converted value
+     */
+    function safe96(uint n, string memory errorMessage) internal pure returns (uint96) {
+        require(n < 2**96, errorMessage);
+        return uint96(n);
+    }
+
+    /**
+     * @notice Safely adds two uint96 values, reverting on overflow.
+     * @param a First value to add
+     * @param b Second value to add
+     * @param errorMessage The error message for revert
+     * @return uint96 The sum of a and b
+     */
+    function add96(uint96 a, uint96 b, string memory errorMessage) internal pure returns (uint96) {
+        uint96 c = a + b;
+        require(c >= a, errorMessage);
+        return c;
+    }
+
+    /**
+     * @notice Safely subtracts two uint96 values, reverting on underflow.
+     * @param a Minuend
+     * @param b Subtrahend
+     * @param errorMessage The error message for revert
+     * @return uint96 The difference between a and b
+     */
+    function sub96(uint96 a, uint96 b, string memory errorMessage) internal pure returns (uint96) {
+        require(b <= a, errorMessage);
+        return a - b;
+    }
+
+    /**
+     * @notice Returns the current chain ID.
+     * @return uint The chain ID
+     * @dev Uses assembly to retrieve the chain ID
+     */
+    function getChainId() internal pure returns (uint) {
+        uint chainId;
+        assembly {
+            chainId := chainid()
+        }
+        return chainId;
+    }
+}
+```

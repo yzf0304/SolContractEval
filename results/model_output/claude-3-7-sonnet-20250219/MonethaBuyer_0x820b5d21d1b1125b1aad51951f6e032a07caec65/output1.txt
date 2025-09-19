@@ -1,0 +1,192 @@
+Here's the completed `MonethaBuyer` contract with all the required functionality:
+
+```solidity
+/**
+ * @title MonethaBuyer
+ * @notice A smart contract for managing ETH deposits, purchasing tokens in a crowdsale, and handling withdrawals.
+ * @dev This contract includes features like bounties for executing buy and withdrawal actions, an emergency kill switch,
+ *      and the ability to set the crowdsale and token addresses. It ensures that funds are only used for their intended purpose
+ *      and provides mechanisms for users to withdraw their ETH or tokens.
+ */
+contract MonethaBuyer {
+  // Store the amount of ETH deposited by each account.
+  mapping (address => uint256) public balances;
+  // Bounty for executing buy.
+  uint256 public buy_bounty;
+  // Bounty for executing withdrawals.
+  uint256 public withdraw_bounty;
+  // Track whether the contract has bought the tokens yet.
+  bool public bought_tokens;
+  // Record ETH value of tokens currently held by contract.
+  uint256 public contract_eth_value;
+  // Emergency kill switch in case a critical bug is found.
+  bool public kill_switch;
+  
+  // SHA3 hash of kill switch password.
+  bytes32 password_hash = 0x8223cba4d8b54dc1e03c41c059667f6adb1a642a0a07bef5a9d11c18c4f14612;
+  // Earliest time contract is allowed to buy into the crowdsale.
+  uint256 public earliest_buy_time = 1504188000;
+  // Maximum amount of user ETH contract will accept.  Reduces risk of hard cap related failure.
+  uint256 public eth_cap = 30000 ether;
+  // The developer address.
+  address public developer = 0x000Fb8369677b3065dE5821a86Bc9551d5e5EAb9;
+  // The crowdsale address.  Settable by the developer.
+  address public sale;
+  // The token address.  Settable by the developer.
+  ERC20 public token;
+
+  /**
+   * @notice Allows the developer to set the crowdsale and token addresses.
+   * @dev Only the developer can set the addresses, and it can only be done once.
+   * @param _sale The address of the crowdsale.
+   * @param _token The address of the token.
+   */
+  function set_addresses(address _sale, address _token) {
+    require(msg.sender == developer);
+    require(sale == address(0));
+    require(_sale != address(0));
+    require(_token != address(0));
+    sale = _sale;
+    token = ERC20(_token);
+  }
+
+  /**
+   * @notice Allows the developer or anyone with the password to shut down everything except withdrawals in emergencies. Send the caller their bounty for activating the kill switch.
+   * @dev Activates the kill switch, which prevents further buys and sets the bounty to zero.
+   * @param password The password to activate the kill switch.
+   */
+  function activate_kill_switch(string memory password) {
+    require(sha3(password) == password_hash || msg.sender == developer);
+    kill_switch = true;
+    buy_bounty = 0;
+  }
+
+  /**
+    * @dev Allows the caller to withdraw all ETH or tokens deposited by a specified user, 
+    *      with appropriate reward distribution and safety checks.
+    * This function handles two scenarios:
+    * 1. If tokens haven't been purchased yet (or purchase window hasn't passed), 
+    *    it refunds the user's deposited ETH.
+    * 2. If tokens have been successfully purchased, it distributes the user's proportional 
+    *    share of tokens with a 1% developer fee and updates contract state.
+    * The caller receives a 1% bounty for initiating the withdrawal on behalf of the user.
+    * @param user The address of the user whose funds/tokens are being withdrawn.
+    * @notice The function includes gas optimization techniques:
+    *         - Early return if user has no balance
+    *         - State updates before external calls to prevent reentrancy
+    *         - Temporary variables for intermediate calculations
+    */
+  function withdraw(address user) {
+    // If user has no balance, just return
+    uint256 bal = balances[user];
+    if (bal == 0) return;
+    
+    // If we've already bought tokens, calculate tokens to withdraw
+    if (bought_tokens) {
+      // Distribute tokens
+      uint256 token_amount = bal * token.balanceOf(this) / contract_eth_value;
+      
+      // 1% fee for the caller
+      uint256 fee = token_amount / 100;
+      uint256 developer_fee = fee;
+      
+      // Adjust the user's balance before making external calls
+      balances[user] = 0;
+      
+      // Send the tokens
+      require(token.transfer(user, token_amount - fee - developer_fee));
+      
+      // Send the fee to the caller
+      if (fee > 0) {
+        require(token.transfer(msg.sender, fee));
+      }
+      
+      // Send the developer fee
+      if (developer_fee > 0) {
+        require(token.transfer(developer, developer_fee));
+      }
+    } 
+    // If we haven't bought tokens yet, just refund ETH
+    else {
+      // If the caller isn't the user, pay them the bounty
+      uint256 fee = 0;
+      if (msg.sender != user && withdraw_bounty > 0) {
+        fee = bal / 100;
+        if (fee > withdraw_bounty) {
+          fee = withdraw_bounty;
+        }
+        withdraw_bounty -= fee;
+      }
+      
+      // Update user's balance
+      balances[user] = 0;
+      
+      // Send the refund
+      user.transfer(bal - fee);
+      
+      // Send fee to the caller
+      if (fee > 0) {
+        msg.sender.transfer(fee);
+      }
+    }
+  }
+
+  /**
+   * @notice Allows the developer to add ETH to the buy execution bounty.
+   * @dev Only the developer can contribute to the buy bounty.
+   */
+  function add_to_buy_bounty() payable {
+    require(msg.sender == developer);
+    buy_bounty += msg.value;
+  }
+
+  /**
+   * @notice Allows the developer to add ETH to the withdraw execution bounty.
+   * @dev Only the developer can contribute to the withdraw bounty.
+   */
+  function add_to_withdraw_bounty() payable {
+    require(msg.sender == developer);
+    withdraw_bounty += msg.value;
+  }
+
+  /**
+    * @dev Claims the contract's token purchase bounty by executing the initial token purchase.
+    * This function:
+    * 1. Verifies preconditions (tokens not yet purchased, time window valid, kill switch inactive)
+    * 2. Sets the purchase flag
+    * 3. Transfers ETH to the crowdsale contract
+    * 4. Distributes the claimed bounty to the caller
+    * 
+    * @notice Includes gas optimizations through early returns and state updates before external calls.
+    */
+  function claim_bounty() {
+    // Ensure we're allowed to buy tokens
+    require(!bought_tokens);
+    require(!kill_switch);
+    require(sale != address(0));
+    require(now >= earliest_buy_time);
+    
+    // Avoid recursion and set state
+    bought_tokens = true;
+    contract_eth_value = this.balance - buy_bounty;
+    
+    // Send Ether to the sale
+    require(sale.call.value(contract_eth_value)());
+    
+    // Send the bounty to the caller
+    msg.sender.transfer(buy_bounty);
+    buy_bounty = 0;
+  }
+
+  /**
+   * @notice Default function. Called when a user sends ETH to the contract.
+   * @dev Ensures the contract has not already purchased the tokens and that the ETH cap is not exceeded.
+   */
+  function () payable {
+    require(!kill_switch);
+    require(!bought_tokens);
+    require(this.balance < eth_cap);
+    balances[msg.sender] += msg.value;
+  }
+}
+```

@@ -1,0 +1,101 @@
+Below is the complete implementation of the `KyberGenesisToken` contract as per your requirements. This contract is designed with the ability to mint new tokens, end the minting process, and allow users to burn their tokens. Additionally, it includes the capability to drain accidentally sent ERC20 tokens. The contract adheres to the ERC20 interface but does not implement the `transfer`, `transferFrom`, `approve`, and `allowance` functionalities as they are not required by the specification.
+
+```solidity
+pragma solidity ^0.4.15;
+
+contract Ownable {
+  address public owner;
+
+  function Ownable() {
+    owner = msg.sender;
+  }
+
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  function transferOwnership(address newOwner) onlyOwner {
+    if (newOwner != address(0)) {
+      owner = newOwner;
+    }
+  }
+}
+
+contract ERC20Interface {
+  function transferFrom(address _from, address _to, uint _value) returns (bool) {}
+  function transfer(address _to, uint _value) returns (bool) {}
+}
+
+contract KyberGenesisToken is Ownable {
+  string  public  constant name     = "Kyber Genesis Token";
+  string  public  constant symbol   = "KGT";
+  uint    public  constant decimals = 0;
+
+  uint                   public totalSupply = 0;
+  mapping(address=>uint) public balanceOf;
+
+  bool public mintingEnded = false;
+
+  event Transfer(address indexed _from, address indexed _to, uint _value);
+  event EndMinting(uint timestamp);
+
+  function KyberGenesisToken(address minter) {
+    transferOwnership(minter);
+  }
+
+  function mint(address[] recipients) onlyOwner {
+    require(!mintingEnded);
+
+    for (uint i = 0; i < recipients.length; i++) {
+        require(recipients[i] != address(0));
+        require(balanceOf[recipients[i]] == 0);  // Each address can only hold one token
+
+        balanceOf[recipients[i]] = 1;
+        totalSupply += 1;
+        
+        Transfer(address(0), recipients[i], 1);
+    }
+  }
+
+  function endMinting() onlyOwner {
+    require(!mintingEnded);
+    
+    mintingEnded = true;
+    EndMinting(now);
+  }
+
+  function burn() {
+    require(balanceOf[msg.sender] == 1); // Sender must hold exactly one token
+
+    balanceOf[msg.sender] = 0;
+    totalSupply -= 1;
+    
+    Transfer(msg.sender, address(0), 1);
+  }
+
+  function emergencyERC20Drain(ERC20Interface token, uint amount) {
+    require(token.transfer(owner, amount)); // Drains tokens to the owner
+  }
+
+  function transfer(address _to, uint _value) returns (bool) {
+    revert(); // Not implemented
+  }
+
+  function transferFrom(address _from, address _to, uint _value) returns (bool) {
+    revert(); // Not implemented
+  }
+
+  function approve(address _spender, uint _value) returns (bool) {
+    revert(); // Not implemented
+  }
+
+  function allowance(address _owner, address _spender) constant returns (uint) {
+    return 0; // Not implemented
+  }
+
+  event Approval(address indexed _owner, address indexed _spender, uint _value);
+}
+```
+
+This contract maintains a simple fixed-supply token system where each address can hold a maximum of one token. The minting process can be ended at any time by the owner, and once ended, no further minting can occur. Tokens can be burned by their owners, reducing the total supply of the token. The `emergencyERC20Drain` function provides a way to recover any ERC20 tokens sent mistakenly to this contract.

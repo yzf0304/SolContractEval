@@ -1,0 +1,168 @@
+Below is the completed `Okimi` contract implementing all the described features. The contract inherits from `Ownable`, `ERC721A`, and `ReentrancyGuard` and includes functionalities such as public sales, minting limits, owner controls, and more.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "./@openzeppelin/contracts/access/Ownable.sol";
+import "./erc721a/contracts/ERC721A.sol";
+import "./@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    uint256 public immutable maxPerAddressDuringMint;
+    uint256 public immutable amountForDevs;
+    uint256 public immutable amountForSaleAndDev;
+    uint256 internal immutable collectionSize;
+    uint256 internal immutable maxBatchSize;
+    string private _baseTokenURI;
+
+    struct SaleConfig {
+        uint32 publicSaleStartTime;
+        uint64 publicPriceWei;
+    }
+
+    SaleConfig public saleConfig;
+
+    constructor()
+    ERC721A("Okimi", "OKM")
+    {
+        maxPerAddressDuringMint = 5;
+        maxBatchSize = 5;
+        collectionSize = 1500;
+        amountForDevs = 500;
+        amountForSaleAndDev = 1000;
+        saleConfig.publicPriceWei = 0.005 ether;  // 0.005 ETH
+        saleConfig.publicSaleStartTime = uint32(block.timestamp); // Set to current timestamp for testing
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract");
+        _;
+    }
+
+    function mint(uint256 quantity)
+    external
+    payable
+    callerIsUser
+    nonReentrant
+    {
+        require(isSaleOn(saleConfig.publicPriceWei, saleConfig.publicSaleStartTime), "Sale is not active");
+        require(totalMinted() + quantity <= collectionSize, "Max supply exceeded");
+        require(quantity <= maxPerAddressDuringMint, "Exceeds max per address");
+        require(quantity <= maxBatchSize, "Exceeds max batch size");
+        require(msg.value >= saleConfig.publicPriceWei * quantity, "Insufficient funds");
+
+        _safeMint(msg.sender, quantity);
+        refundIfOver(saleConfig.publicPriceWei * quantity);
+    }
+
+    function refundIfOver(uint256 price)
+    private
+    {
+        require(msg.value >= price, "Insufficient funds sent");
+        if (msg.value > price) {
+            payable(msg.sender).transfer(msg.value - price);
+        }
+    }
+
+    function isSaleOn(uint256 _price, uint256 _startTime)
+    public
+    view
+    returns (bool)
+    {
+        return (_price != 0 && block.timestamp >= _startTime);
+    }
+
+    function getPrice()
+    public
+    view
+    returns (uint256)
+    {
+        return uint256(saleConfig.publicPriceWei);
+    }
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price)
+    external
+    onlyOwner
+    {
+        saleConfig.publicPriceWei = price;
+        saleConfig.publicSaleStartTime = timestamp;
+    }
+
+    function reserve(uint256 quantity)
+    external
+    onlyOwner
+    {
+        require(totalMinted() + quantity <= amountForDevs, "Exceeds dev mint limit");
+        _safeMint(msg.sender, quantity);
+    }
+
+    function setBaseURI(string calldata baseURI)
+    external
+    onlyOwner
+    {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI()
+    internal
+    view
+    virtual
+    override
+    returns (string memory)
+    {
+        return _baseTokenURI;
+    }
+
+    function withdraw()
+    external
+    onlyOwner
+    nonReentrant
+    {
+        (bool success, ) = msg.sender.call{value: address(this).balance}("");
+        require(success, "Transfer failed.");
+    }
+
+    function numberMinted(address owner)
+    public
+    view
+    returns (uint256)
+    {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId)
+    external
+    view
+    returns (TokenOwnership memory)
+    {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted()
+    public
+    view
+    returns (uint256)
+    {
+        return _totalMinted();
+    }
+
+    receive() external payable {}
+}
+```
+
+### Explanation of Key Functions:
+
+- **mint**: Allows users to mint NFTs, checks if the sale is active, and handles the payment.
+- **refundIfOver**: Refunds any excess ETH sent during the mint process.
+- **isSaleOn**: Checks if the public sale is active.
+- **getPrice**: Returns the current price of an NFT during the public sale.
+- **setPublicSaleConfig**: Sets the public sale start time and price.
+- **reserve**: Reserves NFTs for the dev team.
+- **setBaseURI**: Sets the base URI for NFT metadata.
+- **withdraw**: Withdraws the contract's balance to the owner.
+- **numberMinted**: Returns the number of NFTs minted by a specific address.
+- **getOwnershipData**: Returns the ownership data for a specific NFT token.
+- **totalMinted**: Returns the total number of NFTs minted. 
+
+This contract follows the requirements provided and uses the OpenZeppelin libraries for access control and reentrancy protection, as well as ERC721A for optimized minting.

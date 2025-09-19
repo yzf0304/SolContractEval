@@ -1,0 +1,120 @@
+To solve this problem, we need to create a smart contract that allows users to mint NFTs under specific conditions, including a whitelist phase with Merkle tree verification and a public sale phase. The contract should be managed by an owner who can adjust parameters such as cost, supply, and minting rules.
+
+### Approach
+1. **Whitelist and Public Sale Phases**: The contract supports two phases of minting. During the whitelist phase, users must provide a Merkle proof to verify their eligibility. In the public sale phase, any user can mint NFTs up to a specified limit per address.
+2. **Merkle Proof Verification**: Uses a Merkle tree to verify user eligibility during the whitelist phase. Each leaf in the Merkle tree contains the user's address and their maximum allowed mint amount.
+3. **Minting Limits**: The contract enforces transaction limits and total supply limits. The owner can toggle whether to track cumulative mint counts per address.
+4. **Ownership and Administration**: The contract owner can adjust parameters such as cost, maximum supply, and pause/resume minting.
+
+### Solution Code
+```solidity
+// File: minter.sol
+// Copyright (c) 2022 Keisuke OHNO
+
+pragma solidity ^0.8.7;
+
+contract HalloweenMinter is Ownable {
+
+    address public constant withdrawAddress = 0xdEcf4B112d4120B6998e5020a6B4819E490F7db6;
+    iNFTCollection public NFTCollection = iNFTCollection(0x2d3C8D1A84cA778A3bba0F4fC389330AB96AF3Be); 
+
+    constructor(){
+        pause(false);
+        setMintCount(false);
+    }
+
+    uint256 public cost = 0;
+    uint256 public maxSupply = 5000;
+    uint256 public maxMintAmountPerTransaction = 3;
+    uint256 public publicSaleMaxMintAmountPerAddress = 300;
+    bool public paused = true;
+    bool public onlyWhitelisted = true;
+    bool public mintCount = true;
+    mapping(address => uint256) public whitelistMintedAmount;
+    mapping(address => uint256) public publicSaleMintedAmount;
+    bytes32 public merkleRoot;
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "The caller is another contract.");
+        _;
+    }
+ 
+    function mint(uint256 _mintAmount , uint256 _maxMintAmount , bytes32[] calldata _merkleProof) public payable callerIsUser {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0, "Mint amount must be positive");
+        require(_mintAmount <= maxMintAmountPerTransaction, "Exceeds per transaction limit");
+
+        if (onlyWhitelisted) {
+            bytes32 leaf = keccak256(abi.encodePacked(msg.sender, _maxMintAmount));
+            require(MerkleProof.verifyCalldata(_merkleProof, merkleRoot, leaf), "Invalid merkle proof");
+            if (mintCount) {
+                require(whitelistMintedAmount[msg.sender] + _mintAmount <= _maxMintAmount, "Exceeds your max mint amount");
+                whitelistMintedAmount[msg.sender] += _mintAmount;
+            }
+        } else {
+            if (mintCount) {
+                require(publicSaleMintedAmount[msg.sender] + _mintAmount <= publicSaleMaxMintAmountPerAddress, "Exceeds public sale allowance");
+                publicSaleMintedAmount[msg.sender] += _mintAmount;
+            }
+        }
+
+        require(NFTCollection.totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+        require(msg.value >= cost * _mintAmount, "Insufficient ETH");
+
+        NFTCollection.externalMint{value: msg.value}(msg.sender, _mintAmount);
+    }
+
+    function setMaxSupply(uint256 _maxSupply) public onlyOwner {
+        maxSupply = _maxSupply;
+    }
+
+    function totalSupply() public view returns(uint256) {
+        return NFTCollection.totalSupply();
+    }
+
+    function setMerkleRoot(bytes32 _merkleRoot) public onlyOwner {
+        merkleRoot = _merkleRoot;
+    }
+
+    function setPublicSaleMaxMintAmountPerAddress(uint256 _publicSaleMaxMintAmountPerAddress) public onlyOwner {
+        publicSaleMaxMintAmountPerAddress = _publicSaleMaxMintAmountPerAddress;
+    }
+
+    function setCost(uint256 _newCost) public onlyOwner {
+        cost = _newCost;
+    }
+
+    function setOnlyWhitelisted(bool _state) public onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    function setMaxMintAmountPerTransaction(uint256 _maxMintAmountPerTransaction) public onlyOwner {
+        maxMintAmountPerTransaction = _maxMintAmountPerTransaction;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function setMintCount(bool _state) public onlyOwner {
+        mintCount = _state;
+    }
+
+    function setNFTCollection(address _address) public onlyOwner {
+        NFTCollection = iNFTCollection(_address);
+    }
+
+    function withdraw() public onlyOwner {
+        (bool os, ) = payable(withdrawAddress).call{value: address(this).balance}("");
+        require(os);
+    }
+}
+```
+
+### Explanation
+- **Minting Process**: Users can mint NFTs during the whitelist phase by providing a valid Merkle proof and their allowed mint amount. During the public sale, any user can mint up to the per-address limit.
+- **Merkle Proof Verification**: Ensures only whitelisted users can mint during the initial phase, using a Merkle tree for efficient and secure verification.
+- **Administrative Functions**: The owner can adjust parameters like cost, supply limits, and toggle phases. The contract enforces these parameters to ensure fair distribution and prevent abuse.
+- **Security Measures**: Includes checks for transaction limits, sufficient payment, and prevents contract calls from other contracts to avoid reentrancy attacks.
+
+This solution efficiently manages both whitelist and public sale phases, ensuring secure and controlled distribution of NFTs while providing flexibility for administrative adjustments.

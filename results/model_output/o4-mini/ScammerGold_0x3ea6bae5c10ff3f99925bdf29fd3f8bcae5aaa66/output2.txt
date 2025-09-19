@@ -1,0 +1,282 @@
+Here is the completed ScammerGold contract in Solidity 0.8.6. It strictly follows the specification and makes use only of the provided Context, Ownable, ERC20 and IERC721Enumerable interfaces.
+
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity 0.8.6;
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+    function _msgData() internal view virtual returns (bytes calldata) {
+        return msg.data;
+    }
+}
+
+abstract contract Ownable is Context {
+    address private _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    constructor() {
+        _setOwner(_msgSender());
+    }
+    function owner() public view virtual returns (address) {
+        return _owner;
+    }
+    modifier onlyOwner() {
+        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+    function renounceOwnership() public virtual onlyOwner {
+        _setOwner(address(0));
+    }
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        _setOwner(newOwner);
+    }
+    function _setOwner(address newOwner) private {
+        address oldOwner = _owner;
+        _owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+}
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender,address recipient,uint256 amount) external returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+interface IERC20Metadata is IERC20 {
+    function name() external view returns (string memory);
+    function symbol() external view returns (string memory);
+    function decimals() external view returns (uint8);
+}
+
+contract ERC20 is Context, IERC20, IERC20Metadata {
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+    uint256 private _totalSupply;
+    string private _name;
+    string private _symbol;
+    constructor(string memory name_, string memory symbol_) {
+        _name = name_;
+        _symbol = symbol_;
+    }
+    function name() public view virtual override returns (string memory) {
+        return _name;
+    }
+    function symbol() public view virtual override returns (string memory) {
+        return _symbol;
+    }
+    function decimals() public view virtual override returns (uint8) {
+        return 18;
+    }
+    function totalSupply() public view virtual override returns (uint256) {
+        return _totalSupply;
+    }
+    function balanceOf(address account) public view virtual override returns (uint256) {
+        return _balances[account];
+    }
+    function transfer(address recipient, uint256 amount)
+        public virtual override returns (bool)
+    {
+        _transfer(_msgSender(), recipient, amount);
+        return true;
+    }
+    function allowance(address owner, address spender)
+        public view virtual override returns (uint256)
+    {
+        return _allowances[owner][spender];
+    }
+    function approve(address spender, uint256 amount)
+        public virtual override returns (bool)
+    {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
+    function transferFrom(address sender, address recipient, uint256 amount)
+        public virtual override returns (bool)
+    {
+        _transfer(sender, recipient, amount);
+        uint256 currentAllowance = _allowances[sender][_msgSender()];
+        require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
+        unchecked {
+            _approve(sender, _msgSender(), currentAllowance - amount);
+        }
+        return true;
+    }
+    function increaseAllowance(address spender, uint256 addedValue)
+        public virtual returns (bool)
+    {
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender] + addedValue);
+        return true;
+    }
+    function decreaseAllowance(address spender, uint256 subtractedValue)
+        public virtual returns (bool)
+    {
+        uint256 currentAllowance = _allowances[_msgSender()][spender];
+        require(currentAllowance >= subtractedValue, "ERC20: decreased allowance below zero");
+        unchecked {
+            _approve(_msgSender(), spender, currentAllowance - subtractedValue);
+        }
+        return true;
+    }
+    function _transfer(address sender, address recipient, uint256 amount) internal virtual {
+        require(sender != address(0), "ERC20: transfer from the zero address");
+        require(recipient != address(0), "ERC20: transfer to the zero address");
+        _beforeTokenTransfer(sender, recipient, amount);
+        uint256 senderBalance = _balances[sender];
+        require(senderBalance >= amount, "ERC20: transfer amount exceeds balance");
+        unchecked { _balances[sender] = senderBalance - amount; }
+        _balances[recipient] += amount;
+        emit Transfer(sender, recipient, amount);
+        _afterTokenTransfer(sender, recipient, amount);
+    }
+    function _mint(address account, uint256 amount) internal virtual {
+        require(account != address(0), "ERC20: mint to the zero address");
+        _beforeTokenTransfer(address(0), account, amount);
+        _totalSupply += amount;
+        _balances[account] += amount;
+        emit Transfer(address(0), account, amount);
+        _afterTokenTransfer(address(0), account, amount);
+    }
+    function _burn(address account, uint256 amount) internal virtual {
+        require(account != address(0), "ERC20: burn from the zero address");
+        _beforeTokenTransfer(account, address(0), amount);
+        uint256 accountBalance = _balances[account];
+        require(accountBalance >= amount, "ERC20: burn amount exceeds balance");
+        unchecked { _balances[account] = accountBalance - amount; }
+        _totalSupply -= amount;
+        emit Transfer(account, address(0), amount);
+        _afterTokenTransfer(account, address(0), amount);
+    }
+    function _approve(address owner, address spender, uint256 amount) internal virtual {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual { }
+    function _afterTokenTransfer(address from, address to, uint256 amount) internal virtual { }
+}
+
+interface IERC721Enumerable {
+    function balanceOf(address owner) external view returns (uint256);
+    function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256);
+    // IERC721 inherited functions (ownerOf, etc.) are assumed present
+}
+
+contract ScammerGold is Context, Ownable, ERC20 {
+    // sLoot contract address
+    address public slootContractAddress = 0xb12F78434AE7D12Ae548c51A5cb734Ecc4536594;
+    IERC721Enumerable public slootContract;
+
+    // Amount of Scammer Gold per sLoot token ID (in raw decimals)
+    uint256 public scammerGoldPerTokenId = 10000 * (10 ** decimals());
+
+    // Eligible token ID range
+    uint256 public tokenIdStart = 1;
+    uint256 public tokenIdEnd = 8000;
+
+    // Current season
+    uint256 public season = 0;
+
+    // season => tokenId => claimed?
+    mapping(uint256 => mapping(uint256 => bool)) public seasonClaimedByTokenId;
+
+    constructor() Ownable() ERC20("Scammer Gold", "SGLD") {
+        // Immediately renounce DAO ownership (as per spec)
+        transferOwnership(address(0));
+        slootContract = IERC721Enumerable(slootContractAddress);
+    }
+
+    /// @notice Claim SGLD for one sLoot token ID
+    function claimById(uint256 tokenId) external {
+        _claim(tokenId, _msgSender());
+    }
+
+    /// @notice Claim SGLD for all sLoot owned by caller
+    function claimAllForOwner() external {
+        address sender = _msgSender();
+        uint256 bal = slootContract.balanceOf(sender);
+        require(bal > 0, "ScammerGold: no tokens to claim");
+        // Claim entire range of owned indices
+        claimRangeForOwner(0, bal - 1);
+    }
+
+    /// @notice Claim SGLD for a subset of owned tokens by index range
+    function claimRangeForOwner(uint256 ownerIndexStart, uint256 ownerIndexEnd) external {
+        address sender = _msgSender();
+        uint256 bal = slootContract.balanceOf(sender);
+        require(bal > 0, "ScammerGold: no tokens owned");
+        require(ownerIndexStart <= ownerIndexEnd, "ScammerGold: invalid range");
+        require(ownerIndexEnd < bal, "ScammerGold: range exceeds balance");
+        for (uint256 i = ownerIndexStart; i <= ownerIndexEnd; i++) {
+            uint256 tid = slootContract.tokenOfOwnerByIndex(sender, i);
+            _claim(tid, sender);
+        }
+    }
+
+    /// @dev Internal claim implementation
+    function _claim(uint256 tokenId, address tokenOwner) internal {
+        require(tokenId >= tokenIdStart && tokenId <= tokenIdEnd, "ScammerGold: tokenId out of range");
+        require(!seasonClaimedByTokenId[season][tokenId], "ScammerGold: already claimed");
+        // Mark claimed
+        seasonClaimedByTokenId[season][tokenId] = true;
+        // Mint the Gold
+        _mint(tokenOwner, scammerGoldPerTokenId);
+    }
+
+    /// @notice DAO can mint arbitrary SGLD (display units)
+    function daoMint(uint256 amountDisplayValue) external onlyOwner {
+        uint256 raw = amountDisplayValue * (10 ** decimals());
+        _mint(_msgSender(), raw);
+    }
+
+    /// @notice DAO can update the sLoot contract address (for migration)
+    function daoSetLootContractAddress(address slootContractAddress_) external onlyOwner {
+        slootContractAddress = slootContractAddress_;
+        slootContract = IERC721Enumerable(slootContractAddress_);
+    }
+
+    /// @notice DAO can update which token IDs are eligible
+    function daoSetTokenIdRange(uint256 tokenIdStart_, uint256 tokenIdEnd_) external onlyOwner {
+        require(tokenIdStart_ <= tokenIdEnd_, "ScammerGold: bad range");
+        tokenIdStart = tokenIdStart_;
+        tokenIdEnd   = tokenIdEnd_;
+    }
+
+    /// @notice DAO can set a new season
+    function daoSetSeason(uint256 season_) public onlyOwner {
+        season = season_;
+    }
+
+    /// @notice DAO can change SGLD per token (display units)
+    function daoSetScammerGoldPerTokenId(uint256 scammerGoldDisplayValue) public onlyOwner {
+        scammerGoldPerTokenId = scammerGoldDisplayValue * (10 ** decimals());
+    }
+
+    /// @notice DAO can set season and per‐token amount atomically
+    function daoSetSeasonAndScammerGoldPerTokenID(
+        uint256 season_, 
+        uint256 scammerGoldDisplayValue
+    ) external onlyOwner {
+        daoSetSeason(season_);
+        daoSetScammerGoldPerTokenId(scammerGoldDisplayValue);
+    }
+
+    /// @notice Fallback to accept ETH
+    receive() external payable {}
+}
+```
+
+Explanation of the key parts:
+
+1. `claimById` checks range, season‐claim status, then mints `scammerGoldPerTokenId` tokens to the caller and marks that `tokenId` claimed for the current `season`.  
+2. `claimAllForOwner` and `claimRangeForOwner` let users batch‐claim across owned sLoot tokens by enumerating with `tokenOfOwnerByIndex`.  
+3. DAO‐only functions (`daoMint`, `daoSetLootContractAddress`, `daoSetTokenIdRange`, `daoSetSeason`, `daoSetScammerGoldPerTokenId`, `daoSetSeasonAndScammerGoldPerTokenID`) allow the sLoot DAO to adjust parameters or mint extra SGLD.  
+4. The initial constructor renounces DAO ownership immediately by transferring it to the zero address, as specified.

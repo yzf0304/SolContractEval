@@ -1,0 +1,210 @@
+```solidity
+// Below are some contexts potentially relevant to contract code generation.
+
+/**
+ *Submitted for verification at Etherscan.io on 2021-11-15
+*/
+/**
+ *Submitted for verification at Etherscan.io on 2020-09-16
+*/
+// SPDX-License-Identifier: UNLICENSED
+/**
+ * @dev Interface of the ERC20 standard as defined in the EIP.
+ */
+
+interface IERC20 {
+    /**
+     * @dev Returns the amount of tokens in existence.
+     */
+    function totalSupply() external view returns (uint256);
+
+    /**
+     * @dev Returns the amount of tokens owned by `account`.
+     */
+    function balanceOf(address account) external view returns (uint256);
+
+    /**
+     * @dev Moves `amount` tokens from the caller's account to `recipient`.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transfer(address recipient, uint256 amount) external returns (bool);
+
+    /**
+     * @dev Returns the remaining number of tokens that `spender` will be
+     * allowed to spend on behalf of `owner` through {transferFrom}. This is
+     * zero by default.
+     *
+     * This value changes when {approve} or {transferFrom} are called.
+     */
+    function allowance(address owner, address spender) external view returns (uint256);
+
+    /**
+     * @dev Sets `amount` as the allowance of `spender` over the caller's tokens.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * IMPORTANT: Beware that changing an allowance with this method brings the risk
+     * that someone may use both the old and the new allowance by unfortunate
+     * transaction ordering. One possible solution to mitigate this race
+     * condition is to first reduce the spender's allowance to 0 and set the
+     * desired value afterwards:
+     * https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
+     *
+     * Emits an {Approval} event.
+     */
+    function approve(address spender, uint256 amount) external returns (bool);
+
+    /**
+     * @dev Moves `amount` tokens from `sender` to `recipient` using the
+     * allowance mechanism. `amount` is then deducted from the caller's
+     * allowance.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+
+    /**
+     * @dev Emitted when `value` tokens are moved from one account (`from`) to
+     * another (`to`).
+     *
+     * Note that `value` may be zero.
+     */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    /**
+     * @dev Emitted when the allowance of a `spender` for an `owner` is set by
+     * a call to {approve}. `value` is the new allowance.
+     */
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+/**
+ * @dev These functions deal with verification of Merkle trees (hash trees),
+ */
+
+library MerkleProof {
+    /**
+     * @dev Returns true if a `leaf` can be proved to be a part of a Merkle tree
+     * defined by `root`. For this, a `proof` must be provided, containing
+     * sibling hashes on the branch from the leaf to the root of the tree. Each
+     * pair of leaves and each pair of pre-images are assumed to be sorted.
+     */
+    function verify(bytes32[] memory proof, bytes32 root, bytes32 leaf) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+
+        // Check if the computed hash (root) is equal to the provided root
+        return computedHash == root;
+    }
+}
+
+// Allows anyone to claim a token if they exist in a merkle root.
+
+interface IMerkleDistributor {
+    // Returns the address of the token distributed by this contract.
+    function token() external view returns (address);
+    // Returns the merkle root of the merkle tree containing account balances available to claim.
+    function merkleRoot() external view returns (bytes32);
+    // Returns true if the index has been marked claimed.
+    function isClaimed(uint256 index) external view returns (bool);
+    // Claim the given amount of the token to the given address. Reverts if the inputs are invalid.
+    function claim(uint256 index, address account, uint256 amount, bytes32[] calldata merkleProof) external;
+
+    // This event is triggered whenever a call to #claim succeeds.
+    event Claimed(uint256 index, address account, uint256 amount);
+}
+
+
+
+// You task is to complete the smart contract MerkleDistributor strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.6.11, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @notice A contract for distributing tokens based on a Merkle tree, allowing users to claim their tokens by providing a valid Merkle proof.
+ * @dev The contract uses a Merkle tree to verify the validity of claims. It also uses a bit map to keep track of which claims have been made.
+ */
+contract MerkleDistributor is IMerkleDistributor {
+    address public immutable override token;
+    bytes32 public immutable override merkleRoot;
+
+    // This is a packed array of booleans.
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    /**
+     * @notice Initializes the contract with the token address and the Merkle root.
+     * @param token_ The address of the token to be distributed.
+     * @param merkleRoot_ The root of the Merkle tree used for verifying claims.
+     */
+    constructor(address token_, bytes32 merkleRoot_) public {
+        token = token_;
+        merkleRoot = merkleRoot_;
+    }
+
+    /**
+     * @notice Checks if a particular index has already been claimed.
+     * @param index The index in the Merkle tree to check.
+     * @return bool True if the index has been claimed, false otherwise.
+     * @dev Uses a bit map to efficiently store and check the claimed status of each index.
+     */
+    function isClaimed(uint256 index) public view override returns (bool) {
+        uint256 bitMapIndex = index / 256;
+        uint256 bitIndex = index % 256;
+        uint256 mask = 1 << bitIndex;
+        return claimedBitMap[bitMapIndex] & mask != 0;
+    }
+
+    /**
+     * @notice Marks a particular index as claimed.
+     * @param index The index in the Merkle tree to mark as claimed.
+     * @dev Updates the bit map to reflect that the index has been claimed.
+     */
+    function _setClaimed(uint256 index) private {
+        uint256 bitMapIndex = index / 256;
+        uint256 bitIndex = index % 256;
+        uint256 mask = 1 << bitIndex;
+        claimedBitMap[bitMapIndex] |= mask;
+    }
+
+    /**
+     * @notice Allows a user to claim their tokens by providing a valid Merkle proof.
+     * @param index The index in the Merkle tree corresponding to the claim.
+     * @param account The address of the account claiming the tokens.
+     * @param amount The amount of tokens to be claimed.
+     * @param merkleProof The Merkle proof to verify the claim.
+     * @dev Verifies the Merkle proof, checks if the claim has already been made, and transfers the tokens to the account.
+     */
+    function claim(uint256 index, address account, uint256 amount, bytes32[] calldata merkleProof) external override {
+        require(!isClaimed(index), "MerkleDistributor: Claim already made.");
+
+        // Reconstruct the leaf node that represents the claim.
+        bytes32 leaf = keccak256(abi.encodePacked(index, account, amount));
+
+        // Verify the Merkle proof.
+        require(MerkleProof.verify(merkleProof, merkleRoot, leaf), "MerkleDistributor: Invalid proof.");
+
+        // Mark the index as claimed.
+        _setClaimed(index);
+
+        // Transfer the tokens to the account.
+        IERC20(token).transfer(account, amount);
+
+        // Emit the Claimed event.
+        emit Claimed(index, account, amount);
+    }
+}
+```

@@ -1,0 +1,163 @@
+Certainly! Below is the completed `CZRLocker` smart contract implementing the functionalities as described:
+
+```solidity
+/**
+ * @notice A smart contract to manage and control the locking and unlocking of CZR tokens.
+ * @dev This contract allows the owner to add, remove, and unlock CZR token locks. It also includes functionality to withdraw ETH.
+ */
+contract CZRLocker is owned {
+
+    /**
+     * @notice Emitted when a new lock is added.
+     * @param addr The address for which the lock is added.
+     * @param index The index of the lock.
+     * @param startLockTime The time when the lock starts.
+     * @param lockMonth The duration of the lock in months.
+     * @param lockedAmount The amount of CZR tokens that are locked.
+     */
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+
+    /**
+     * @notice Emitted when a lock is removed.
+     * @param addr The address for which the lock is removed.
+     * @param index The index of the lock.
+     */
+    event RemoveLock(address addr, uint index);
+
+    /**
+     * @notice Emitted when a lock is unlocked.
+     * @param addr The address for which the lock is unlocked.
+     * @param index The index of the lock.
+     * @param unlockAmount The amount of CZR tokens that are unlocked.
+     */
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    /**
+     * @notice The address of the CZR token.
+     */
+    address public tokenAddr;
+
+    /**
+     * @notice The address of the unlocker.
+     */
+    address public unlocker;
+
+    /**
+     * @dev Structure to store the details of a locked CZR.
+     */
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    /**
+     * @dev Mapping from an address to an array of its locked CZR details.
+     */
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    /**
+     * @notice Constructor to initialize the contract with the token address and unlocker address.
+     * @param _tokenAddr The address of the CZR token.
+     * @param _unlocker The address of the unlocker.
+     */
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    /**
+     * @notice Removes a CZR lock by setting all fields to zero.
+     * @param addr The address for which the lock is to be removed.
+     * @param index The index of the lock to be removed.
+     */
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length, "Invalid index");
+        lockedCZRMap[addr][index] = LockedCZR(0, 0, 0, 0);
+        emit RemoveLock(addr, index);
+    }
+
+    /**
+     * @notice Adds a new CZR lock.
+     * @param addr The address for which the lock is to be added.
+     * @param startLockTime The time when the lock starts (0 for now).
+     * @param amount The amount of CZR tokens to be locked.
+     * @param lockMonth The duration of the lock in months.
+     */
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        require(amount > 0, "Amount must be greater than zero");
+        require(lockMonth > 0, "Lock month must be greater than zero");
+        lockedCZRMap[addr].push(LockedCZR(startLockTime, lockMonth, amount, 0));
+        emit AddLock(addr, lockedCZRMap[addr].length - 1, startLockTime, lockMonth, amount);
+    }
+
+    /**
+     * @dev Unlocks CZR tokens for a user based on lock duration.
+     * @param addr Address of the user whose tokens are being unlocked
+     * @param limit Maximum number of locks to process (0 for unlimited)
+     * @dev Requirements:
+     *   - Only callable by contract owner or unlocker
+     *   - User must have existing locked CZR records
+     * @dev Behavior:
+     *   - Calculates unlockable amount for each lock based on time passed
+     *   - Processes up to 'limit' locks if specified
+     *   - Transfers unlocked tokens to user's address
+     *   - Emits Unlock event for each processed lock
+     * @dev Notes:
+     *   - Locks are processed in order (oldest first)
+     *   - Monthly unlocking schedule is enforced
+     *   - Requires sufficient token balance in contract
+     * @dev Returns:
+     *   - Number of locks processed (implicit via require check)
+     */
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker, "Unauthorized caller");
+
+        LockedCZR[] storage locks = lockedCZRMap[addr];
+        require(locks.length > 0, "No locks found");
+
+        uint count = 0;
+        for(uint i = 0; i < locks.length; i++) {
+            if(limit > 0 && count >= limit) break;
+
+            LockedCZR storage lock = locks[i];
+
+            if(lock.lockedAmount <= lock.unlockedAmount) continue;
+
+            uint monthsPassed = (now - lock.startLockTime) / 30 days; // Approximate month calculation
+            uint unlockableMonths = monthsPassed > lock.lockMonth ? lock.lockMonth : monthsPassed;
+
+            uint totalUnlockable = (lock.lockedAmount * unlockableMonths) / lock.lockMonth;
+            uint availableToUnlock = totalUnlockable - lock.unlockedAmount;
+
+            if(availableToUnlock > 0) {
+                lock.unlockedAmount += availableToUnlock;
+                require(token(tokenAddr).transferFrom(this, addr, availableToUnlock), "Token transfer failed");
+                emit Unlock(addr, i, availableToUnlock);
+            }
+            
+            count++;
+        }
+    }
+
+    /**
+     * @notice Withdraws ETH to a specified address.
+     * @param to The address to receive the ETH.
+     * @param value The amount of ETH to be transferred.
+     */
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        require(to != address(0), "Invalid address");
+        require(this.balance >= value, "Insufficient ETH balance");
+        to.transfer(value);
+    }
+
+    /**
+     * @notice Fallback function to receive ETH.
+     */
+    function() payable public {
+    }
+}
+```
+
+This contract provides the required functionality to manage CZR token locks, including adding, removing, and unlocking tokens, as well as withdrawing ETH from the contract. It ensures that only the owner or designated unlocker can perform certain operations and enforces a monthly unlocking schedule.

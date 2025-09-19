@@ -1,0 +1,172 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.14;
+
+contract Cyber is ERC721Omni {
+    string private _baseURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Contract Caller");
+        _;
+    }
+
+    function donate() external payable {}
+
+    function traverseChains(uint16 _chainId, uint tokenId) public payable {
+        require(ownerOf(tokenId) == msg.sender, "Not owner");
+        require(trustedRemoteLookup[_chainId].length != 0, "Chain not trusted");
+        
+        _burn(tokenId);
+        totalSupply--;
+
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForLzReceive);
+
+        (uint nativeFee, ) = endpoint.estimateFees(
+            _chainId,
+            address(this),
+            payload,
+            false,
+            adapterParams
+        );
+        require(msg.value >= nativeFee, "Insufficient fee");
+
+        _lzSend(_chainId, payload, payable(msg.sender), address(0x0), adapterParams);
+
+        if (msg.value > nativeFee) {
+            payable(msg.sender).transfer(msg.value - nativeFee);
+        }
+    }
+
+    function _LzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) override internal {
+        (address toAddress, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        _safeMint(toAddress, tokenId);
+        totalSupply++;
+    }
+
+    function publicMint() external callerIsUser {
+        require(publicStatus, "Public mint inactive");
+        require(publicMinted < publicMintedCap, "Public cap reached");
+        require(totalSupply + 1 <= maximumSupply, "Exceeds max supply");
+        publicMinted++;
+        totalSupply++;
+        _safeMint(msg.sender, publicMinted);
+    }
+
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        require(huntlistStatus, "Huntlist mint inactive");
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(verifyProof(_proof, merkleRoot, leaf), "Invalid proof");
+        require(_addressData[msg.sender].huntlistMinted == 0, "Already minted");
+        require(totalSupply + 2 <= maximumSupply, "Exceeds max supply");
+        
+        _addressData[msg.sender].huntlistMinted += 2;
+        totalSupply += 2;
+        
+        uint256 firstTokenId = publicMintedCap + (totalSupply - publicMinted - 1);
+        _safeMint(msg.sender, firstTokenId);
+        _safeMint(msg.sender, firstTokenId + 1);
+    }
+
+    function verifyProof(bytes32[] memory proof, bytes32 root, bytes32 leaf) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash <= proofElement) {
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+        return computedHash == root;
+    }
+
+    function burnHunter(uint256 tokenId) external {
+        require(ownerOf(tokenId) == msg.sender, "Not owner");
+        _burn(tokenId);
+        totalSupply--;
+    }
+
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        require(_supply <= maximumSupply, "Exceeds max supply");
+        publicMintedCap = _supply;
+    }
+
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Already depreciated");
+        require(totalSupply + 66 <= maximumSupply, "Exceeds max supply");
+        depreciatedMint = true;
+        for (uint i = 0; i < 66; i++) {
+            _safeMint(owner, totalSupply + 1 + i);
+        }
+        totalSupply += 66;
+    }
+
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseURI = _newURI;
+    }
+
+    function setGasForDestinationLzReceive(uint _newGasValue) external onlyOwner {
+        gasForLzReceive = _newGasValue;
+    }
+
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    function baseURI() override public view returns (string memory) {
+        return _baseURI;
+    }
+
+    function withdrawDonations() external onlyOwner {
+        payable(owner).transfer(address(this).balance);
+    }
+}
+
+interface ILayerZeroUserApplicationConfig {
+    function setConfig(uint16 _version, uint16 _chainId, uint _configType, bytes calldata _config) external;
+    function setSendVersion(uint16 _version) external;
+    function setReceiveVersion(uint16 _version) external;
+    function forceResumeReceive(uint16 _srcChainId, bytes calldata _srcAddress) external;
+}
+
+library Address {
+    function isContract(address account) internal view returns (bool) {
+        return account.code.length > 0;
+    }
+
+    function sendValue(address payable recipient, uint256 amount) internal {
+        require(address(this).balance >= amount, "Address: insufficient balance");
+        (bool success, ) = recipient.call{value: amount}("");
+        require(success, "Address: unable to send value");
+    }
+}
+
+error CallerNotOwner();
+error NewOwnerAddressZero();
+```

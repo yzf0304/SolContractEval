@@ -1,0 +1,213 @@
+Below is the completed contract implementation based on the provided contexts and description. All functionalities have been strictly implemented without introducing unrelated code or dependencies.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
+
+/**
+ * @title MCHstaking
+ * @notice This contract allows users to stake MCH tokens and provides functionalities for managing staking, blacklisting, and allowances.
+ * @dev The contract is designed to interact with an MCH token (ERC20) and a secondary contract (MCF). It also includes owner-only functions for management.
+ */
+contract MCHstaking is MCHstakingInterface {
+    address private _owner;
+    mapping(address => bool) private _allowance;
+    IERC20 private MCH;
+    contract2 private MCF;
+
+    mapping(address => uint256) private _staking;
+    mapping(address => uint256) private _block;
+
+    uint256 private _totalStaked;
+
+    mapping(address => bool) private _blackListed;
+
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "Not the contract owner");
+        _;
+    }
+
+    modifier onlyAllowed() {
+        require(_allowance[msg.sender], "Not allowed");
+        _;
+    }
+
+    constructor(address MCHtoken) {
+        MCH = IERC20(MCHtoken);
+        _owner = msg.sender;
+        _allowance[msg.sender] = true;
+    }
+
+    /**
+     * @notice Sets the MCF contract address.
+     * @dev Only the contract owner can call this function.
+     * @param contractAddress The address of the MCF contract.
+     */
+    function setMCFcontract(address contractAddress) external onlyOwner {
+        MCF = contract2(contractAddress);
+    }
+
+    /**
+     * @notice Returns the staking statistics of a user.
+     * @dev This function returns the amount staked and the block number at which the user last staked.
+     * @param user The address of the user.
+     * @return amount The amount of MCH staked by the user.
+     * @return stakingBlock The block number at which the user last staked.
+     */
+    function stakingStats(address user) external view override returns (uint256 amount, uint256 stakingBlock) {
+        return (_staking[user], _block[user]);
+    }
+
+    /**
+     * @notice Returns the total amount of MCH staked in the contract.
+     * @dev This function is used to get the total staked amount.
+     * @return The total amount of MCH staked.
+     */
+    function totalStaked() external view override returns (uint256) {
+        return _totalStaked;
+    }
+
+    /**
+     * @notice Checks if a user is blacklisted.
+     * @param user The address of the user.
+     * @return A boolean indicating whether the user is blacklisted.
+     */
+    function showBlackUser(address user) external view override returns (bool) {
+        return _blackListed[user];
+    }
+
+    /**
+     * @notice Checks if a user has allowance.
+     * @param user The address of the user.
+     * @return A boolean indicating whether the user has allowance.
+     */
+    function allowance(address user) external view override returns (bool) {
+        return _allowance[user];
+    }
+
+    /**
+     * @notice Transfers ownership of the contract to a new address.
+     * @dev Only the current owner can call this function.
+     * @param to The address of the new owner.
+     */
+    function transferOwnership(address to) external override onlyOwner {
+        require(to != address(0), "Invalid address");
+        _owner = to;
+    }
+
+    /**
+     * @notice Grants allowance to a user.
+     * @dev Only the contract owner can call this function.
+     * @param user The address of the user to grant allowance to.
+     */
+    function giveAllowence(address user) external override onlyOwner {
+        _allowance[user] = true;
+    }
+
+    /**
+     * @notice Revokes allowance from a user.
+     * @dev Only the contract owner can call this function.
+     * @param user The address of the user to revoke allowance from.
+     */
+    function removeAllowence(address user) external override onlyOwner {
+        _allowance[user] = false;
+    }
+
+    /**
+     * @notice Adds a user to the blacklist.
+     * @dev Only the contract owner can call this function.
+     * @param user The address of the user to add to the blacklist.
+     */
+    function addToBlackList(address user) external override onlyOwner {
+        _blackListed[user] = true;
+    }
+
+    /**
+     * @notice Removes a user from the blacklist.
+     * @dev Only the contract owner can call this function.
+     * @param user The address of the user to remove from the blacklist.
+     */
+    function removeFromBlackList(address user) external override onlyOwner {
+        _blackListed[user] = false;
+    }
+
+    /**
+     * @notice Allows a user to stake MCH tokens.
+     * @dev This function transfers MCH tokens from the user to the contract and updates the staking data.
+     * @param amount The amount of MCH to stake.
+     */
+    function stakeMCH(uint256 amount) external override {
+        require(!_blackListed[msg.sender], "Blacklisted user");
+        require(amount > 0, "Invalid staking amount");
+        require(MCH.transferFrom(msg.sender, address(this), amount), "Token transfer failed");
+
+        _staking[msg.sender] += amount;
+        _block[msg.sender] = block.number;
+        _totalStaked += amount;
+
+        emit Stake(msg.sender, amount);
+    }
+
+    /**
+     * @notice Allows a user to unstake MCH tokens.
+     * @dev Only addresses with allowance can call this function.
+     * @param user The address of the user to unstake.
+     * @param amount The amount of MCH to unstake.
+     */
+    function unstake(address user, uint256 amount) external override onlyAllowed {
+        require(!_blackListed[user], "Blacklisted user");
+        require(amount > 0 && _staking[user] >= amount, "Invalid unstaking amount");
+
+        _staking[user] -= amount;
+        _totalStaked -= amount;
+        require(MCH.transfer(user, amount), "Token transfer failed");
+    }
+
+    /**
+     * @notice Refreshes the block number for a user's staking.
+     * @dev Only addresses with allowance can call this function.
+     * @param user The address of the user.
+     */
+    function refreshBlock(address user) external override onlyAllowed {
+        require(!_blackListed[user], "Blacklisted user");
+        _block[user] = block.number;
+    }
+
+    /**
+     * @notice Sets the staking data for a user.
+     * @dev Only addresses with allowance can call this function.
+     * @param user The address of the user.
+     * @param staked The amount of MCH staked by the user.
+     * @param stakingBlock The block number at which the user last staked.
+     * @param stakedMCH The total amount of MCH staked in the contract.
+     */
+    function setData(address user, uint256 staked, uint256 stakingBlock, uint256 stakedMCH) external override onlyAllowed {
+        _staking[user] = staked;
+        _block[user] = stakingBlock;
+        _totalStaked = stakedMCH;
+    }
+
+    /**
+     * @notice Transfers MCH tokens to another address.
+     * @dev Only addresses with allowance can call this function. The transfer amount must not exceed the available balance.
+     * @param to The address to transfer the MCH tokens to.
+     * @param amount The amount of MCH to transfer.
+     */
+    function transferMCH(address to, uint256 amount) external override onlyAllowed {
+        require(!_blackListed[to], "Blacklisted recipient");
+        require(amount > 0 && MCH.balanceOf(address(this)) >= amount, "Invalid transfer amount");
+
+        require(MCH.transfer(to, amount), "Token transfer failed");
+    }
+
+    /**
+     * @notice Allows the owner to withdraw MCH tokens in case of an emergency.
+     * @dev Only the contract owner can call this function.
+     * @param amount The amount of MCH to withdraw.
+     */
+    function emergencyWithdraw(uint256 amount) external override onlyOwner {
+        require(amount > 0 && MCH.balanceOf(address(this)) >= amount, "Invalid withdraw amount");
+        require(MCH.transfer(_owner, amount), "Token transfer failed");
+    }
+}
+```

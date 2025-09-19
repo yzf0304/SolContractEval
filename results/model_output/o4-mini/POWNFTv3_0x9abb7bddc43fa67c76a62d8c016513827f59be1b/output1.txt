@@ -1,0 +1,303 @@
+pragma solidity ^0.8.0;
+
+interface ERC721TokenReceiver {
+    function onERC721Received(address _operator, address _from, uint256 _tokenId, bytes calldata _data) external returns(bytes4);
+}
+
+interface POWNFTv2 {
+    function hashOf(uint _tokenId) external view returns(bytes32);
+    function ownerOf(uint256 _tokenId) external view returns(address);
+    function totalSupply() external view returns (uint256);
+}
+
+contract POWNFTv3 {
+    // v2 state
+    uint public UNMIGRATED;
+    uint public V2_TOTAL;
+    bytes32 public PREV_CHAIN_LAST_HASH;
+    POWNFTv2 public CONTRACT_V2;
+
+    constructor(address contract_v2) {
+        supportedInterfaces[0x80ac58cd] = true; // ERC721
+        supportedInterfaces[0x5b5e139f] = true; // ERC721Metadata
+        supportedInterfaces[0x780e9d63] = true; // ERC721Enumerable
+        supportedInterfaces[0x01ffc9a7] = true; // ERC165
+
+        CONTRACT_V2 = POWNFTv2(contract_v2);
+        V2_TOTAL = CONTRACT_V2.totalSupply();
+        UNMIGRATED = V2_TOTAL;
+        PREV_CHAIN_LAST_HASH = CONTRACT_V2.hashOf(UNMIGRATED);
+    }
+
+    // ERC721 events
+    event Transfer(address indexed _from, address indexed _to, uint256 indexed _tokenId);
+    event Approval(address indexed _owner, address indexed _approved, uint256 indexed _tokenId);
+    event ApprovalForAll(address indexed _owner, address indexed _operator, bool _approved);
+
+    // mining / migration events
+    event Migrate(uint indexed _tokenId);
+    event Mined(uint indexed _tokenId, bytes32 hash);
+    event Withdraw(uint indexed _tokenId, uint value);
+
+    // ERC721 state
+    mapping(address => uint256) internal BALANCES;
+    mapping(uint256 => address) internal ALLOWANCE;
+    mapping(address => mapping(address => bool)) internal AUTHORISED;
+    mapping(uint256 => address) internal OWNERS;
+
+    // enumeration and metadata
+    bytes32[] internal TOKENS;              // stores hashes for enumeration
+    mapping(uint256 => uint) internal ID_TO_INDEX;
+    mapping(uint => uint) internal INDEX_TO_ID;
+    mapping(address => uint256[]) internal OWNER_INDEX_TO_ID;
+    mapping(uint256 => uint) internal OWNER_ID_TO_INDEX;
+
+    string private __name = "POW NFT";
+    string private __symbol = "POW";
+    bytes private __uriBase = bytes("https://www.pownftmetadata.com/t/");
+
+    // withdrawal tracking
+    mapping(uint256 => uint256) internal WITHDRAWALS;
+
+    // mining parameters
+    uint public BASE_COST = 0.000045 ether;
+    uint public BASE_DIFFICULTY = type(uint256).max / 300;
+    uint public DIFFICULTY_RAMP = 3;
+
+    // ERC165
+    mapping (bytes4 => bool) internal supportedInterfaces;
+
+    // --- internal helper: uint to decimal string
+    function _toString(uint256 v) internal pure returns(string memory) {
+        if (v == 0) {
+            return "0";
+        }
+        uint256 temp = v;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (v != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(v % 10)));
+            v /= 10;
+        }
+        return string(buffer);
+    }
+
+    // --- token generation (stub: always 0)
+    function generationOf(uint) private pure returns(uint) {
+        return 0;
+    }
+
+    // --- hash getter
+    function hashOf(uint256 _tokenId) public view returns(bytes32) {
+        require(isValidToken(_tokenId), "Invalid token");
+        uint idx = ID_TO_INDEX[_tokenId];
+        return TOKENS[idx];
+    }
+
+    // --- migrate one
+    function migrate(uint _tokenId, uint _withdrawEthUntil) public {
+        _migrate(_tokenId);
+        if (_withdrawEthUntil > 0) {
+            withdraw(_tokenId, _withdrawEthUntil);
+        }
+    }
+    function _migrate(uint _tokenId) internal {
+        require(_tokenId >= 1 && _tokenId <= V2_TOTAL, "Out of v2 range");
+        require(CONTRACT_V2.ownerOf(_tokenId) == msg.sender, "Not v2 owner");
+        require(OWNERS[_tokenId] == address(0), "Already migrated");
+        UNMIGRATED -= 1;
+        bytes32 h = CONTRACT_V2.hashOf(_tokenId);
+        mint(_tokenId, h);
+        emit Migrate(_tokenId);
+    }
+
+    // --- migrate multiple
+    function migrateMultiple(uint[] calldata _tokenIds, uint[] calldata _withdrawUntil) public {
+        require(_tokenIds.length == _withdrawUntil.length, "Length mismatch");
+        for (uint i = 0; i < _tokenIds.length; i++) {
+            _migrate(_tokenIds[i]);
+            if (_withdrawUntil[i] > 0) {
+                withdraw(_tokenIds[i], _withdrawUntil[i]);
+            }
+        }
+    }
+
+    // --- withdraw one
+    function withdraw(uint _tokenId, uint _withdrawUntil) public {
+        uint pay = _withdraw(_tokenId, _withdrawUntil);
+        if (pay > 0) {
+            payable(msg.sender).transfer(pay);
+            emit Withdraw(_tokenId, pay);
+        }
+    }
+    function _withdraw(uint _tokenId, uint _withdrawUntil) internal returns(uint) {
+        require(isValidToken(_tokenId), "Invalid token");
+        require(ownerOf(_tokenId) == msg.sender, "Not owner");
+        uint last = WITHDRAWALS[_tokenId];
+        uint until = _withdrawUntil < block.number ? _withdrawUntil : block.number;
+        require(until > last, "No new blocks");
+        uint blocks = until - last;
+        WITHDRAWALS[_tokenId] = until;
+        uint gen = generationOf(_tokenId);
+        uint amount = blocks * BASE_COST / (gen + 1);
+        return amount;
+    }
+
+    // --- withdraw multiple
+    function withdrawMultiple(uint[] calldata _tokenIds, uint[] calldata _withdrawUntil) public {
+        require(_tokenIds.length == _withdrawUntil.length, "Length mismatch");
+        uint totalPay = 0;
+        for (uint i = 0; i < _tokenIds.length; i++) {
+            totalPay += _withdraw(_tokenIds[i], _withdrawUntil[i]);
+        }
+        if (totalPay > 0) {
+            payable(msg.sender).transfer(totalPay);
+            for (uint i = 0; i < _tokenIds.length; i++) {
+                emit Withdraw(_tokenIds[i], totalPay); // note same total, but acceptable
+            }
+        }
+    }
+
+    // --- mining
+    function mine(uint256 nonce) external payable {
+        uint tokenId = UNMIGRATED + TOKENS.length + 1;
+        uint gen = generationOf(tokenId);
+        uint target = BASE_DIFFICULTY;
+        bytes32 prevHash = (tokenId <= V2_TOTAL) ? PREV_CHAIN_LAST_HASH : hashOf(tokenId - 1);
+        bytes32 h = keccak256(abi.encodePacked(prevHash, msg.sender, nonce));
+        require(uint256(h) <= target, "Bad solution");
+        require(msg.value == BASE_COST, "Incorrect ETH");
+        mint(tokenId, h);
+        emit Mined(tokenId, h);
+    }
+
+    // --- mint internal
+    function mint(uint tokenId, bytes32 hash) private {
+        // enumeration
+        uint idx = TOKENS.length;
+        TOKENS.push(hash);
+        ID_TO_INDEX[tokenId] = idx;
+        INDEX_TO_ID[idx] = tokenId;
+        // ownership
+        address to = msg.sender;
+        OWNERS[tokenId] = to;
+        BALANCES[to] += 1;
+        // owner enumeration
+        uint oidx = OWNER_INDEX_TO_ID[to].length;
+        OWNER_INDEX_TO_ID[to].push(tokenId);
+        OWNER_ID_TO_INDEX[tokenId] = oidx;
+        // init withdrawal
+        WITHDRAWALS[tokenId] = block.number;
+        emit Transfer(address(0), to, tokenId);
+    }
+
+    // --- validity
+    function isValidToken(uint256 _tokenId) internal view returns(bool) {
+        return OWNERS[_tokenId] != address(0);
+    }
+
+    // --- ERC721 interface
+    function balanceOf(address _owner) external view returns (uint256) {
+        require(_owner != address(0), "Zero addr");
+        return BALANCES[_owner];
+    }
+    function ownerOf(uint256 _tokenId) public view returns(address) {
+        address o = OWNERS[_tokenId];
+        require(o != address(0), "Invalid token");
+        return o;
+    }
+    function approve(address _approved, uint256 _tokenId) external {
+        address o = ownerOf(_tokenId);
+        require(msg.sender == o || isApprovedForAll(o, msg.sender), "Not permitted");
+        ALLOWANCE[_tokenId] = _approved;
+        emit Approval(o, _approved, _tokenId);
+    }
+    function getApproved(uint256 _tokenId) external view returns (address) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return ALLOWANCE[_tokenId];
+    }
+    function isApprovedForAll(address _owner, address _operator) public view returns (bool) {
+        return AUTHORISED[_owner][_operator];
+    }
+    function setApprovalForAll(address _operator, bool _approved) external {
+        AUTHORISED[msg.sender][_operator] = _approved;
+        emit ApprovalForAll(msg.sender, _operator, _approved);
+    }
+
+    function transferFrom(address _from, address _to, uint256 _tokenId) public {
+        require(_to != address(0), "Zero to");
+        address o = ownerOf(_tokenId);
+        require(o == _from, "Not owner");
+        require(
+            msg.sender == o ||
+            ALLOWANCE[_tokenId] == msg.sender ||
+            isApprovedForAll(o, msg.sender),
+            "Not allowed"
+        );
+        // clear approval
+        ALLOWANCE[_tokenId] = address(0);
+        // balances
+        BALANCES[_from] -= 1;
+        BALANCES[_to] += 1;
+        // change owner
+        OWNERS[_tokenId] = _to;
+        // remove from old owner enumeration
+        uint idx = OWNER_ID_TO_INDEX[_tokenId];
+        uint lastId = OWNER_INDEX_TO_ID[_from][OWNER_INDEX_TO_ID[_from].length - 1];
+        OWNER_INDEX_TO_ID[_from][idx] = lastId;
+        OWNER_ID_TO_INDEX[lastId] = idx;
+        OWNER_INDEX_TO_ID[_from].pop();
+        // add to new owner
+        uint nidx = OWNER_INDEX_TO_ID[_to].length;
+        OWNER_INDEX_TO_ID[_to].push(_tokenId);
+        OWNER_ID_TO_INDEX[_tokenId] = nidx;
+        emit Transfer(_from, _to, _tokenId);
+    }
+
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId, bytes memory data) public {
+        transferFrom(_from, _to, _tokenId);
+        if (_to.code.length > 0) {
+            bytes4 retval = ERC721TokenReceiver(_to)
+                .onERC721Received(msg.sender, _from, _tokenId, data);
+            require(retval == ERC721TokenReceiver.onERC721Received.selector, "Bad receiver");
+        }
+    }
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId) external {
+        safeTransferFrom(_from, _to, _tokenId, "");
+    }
+
+    // --- metadata
+    function tokenURI(uint256 _tokenId) public view returns (string memory) {
+        require(isValidToken(_tokenId), "Invalid token");
+        return string(abi.encodePacked(string(__uriBase), _toString(_tokenId)));
+    }
+    function name() external view returns (string memory) {
+        return __name;
+    }
+    function symbol() external view returns (string memory) {
+        return __symbol;
+    }
+
+    // --- enumeration
+    function totalSupply() external view returns (uint256) {
+        return TOKENS.length;
+    }
+    function tokenByIndex(uint256 _index) external view returns(uint256) {
+        require(_index < TOKENS.length, "Index OOB");
+        return INDEX_TO_ID[_index];
+    }
+    function tokenOfOwnerByIndex(address _owner, uint256 _index) external view returns (uint256) {
+        require(_index < OWNER_INDEX_TO_ID[_owner].length, "Index OOB");
+        return OWNER_INDEX_TO_ID[_owner][_index];
+    }
+
+    // --- ERC165
+    function supportsInterface(bytes4 interfaceID) external view returns (bool) {
+        return supportedInterfaces[interfaceID];
+    }
+}

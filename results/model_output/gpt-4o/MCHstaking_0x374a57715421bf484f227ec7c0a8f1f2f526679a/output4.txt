@@ -1,0 +1,158 @@
+Here is the fully functional `MCHstaking` contract that adheres to the provided interface, context, and description. It is implemented with compiler version `0.8.4` and does not include any unrelated or extraneous code.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
+
+import "./IERC20.sol";
+import "./contract2.sol";
+import "./MCHstakingInterface.sol";
+
+/**
+ * @title MCHstaking
+ * @notice This contract allows users to stake MCH tokens and provides functionalities for managing staking, blacklisting, and allowances.
+ * @dev The contract interacts with an MCH token (ERC20) and a secondary contract (MCF).
+ */
+contract MCHstaking is MCHstakingInterface {
+    address private _owner;
+    mapping(address => bool) private _allowance;
+    IERC20 private MCH;
+    contract2 private MCF;
+
+    mapping(address => uint256) private _staking;
+    mapping(address => uint256) private _stakingBlock;
+
+    uint256 private _totalStaked;
+
+    mapping(address => bool) private _blackListed;
+
+    event Stake(address indexed staker, uint256 indexed amount);
+
+    constructor(address MCHtoken) {
+        MCH = IERC20(MCHtoken);
+        _owner = msg.sender;
+        _allowance[msg.sender] = true;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "Caller is not the owner");
+        _;
+    }
+
+    modifier onlyAllowed() {
+        require(_allowance[msg.sender], "Caller is not allowed");
+        _;
+    }
+
+    function setMCFcontract(address contractAddress) external onlyOwner {
+        MCF = contract2(contractAddress);
+    }
+
+    function stakingStats(address user)
+        external
+        view
+        override
+        returns (uint256 amount, uint256 stakingBlock)
+    {
+        return (_staking[user], _stakingBlock[user]);
+    }
+
+    function totalStaked() external view override returns (uint256) {
+        return _totalStaked;
+    }
+
+    function showBlackUser(address user) external view override onlyAllowed returns (bool) {
+        return _blackListed[user];
+    }
+
+    function allowance(address user) external view override onlyAllowed returns (bool) {
+        return _allowance[user];
+    }
+
+    function transferOwnership(address to) external override onlyOwner {
+        require(to != address(0), "New owner is the zero address");
+        _owner = to;
+    }
+
+    function giveAllowence(address user) external override onlyOwner {
+        _allowance[user] = true;
+    }
+
+    function removeAllowence(address user) external override onlyOwner {
+        _allowance[user] = false;
+    }
+
+    function addToBlackList(address user) external override onlyOwner {
+        _blackListed[user] = true;
+    }
+
+    function removeFromBlackList(address user) external override onlyOwner {
+        _blackListed[user] = false;
+    }
+
+    function stakeMCH(uint256 amount) external override {
+        require(!_blackListed[msg.sender], "User is blacklisted");
+        require(amount > 0, "Amount must be greater than zero");
+        require(MCH.transferFrom(msg.sender, address(this), amount), "Token transfer failed");
+
+        _staking[msg.sender] += amount;
+        _stakingBlock[msg.sender] = block.number;
+        _totalStaked += amount;
+
+        emit Stake(msg.sender, amount);
+    }
+
+    function unstake(address user, uint256 amount) external override onlyAllowed {
+        require(!_blackListed[user], "User is blacklisted");
+        require(_staking[user] >= amount, "Insufficient staked balance");
+        require(amount > 0, "Amount must be greater than zero");
+
+        _staking[user] -= amount;
+        _totalStaked -= amount;
+        require(MCH.transfer(user, amount), "Token transfer failed");
+    }
+
+    function refreshBlock(address user) external override onlyAllowed {
+        require(!_blackListed[user], "User is blacklisted");
+        _stakingBlock[user] = block.number;
+    }
+
+    function setData(
+        address user,
+        uint256 staked,
+        uint256 stakingBlock,
+        uint256 stakedMCH
+    ) external override onlyAllowed {
+        _staking[user] = staked;
+        _stakingBlock[user] = stakingBlock;
+        _totalStaked = stakedMCH;
+    }
+
+    function transferMCH(address to, uint256 amount) external override onlyAllowed {
+        require(!_blackListed[to], "Recipient is blacklisted");
+        require(amount > 0, "Amount must be greater than zero");
+        require(MCH.transfer(to, amount), "Token transfer failed");
+    }
+
+    function emergencyWithdraw(uint256 amount) external override onlyOwner {
+        require(amount > 0, "Amount must be greater than zero");
+        require(MCH.transfer(_owner, amount), "Emergency withdrawal failed");
+    }
+}
+```
+
+### Explanation of Implementation:
+
+1. **Owner-only Functions**: Functions like `setMCFcontract`, `transferOwnership`, `giveAllowence`, `removeAllowence`, `addToBlackList`, and `removeFromBlackList` are restricted to the owner via the `onlyOwner` modifier.
+
+2. **Allowance-based Restrictions**: Functions requiring elevated privileges for certain addresses (`onlyAllowed`) check against `_allowance`.
+
+3. **Blacklisting**: A simple mapping tracks blacklisted users, preventing them from interacting with sensitive functions such as `stakeMCH` and `unstake`.
+
+4. **Staking Logic**: Users can stake and unstake tokens, with the contract managing their staking balances and associated block numbers.
+
+5. **Emergency Withdrawals**: The owner can withdraw tokens from the contract in emergencies.
+
+6. **Events**: The `Stake` event is emitted whenever a user successfully stakes tokens.
+
+This contract follows the provided interface and adheres strictly to the requirements without introducing unrelated features.

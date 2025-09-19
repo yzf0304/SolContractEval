@@ -1,0 +1,164 @@
+Below is the complete implementation of the `GCUToken` contract based on the provided context and descriptions.
+
+```solidity
+pragma solidity ^0.4.26;
+
+import "./SafeMath.sol";
+
+contract GCUToken is ERC223Interface {
+    using SafeMath for uint256;
+
+    /* Contract Constants */
+    string public constant _name = "Global Currency Unit";
+    string public constant _symbol = "GCU";
+    uint8 public constant _decimals = 18;
+
+    /* Contract Variables */
+    address public owner;
+    uint256 public totalSupply_;
+
+    mapping(address => uint256) public balances;
+    mapping(address => mapping(address => uint256)) public allowed;
+
+    /* Constructor initializes the owner's balance and the total supply */
+    constructor(uint256 _amount, address _initialWallet) public {
+        owner = _initialWallet;
+        totalSupply_ = _amount.mul(uint256(10) ** _decimals);
+        balances[_initialWallet] = totalSupply_;
+
+        emit Transfer(0x0, _initialWallet, totalSupply_);
+    }
+
+    /* ERC20 Events */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed from, address indexed to, uint256 value);
+
+    /* ERC223 Events */
+    event Transfer(address indexed from, address indexed to, uint value, bytes data);
+
+    /* ERC20 Functions */
+    
+    function totalSupply() public view returns (uint256) {
+        return totalSupply_;
+    }
+
+    function balanceOf(address _address) public view returns (uint256 balance) {
+        return balances[_address];
+    }
+
+    function transfer(address _to, uint _value) public returns (bool success) {
+        bytes memory empty; // Empty data for compatibility with ERC223
+        return transfer(_to, _value, empty);
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_value <= allowed[_from][msg.sender], "Allowance exceeded.");
+        require(_value <= balances[_from], "Insufficient balance.");
+
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        emit Transfer(_from, _to, _value);
+        return true;
+    }
+
+    function approve(address _spender, uint256 _allowance) public returns (bool success) {
+        allowed[msg.sender][_spender] = _allowance;
+        emit Approval(msg.sender, _spender, _allowance);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public view returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    function name() public view returns (string name) {
+        return _name;
+    }
+
+    function symbol() public view returns (string symbol) {
+        return _symbol;
+    }
+
+    function decimals() public view returns (uint8 decimals) {
+        return _decimals;
+    }
+
+    /* ERC223 Functions */
+    
+    function transfer(address _to, uint _value, bytes _data) public returns (bool success) {
+        require(_value <= balances[msg.sender], "Insufficient balance.");
+        require(_to != address(0), "Cannot transfer to zero address.");
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        if (isContract(_to)) {
+            ContractReceiver receiver = ContractReceiver(_to);
+            receiver.tokenFallback(msg.sender, _value, _data);
+            emit Transfer(msg.sender, _to, _value, _data);
+        } else {
+            emit Transfer(msg.sender, _to, _value);
+        }
+
+        return true;
+    }
+
+    function transferToAddress(address _to, uint _value, bytes _data) internal returns (bool success) {
+        require(_value <= balances[msg.sender], "Insufficient balance.");
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        emit Transfer(msg.sender, _to, _value, _data);
+        return true;
+    }
+
+    function transferToContract(address _to, uint _value, bytes _data) internal returns (bool success) {
+        require(_value <= balances[msg.sender], "Insufficient balance.");
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        ContractReceiver receiver = ContractReceiver(_to);
+        receiver.tokenFallback(msg.sender, _value, _data);
+
+        emit Transfer(msg.sender, _to, _value, _data);
+        return true;
+    }
+
+    function isContract(address _address) internal view returns (bool is_contract) {
+        uint256 size;
+        assembly {
+            size := extcodesize(_address)
+        }
+        return size > 0;
+    }
+
+    /* Prevent any Ether from being sent to this contract */
+    function() public {
+        revert();
+    }
+}
+```
+
+### Explanation:
+1. **ERC20 Compliance**:
+   - Implemented standard ERC20 functions such as `transfer`, `approve`, `transferFrom`, and `allowance`.
+
+2. **ERC223 Integration**:
+   - Extended the `transfer` function to handle data and call the `tokenFallback` function for contract addresses.
+   - Implemented helper methods `transferToAddress` and `transferToContract`.
+
+3. **Constructor**:
+   - Initialized the total supply and assigned all tokens to the `_initialWallet`.
+
+4. **Utility Functions**:
+   - `isContract` determines if an address is a contract.
+   - Prevents Ether transfers using a fallback function.
+
+5. **Safety**:
+   - Used `SafeMath` for overflow/underflow protection.
+
+This implementation is based on the provided description and context while adhering to Solidity 0.4.26 standards.

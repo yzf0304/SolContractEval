@@ -1,0 +1,135 @@
+pragma solidity 0.7.4;
+
+contract ClaimContract {
+    using SafeMath for uint256;
+
+    enum MigrationType { V1_UNCLAIMED, HOLDER, STAKER }
+
+    address public constant FLASH_TOKEN_V1 = 0xB4467E8D621105312a914F1D42f10770C0Ffe3c8;
+    address public constant FLASH_TOKEN_V2 = 0x20398aD62bb2D930646d45a6D4292baa0b860C1f;
+    bytes32 public constant MERKLE_ROOT = 0x56dc616cf485d230be34e774839fc4b1b11b0ab99b92d594f7f16f4065f7e814;
+    uint256 public constant V1_UNCLAIMED_DEADLINE = 1617235140;
+
+    // This bitmap tracks which indices have been claimed.
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    event Claimed(uint256 index, address sender, uint256 amount);
+
+    /**
+     * @notice Returns true if the given index has already been claimed.
+     */
+    function isClaimed(uint256 index) public view returns (bool) {
+        uint256 wordIndex = index.div(256);
+        uint256 bitIndex = index.sub(wordIndex.mul(256));
+        uint256 mask = (uint256(1) << bitIndex);
+        return (claimedBitMap[wordIndex] & mask) == mask;
+    }
+
+    /**
+     * @dev Marks an index as claimed in the bitmap.
+     */
+    function _setClaimed(uint256 index) private {
+        uint256 wordIndex = index.div(256);
+        uint256 bitIndex = index.sub(wordIndex.mul(256));
+        uint256 mask = (uint256(1) << bitIndex);
+        claimedBitMap[wordIndex] = claimedBitMap[wordIndex] | mask;
+    }
+
+    /**
+     * @dev Transfers V1 tokens from the user into this contract and returns
+     *      the same amount (1:1) for minting in V2.
+     */
+    function _getMigratableAmountAndTransferV1(address user, uint256 balance) private returns (uint256) {
+        require(
+            IFlashToken(FLASH_TOKEN_V1).transferFrom(user, address(this), balance),
+            "ClaimContract: V1_TRANSFER_FAILED"
+        );
+        return balance;
+    }
+
+    /**
+     * @notice Users call this to claim their V2 tokens.
+     * @param index           The index in the Merkle tree.
+     * @param balance         The base amount of V2 tokens allocatable.
+     * @param bonusAmount     Any bonus tokens for this claim.
+     * @param expiry          For STAKER type: the timestamp after which full bonus vests.
+     * @param expireAfter     For STAKER type: timestamp before which no bonus vests.
+     * @param migrationType   Which type of migration is being claimed.
+     * @param merkleProof     The Merkle proof validating this claim.
+     */
+    function claim(
+        uint256 index,
+        uint256 balance,
+        uint256 bonusAmount,
+        uint256 expiry,
+        uint256 expireAfter,
+        MigrationType migrationType,
+        bytes32[] calldata merkleProof
+    ) external {
+        // 1) ensure not already claimed
+        require(!isClaimed(index), "ClaimContract: ALREADY_CLAIMED");
+
+        // 2) verify merkle proof
+        bytes32 node = keccak256(
+            abi.encodePacked(
+                index,
+                msg.sender,
+                balance,
+                bonusAmount,
+                expiry,
+                expireAfter,
+                migrationType
+            )
+        );
+        require(
+            MerkleProof.verify(merkleProof, MERKLE_ROOT, node),
+            "ClaimContract: INVALID_PROOF"
+        );
+
+        uint256 amountToMint;
+
+        if (migrationType == MigrationType.V1_UNCLAIMED) {
+            // can only claim unclaimed V1 up to a deadline
+            require(
+                block.timestamp <= V1_UNCLAIMED_DEADLINE,
+                "ClaimContract: V1_UNCLAIMED_DEADLINE_PASSED"
+            );
+            // no V1 transfer; 1:1 plus any bonus
+            amountToMint = balance.add(bonusAmount);
+        } else if (migrationType == MigrationType.HOLDER) {
+            // holder migration => user must transfer V1 in
+            amountToMint = _getMigratableAmountAndTransferV1(msg.sender, balance);
+            // include bonus in full
+            amountToMint = amountToMint.add(bonusAmount);
+        } else {
+            // STAKER
+            // 1: transfer V1
+            amountToMint = _getMigratableAmountAndTransferV1(msg.sender, balance);
+            // 2: compute vested bonus
+            require(block.timestamp <= expiry, "ClaimContract: STAKER_EXPIRED");
+            uint256 vestedBonus;
+            if (block.timestamp <= expireAfter) {
+                vestedBonus = 0;
+            } else if (block.timestamp >= expiry) {
+                vestedBonus = bonusAmount;
+            } else {
+                // linear vesting between expireAfter -> expiry
+                vestedBonus = bonusAmount
+                    .mul(block.timestamp.sub(expireAfter))
+                    .div(expiry.sub(expireAfter));
+            }
+            amountToMint = amountToMint.add(vestedBonus);
+        }
+
+        // 3) mint the V2 tokens to the claimant
+        require(
+            IFlashToken(FLASH_TOKEN_V2).mint(msg.sender, amountToMint),
+            "ClaimContract: V2_MINT_FAILED"
+        );
+
+        // 4) mark as claimed
+        _setClaimed(index);
+
+        emit Claimed(index, msg.sender, amountToMint);
+    }
+}

@@ -1,0 +1,338 @@
+pragma solidity 0.8.10;
+
+interface ERC721TokenReceiver {
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 id,
+        bytes calldata data
+    ) external returns (bytes4);
+}
+
+abstract contract ERC721 {
+    event Transfer(address indexed from, address indexed to, uint256 indexed id);
+    event Approval(address indexed owner, address indexed spender, uint256 indexed id);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+    string public name;
+    string public symbol;
+
+    function tokenURI(uint256 id) public view virtual returns (string memory);
+
+    mapping(address => uint256) public balanceOf;
+    mapping(uint256 => address) public ownerOf;
+    mapping(uint256 => address) public getApproved;
+    mapping(address => mapping(address => bool)) public isApprovedForAll;
+
+    constructor(string memory _name, string memory _symbol) {
+        name = _name;
+        symbol = _symbol;
+    }
+
+    function approve(address spender, uint256 id) public virtual {
+        address owner = ownerOf[id];
+        require(msg.sender == owner || isApprovedForAll[owner][msg.sender], "NOT_AUTHORIZED");
+        getApproved[id] = spender;
+        emit Approval(owner, spender, id);
+    }
+
+    function setApprovalForAll(address operator, bool approved) public virtual {
+        isApprovedForAll[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 id
+    ) public virtual {
+        require(from == ownerOf[id], "WRONG_FROM");
+        require(to != address(0), "INVALID_RECIPIENT");
+        require(
+            msg.sender == from
+            || msg.sender == getApproved[id]
+            || isApprovedForAll[from][msg.sender],
+            "NOT_AUTHORIZED"
+        );
+        unchecked {
+            balanceOf[from]--;
+            balanceOf[to]++;
+        }
+        ownerOf[id] = to;
+        delete getApproved[id];
+        emit Transfer(from, to, id);
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id
+    ) public virtual {
+        transferFrom(from, to, id);
+        require(
+            to.code.length == 0
+            || ERC721TokenReceiver(to).onERC721Received(msg.sender, from, id, "") 
+               == ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id,
+        bytes memory data
+    ) public virtual {
+        transferFrom(from, to, id);
+        require(
+            to.code.length == 0
+            || ERC721TokenReceiver(to).onERC721Received(msg.sender, from, id, data)
+               == ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    function supportsInterface(bytes4 interfaceId) public pure virtual returns (bool) {
+        return
+            interfaceId == 0x01ffc9a7  // ERC165
+            || interfaceId == 0x80ac58cd  // ERC721
+            || interfaceId == 0x5b5e139f; // ERC721Metadata
+    }
+
+    function _mint(address to, uint256 id) internal virtual {
+        require(to != address(0), "INVALID_RECIPIENT");
+        require(ownerOf[id] == address(0), "ALREADY_MINTED");
+        unchecked {
+            balanceOf[to]++;
+        }
+        ownerOf[id] = to;
+        emit Transfer(address(0), to, id);
+    }
+
+    function _burn(uint256 id) internal virtual {
+        address owner = ownerOf[id];
+        require(owner != address(0), "NOT_MINTED");
+        unchecked {
+            balanceOf[owner]--;
+        }
+        delete ownerOf[id];
+        delete getApproved[id];
+        emit Transfer(owner, address(0), id);
+    }
+
+    function _safeMint(address to, uint256 id) internal virtual {
+        _mint(to, id);
+        require(
+            to.code.length == 0
+            || ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), id, "")
+               == ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+
+    function _safeMint(
+        address to,
+        uint256 id,
+        bytes memory data
+    ) internal virtual {
+        _mint(to, id);
+        require(
+            to.code.length == 0
+            || ERC721TokenReceiver(to).onERC721Received(msg.sender, address(0), id, data)
+               == ERC721TokenReceiver.onERC721Received.selector,
+            "UNSAFE_RECIPIENT"
+        );
+    }
+}
+
+abstract contract Ownable {
+    address internal _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor() {
+        _owner = msg.sender;
+    }
+
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    function transferOwnership(address _newOwner) external {
+        if (msg.sender != _owner) revert();
+        _owner = _newOwner;
+        emit OwnershipTransferred(msg.sender, _newOwner);
+    }
+
+    function renounceOwnership() public {
+        if (msg.sender != _owner) revert();
+        _owner = address(0);
+        emit OwnershipTransferred(msg.sender, address(0));
+    }
+}
+
+interface IERC721 {
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+    function balanceOf(address owner) external view returns (uint256 balance);
+    function ownerOf(uint256 tokenId) external view returns (address owner);
+
+    function safeTransferFrom(address from, address to, uint256 tokenId) external;
+    function transferFrom(address from, address to, uint256 tokenId) external;
+    function approve(address to, uint256 tokenId) external;
+    function getApproved(uint256 tokenId) external view returns (address operator);
+    function setApprovalForAll(address operator, bool _approved) external;
+    function isApprovedForAll(address owner, address operator) external view returns (bool);
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata data) external;
+
+    // Phunks-specific
+    function getPhunksBelongingToOwner(address _owner) external view returns (uint256[] memory);
+}
+
+library Strings {
+    function toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) { return "0"; }
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits -= 1;
+            buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
+            value /= 10;
+        }
+        return string(buffer);
+    }
+}
+
+contract xApe721 is Ownable, ERC721 {
+    using Strings for uint256;
+
+    uint256 public constant TOTAL_SUPPLY = 10_000;
+    uint256 public constant PRICE_PER_MINT = 0.05 ether;
+    uint256 public constant MAX_MINT_PER_TX = 20;
+
+    bool public mintActive;
+    uint256 public totalSupply;
+    uint256 internal nextMintableId = 10038;
+    string public baseURI;
+    IERC721 public oldContract = IERC721(0x090b1DE324fEA5f0A0B4226101Db645819102629);
+    address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        string memory _baseURI,
+        address _oldContract,
+        address[] memory recipients,
+        uint256[] memory tokens
+    ) payable ERC721(_name, _symbol) {
+        require(recipients.length == tokens.length, "Airdrop lengths");
+        baseURI = _baseURI;
+        if (_oldContract != address(0)) {
+            oldContract = IERC721(_oldContract);
+        }
+        for (uint256 i = 0; i < recipients.length; i++) {
+            _mint(recipients[i], tokens[i]);
+            totalSupply++;
+        }
+    }
+
+    modifier onlyTeamWallet() {
+        require(msg.sender == teamWallet, "Not callable except by team wallet");
+        _;
+    }
+
+    function mint(uint16 amount) external payable {
+        require(mintActive, "Mint not active");
+        require(amount > 0 && amount <= MAX_MINT_PER_TX, "Invalid mint amount");
+        require(totalSupply + amount <= TOTAL_SUPPLY, "Exceeds total supply");
+        require(msg.value == PRICE_PER_MINT * amount, "Incorrect ETH amount");
+        for (uint256 i = 0; i < amount; i++) {
+            uint256 id = _getNextUnusedID();
+            _mint(msg.sender, id);
+            totalSupply++;
+        }
+    }
+
+    function claim(uint256 tokenId) external payable {
+        require(_ownsOldToken(msg.sender, tokenId), "Not owner of old token");
+        require(ownerOf[tokenId] == address(0), "Already claimed");
+        require(totalSupply + 1 <= TOTAL_SUPPLY, "Exceeds total supply");
+        _mint(msg.sender, tokenId);
+        totalSupply++;
+    }
+
+    function claimAll() external payable {
+        uint256[] memory tokens = oldContract.getPhunksBelongingToOwner(msg.sender);
+        uint256 count = tokens.length;
+        require(count > 0, "No tokens to claim");
+        require(totalSupply + count <= TOTAL_SUPPLY, "Exceeds total supply");
+        for (uint256 i = 0; i < count; i++) {
+            uint256 id = tokens[i];
+            if (ownerOf[id] == address(0)) {
+                _mint(msg.sender, id);
+                totalSupply++;
+            }
+        }
+    }
+
+    function _ownsOldToken(address account, uint256 tokenId) internal view returns (bool) {
+        return oldContract.ownerOf(tokenId) == account;
+    }
+
+    function _getNextUnusedID() internal returns (uint256) {
+        return nextMintableId++;
+    }
+
+    function tokenURI(uint256 id) public view override returns (string memory) {
+        require(ownerOf[id] != address(0), "URI query for nonexistent token");
+        return string(abi.encodePacked(baseURI, id.toString()));
+    }
+
+    function withdraw() external onlyTeamWallet {
+        uint256 balance = address(this).balance;
+        (bool success, ) = teamWallet.call{value: balance}("");
+        require(success, "Withdrawal failed");
+    }
+
+    function pauseMint() external {
+        require(msg.sender == owner(), "Ownable: caller is not the owner");
+        mintActive = false;
+    }
+
+    function startMint() external {
+        require(msg.sender == owner(), "Ownable: caller is not the owner");
+        mintActive = true;
+    }
+
+    function setBaseURI(string memory _baseURI) external {
+        require(msg.sender == owner(), "Ownable: caller is not the owner");
+        baseURI = _baseURI;
+    }
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        pure
+        override
+        returns (bool)
+    {
+        return
+            interfaceId == type(IERC721).interfaceId ||
+            interfaceId == 0x150b7a02 || // ERC721Receiver
+            ERC721.supportsInterface(interfaceId);
+    }
+
+    function onERC721Received(
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external pure returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+    }
+}

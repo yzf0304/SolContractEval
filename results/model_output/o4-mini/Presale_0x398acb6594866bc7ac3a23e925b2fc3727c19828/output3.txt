@@ -1,0 +1,222 @@
+pragma solidity 0.4.18;
+
+contract Presale is Claimable, Pausable {
+  using Discounts for Discounts.Collection;
+  using Limits for Limits.Window;
+
+  struct Participant {
+    bool authorized;
+    uint256 minimumTier;
+  }
+
+  SeeToken        public token;
+  Discounts.Collection internal discounts;
+  Limits.Window         internal cap;
+  mapping(address => Participant) internal participants;
+
+  event Tier(uint256 discount, uint256 available);
+
+  function Presale(address _token) public {
+    require(_token != address(0));
+    token = SeeToken(_token);
+    // start paused until everything is configured
+    paused = true;
+  }
+
+  /** MIGRATION: claim ownership of the SEE token */
+  function claimToken() public {
+    token.claimOwnership();
+  }
+
+  /**
+   * @notice Unpause purchases.
+   * @dev Owner must have configured rate, cap, tiers, and claimed token ownership.
+   */
+  function unpause()
+    onlyOwner
+    whenPaused
+    whenRateSet
+    whenCapped
+    whenOwnsToken
+    public
+  {
+    super.unpause();
+  }
+
+  /** ADMIN: set the base token per wei rate */
+  function setRate(uint256 _purchaseRate)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_purchaseRate > 0);
+    discounts.baseRate = _purchaseRate;
+  }
+
+  /** ADMIN: configure the cap window (amount, duration in blocks) */
+  function limitPurchasing(uint256 _amount, uint256 _duration)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_amount > 0 && _duration > 0);
+    cap.amount = _amount;
+    cap.duration = _duration;
+  }
+
+  /** ADMIN: add a discount tier */
+  function addTier(uint256 _discount, uint256 _available)
+    onlyOwner
+    whenPaused
+    public
+  {
+    require(_discount <= Discounts.MAX_DISCOUNT);
+    discounts.addTier(_discount, _available);
+    Tier(_discount, _available);
+  }
+
+  /** ADMIN: authorize participants for a minimum tier */
+  function authorizeForTier(uint256 _minimumTier, address[] _authorized)
+    onlyOwner
+    public
+  {
+    require(_minimumTier < discounts.tiers.length);
+    for (uint i = 0; i < _authorized.length; i++) {
+      address who = _authorized[i];
+      require(who != address(0));
+      participants[who].authorized = true;
+      participants[who].minimumTier = _minimumTier;
+    }
+  }
+
+  /** ADMIN: withdraw collected ether */
+  function withdraw()
+    onlyOwner
+    public
+  {
+    owner.transfer(this.balance);
+  }
+
+  /** FALLBACK: buy tokens */
+  function ()
+    public
+    payable
+  {
+    purchaseTokens();
+  }
+
+  /**
+   * @notice purchase tokens using msg.value.
+   * @dev Only authorized & whenNotPaused.
+   *      Records cap, issues SEE tokens, refunds remainder.
+   */
+  function purchaseTokens()
+    onlyAuthorized
+    whenNotPaused
+    public
+    payable
+  {
+    uint256 weiSent = msg.value;
+    require(weiSent > 0);
+
+    // how many tokens may this participant still buy?
+    uint256 allowed = cap.getLimit(msg.sender);
+    require(allowed > 0);
+
+    // try to purchase up to `allowed` tokens starting at min tier
+    uint256 minTier = participants[msg.sender].minimumTier;
+    (uint256 purchased, uint256 remaining) = discounts.purchaseTokens(
+      allowed,
+      weiSent,
+      minTier
+    );
+
+    // if nothing bought, refund all and exit
+    if (purchased == 0) {
+      msg.sender.transfer(weiSent);
+      return;
+    }
+
+    // record usage in cap window
+    cap.recordPurchase(msg.sender, purchased);
+
+    // issue SEE tokens to purchaser
+    token.issue(msg.sender, purchased);
+
+    // refund any leftover wei
+    if (remaining > 0) {
+      msg.sender.transfer(remaining);
+    }
+  }
+
+  /** VIEW: get current purchase limit settings */
+  function getPurchaseLimit()
+    public
+    view
+    returns (uint256 _amount, uint256 _duration)
+  {
+    _amount = cap.amount;
+    _duration = cap.duration;
+  }
+
+  /** VIEW: list all discount tiers (discount, available) */
+  function getTiers()
+    public
+    view
+    returns (uint256[2][])
+  {
+    uint256 len = discounts.tiers.length;
+    uint256[2][] memory list = new uint256[2][](len);
+    for (uint256 i = 0; i < len; i++) {
+      Discounts.Tier storage t = discounts.tiers[i];
+      list[i][0] = t.discount;
+      list[i][1] = t.available;
+    }
+    return list;
+  }
+
+  /**
+   * @notice get availability per tier for a participant
+   * @dev returns zeros for non-authorized or below-minimum tiers
+   */
+  function getAvailability(address _participant)
+    public
+    view
+    returns (uint256[])
+  {
+    uint256 len = discounts.tiers.length;
+    uint256[] memory avail = new uint256[](len);
+    if (!participants[_participant].authorized) {
+      return avail;
+    }
+    uint256 minTier = participants[_participant].minimumTier;
+    for (uint256 i = minTier; i < len; i++) {
+      avail[i] = discounts.tiers[i].available;
+    }
+    return avail;
+  }
+
+  /** MODIFIER: only authorized participants */
+  modifier onlyAuthorized() {
+    require(participants[msg.sender].authorized);
+    _;
+  }
+
+  /** MODIFIER: base rate must be configured */
+  modifier whenRateSet() {
+    require(discounts.baseRate != 0);
+    _;
+  }
+
+  /** MODIFIER: cap window must be configured */
+  modifier whenCapped() {
+    require(cap.amount != 0);
+    _;
+  }
+
+  /** MODIFIER: this contract must own the token contract */
+  modifier whenOwnsToken() {
+    require(token.owner() == address(this));
+    _;
+  }
+}

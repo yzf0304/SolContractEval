@@ -1,0 +1,94 @@
+I see you have provided the context and description for the `MoonCatKeyVote` smart contract. It seems like you want me to complete the implementation of this contract. I will provide the completed contract code below:
+
+```solidity
+contract MoonCatKeyVote {
+
+    event VoteSubmitted(address voter, bool vote);
+
+    uint public voteStartTime = 0;
+    bool public voteCancelled = false;
+    mapping (address => bool) public hasVoted;
+    uint32 public yesVotes = 0;
+    uint32 public noVotes = 0;
+
+    bytes32 public immutable merkleRoot;
+    address public immutable owner;
+
+    modifier onlyOwner {
+        require(msg.sender == owner, "Owner Only");
+        _;
+    }
+
+    modifier voteContractIsPending {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime == 0, "Vote Already Started");
+        _;
+    }
+
+    modifier voteContractIsActive {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime > 0, "Vote Not Started");
+        require(block.timestamp < (voteStartTime + 48 hours), "Vote Ended");
+        _;
+    }
+
+    modifier voteContractIsComplete {
+        require(!voteCancelled, "Vote Contract Cancelled");
+        require(voteStartTime > 0, "Vote Not Started");
+        require(block.timestamp > (voteStartTime + 48 hours), "Vote Not Ended");
+        _;
+    }
+
+    constructor(bytes32 merkleRoot_) {
+        merkleRoot = merkleRoot_;
+        owner = msg.sender;
+    }
+
+    function startVote() public onlyOwner voteContractIsPending {
+        voteStartTime = block.timestamp;
+    }
+
+    function cancelVote() public onlyOwner voteContractIsPending {
+        voteCancelled = true;
+    }
+
+    function getResult() public view voteContractIsComplete returns (bool) {
+        return yesVotes > noVotes;
+    }
+
+    function submitVote(bytes32[] calldata eligibilityProof, bool vote) public voteContractIsActive {
+        require(!hasVoted[msg.sender], "Already Voted");
+        require(verifyMerkleProof(eligibilityProof, msg.sender), "Invalid Voter");
+
+        hasVoted[msg.sender] = true;
+        if (vote) {
+            yesVotes++;
+        } else {
+            noVotes++;
+        }
+
+        emit VoteSubmitted(msg.sender, vote);
+    }
+
+    function verifyMerkleProof(bytes32[] calldata proof, address voter) internal view returns (bool) {
+        bytes32 hash = keccak256(abi.encodePacked(voter));
+        bytes32 currentHash;
+
+        for (uint i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+
+            if (hash < proofElement) {
+                currentHash = keccak256(abi.encodePacked(hash, proofElement));
+            } else {
+                currentHash = keccak256(abi.encodePacked(proofElement, hash));
+            }
+
+            hash = currentHash;
+        }
+
+        return hash == merkleRoot;
+    }
+}
+``` 
+
+This completed `MoonCatKeyVote` contract includes the necessary functions to start, cancel, and submit votes, as well as verify voter eligibility using a Merkle proof. Let me know if you need any further modifications or explanations.

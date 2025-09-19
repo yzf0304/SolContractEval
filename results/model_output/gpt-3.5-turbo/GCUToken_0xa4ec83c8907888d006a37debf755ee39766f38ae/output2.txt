@@ -1,0 +1,144 @@
+```solidity
+contract GCUToken is ERC223Interface {
+    using SafeMath for uint256;
+
+    /* Contract Constants */
+    string public constant _name = "Global Currency Unit";
+    string public constant _symbol = "GCU";
+    uint8 public constant _decimals = 18;
+
+    /* Contract Variables */
+    address public owner;
+    uint256 public totalSupply_;
+
+    mapping(address => uint256) public balances;
+    mapping(address => mapping (address => uint256)) public allowed;
+
+    /* Constructor initializes the owner's balance and the supply  */
+    constructor (uint256 _amount, address _initialWallet) {
+        owner = _initialWallet;
+        totalSupply_ = _amount * (uint256(10) ** _decimals);
+        balances[_initialWallet] = totalSupply_;
+
+        emit Transfer(0x0, _initialWallet, totalSupply_);
+    }
+
+    /* ERC20 Events */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed from, address indexed to, uint256 value);
+
+    /* ERC223 Events */
+    event Transfer(address indexed from, address indexed to, uint value, bytes data);
+
+    function totalSupply() public view returns (uint256) {
+        return totalSupply_;
+    }
+
+    function balanceOf(address _address) view returns (uint256 balance) {
+        return balances[_address];
+    }
+
+    function transfer(address _to, uint _value) returns (bool success) {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _value);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        emit Transfer(msg.sender, _to, _value);
+
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) returns (bool success) {
+        require(_to != address(0));
+        require(balances[_from] >= _value);
+        require(allowed[_from][msg.sender] >= _value);
+
+        balances[_from] = balances[_from].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+        allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+
+        emit Transfer(_from, _to, _value);
+
+        return true;
+    }
+
+    function approve(address _spender, uint256 _allowance) returns (bool success) {
+        allowed[msg.sender][_spender] = _allowance;
+        emit Approval(msg.sender, _spender, _allowance);
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) view returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+
+    function name() view returns (string name) {
+        return _name;
+    }
+
+    function symbol() view returns (string symbol) {
+        return _symbol;
+    }
+
+    function decimals() view returns (uint8 decimals) {
+        return _decimals;
+    }
+
+    function transfer(address _to, uint _value, bytes _data) returns (bool success) {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _value);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        if (isContract(_to)) {
+            transferToContract(_to, _value, _data);
+        }
+
+        emit Transfer(msg.sender, _to, _value, _data);
+
+        return true;
+    }
+
+    function transferToAddress(address _to, uint _value, bytes _data) internal returns (bool success) {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _value);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        emit Transfer(msg.sender, _to, _value, _data);
+
+        return true;
+    }
+
+    function transferToContract(address _to, uint _value, bytes _data) internal returns (bool success) {
+        require(_to != address(0));
+        require(balances[msg.sender] >= _value);
+
+        balances[msg.sender] = balances[msg.sender].sub(_value);
+        balances[_to] = balances[_to].add(_value);
+
+        ContractReceiver receiver = ContractReceiver(_to);
+        receiver.tokenFallback(msg.sender, _value, _data);
+
+        emit Transfer(msg.sender, _to, _value, _data);
+
+        return true;
+    }
+
+    function isContract(address _address) internal returns (bool is_contract) {
+        uint length;
+        assembly {
+            length := extcodesize(_address)
+        }
+        return length > 0;
+    }
+
+    function () {
+        revert();
+    }
+}
+```

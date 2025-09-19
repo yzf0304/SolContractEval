@@ -1,0 +1,206 @@
+pragma solidity 0.4.21;
+
+contract ERC20Basic {
+  function totalSupply() public view returns (uint256);
+  function balanceOf(address who) public view returns (uint256);
+  function transfer(address to, uint256 value) public returns (bool);
+  event Transfer(address indexed from, address indexed to, uint256 value);
+}
+
+contract ERC20 is ERC20Basic {
+  function allowance(address owner, address spender) public view returns (uint256);
+  function transferFrom(address from, address to, uint256 value) public returns (bool);
+  function approve(address spender, uint256 value) public returns (bool);
+  event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+contract Ownable {
+  address public owner;
+
+  event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+  function Ownable() public {
+    owner = msg.sender;
+  }
+
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  function transferOwnership(address newOwner) public onlyOwner {
+    require(newOwner != address(0));
+    OwnershipTransferred(owner, newOwner);
+    owner = newOwner;
+  }
+}
+
+library SafeMath {
+  function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+    if (a == 0) {
+      return 0;
+    }
+    uint256 c = a * b;
+    assert(c / a == b);
+    return c;
+  }
+  function div(uint256 a, uint256 b) internal pure returns (uint256) {
+    uint256 c = a / b;
+    return c;
+  }
+  function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+    assert(b <= a);
+    return a - b;
+  }
+  function add(uint256 a, uint256 b) internal pure returns (uint256) {
+    uint256 c = a + b;
+    assert(c >= a);
+    return c;
+  }
+}
+
+/**
+ * @title ICSTCrowSale
+ * @notice A smart contract for conducting a crowdsale, including functionalities for funding, airdrops, and token distribution.
+ * @dev This contract uses SafeMath to prevent overflows and underflows. It inherits from Ownable for access control.
+ */
+contract ICSTCrowSale is Ownable {
+    using SafeMath for uint256;
+
+    // The total amount of tokens that have been distributed through funding.
+    uint256 public totalFundingSupply;
+
+    // The ERC20 token being sold in the crowdsale.
+    ERC20 public token;
+
+    // The start time of the crowdsale.
+    uint256 public startTime;
+
+    // The end time of the crowdsale.
+    uint256 public endTime;
+
+    // The total amount of tokens that have been distributed through airdrops.
+    uint256 public airdropSupply;
+
+    // The rate at which tokens are sold (tokens per wei).
+    uint256 public rate;
+
+    /**
+     * @notice Event emitted when tokens are wasted, typically during an airdrop.
+     * @param to The address to which the tokens were sent.
+     * @param value The amount of tokens sent.
+     * @param date The timestamp when the event occurred.
+     */
+    event Wasted(address indexed to, uint256 value, uint256 date);
+
+    /**
+     * @notice Constructor for the ICSTCrowSale contract.
+     * @dev Initializes default values and sets the token address.
+     */
+    function ICSTCrowSale() public {
+        rate = 0;
+        startTime = 0;
+        endTime = 0;
+        airdropSupply = 0;
+        totalFundingSupply = 0;
+        token = ERC20(0xe6bc60a00b81c7f3cbc8f4ef3b0a6805b6851753);
+    }
+
+    /**
+     * @notice Fallback function to handle incoming ether and process funding.
+     * @dev Requires the current time to be within the sale period.
+     */
+    function () payable external {
+        require(now > startTime);
+        require(now <= endTime);
+
+        // Process funding and transfer tokens
+        processFunding(msg.sender, msg.value, rate);
+
+        // Update total funding supply
+        uint256 amount = msg.value.mul(rate);
+        totalFundingSupply = totalFundingSupply.add(amount);
+    }
+
+    /**
+     * @notice Allows the owner to withdraw a specified amount of tokens.
+     * @param _value The amount of tokens to withdraw.
+     * @dev Only the owner can call this function.
+     */
+    function withdrawCoinToOwner(uint256 _value) external onlyOwner {
+        require(_value > 0);
+        require(token.balanceOf(this) >= _value);
+        require(token.transfer(owner, _value));
+    }
+
+    /**
+     * @notice Allows the owner to airdrop tokens to a list of addresses.
+     * @param _holders The list of addresses to receive the airdrop.
+     * @param paySize The amount of tokens each address will receive.
+     * @dev Only the owner can call this function. Ensures the contract has enough tokens to perform the airdrop.
+     */
+    function airdrop(address[] _holders, uint256 paySize) external onlyOwner {
+        require(paySize > 0);
+        uint256 count = _holders.length;
+        require(count > 0);
+
+        uint256 totalTokens = paySize.mul(count);
+        require(token.balanceOf(this) >= totalTokens);
+
+        for (uint256 i = 0; i < count; i++) {
+            address to = _holders[i];
+            require(token.transfer(to, paySize));
+            airdropSupply = airdropSupply.add(paySize);
+            emit Wasted(to, paySize, now);
+        }
+    }
+
+    /**
+     * @notice Internal function to process the funding and transfer tokens to the receiver.
+     * @param receiver The address to receive the tokens.
+     * @param _value The amount of ether to convert.
+     * @param _rate The rate at which to convert the value to tokens.
+     * @dev Ensures the contract has enough tokens to transfer and performs the transfer.
+     */
+    function processFunding(address receiver, uint256 _value, uint256 _rate) internal {
+        uint256 amount = _value.mul(_rate);
+        require(amount > 0);
+        require(token.balanceOf(this) >= amount);
+        require(token.transfer(receiver, amount));
+    }
+
+    /**
+     * @notice Allows the owner to withdraw all ether from the contract.
+     * @dev Only the owner can call this function.
+     */
+    function etherProceeds() external onlyOwner {
+        owner.transfer(address(this).balance);
+    }
+
+    /**
+     * @notice Initializes the crowdsale with the start time, end time, and rate.
+     * @param _startTime The start time of the crowdsale.
+     * @param _endTime The end time of the crowdsale.
+     * @param _rate The rate at which tokens are sold (tokens per wei).
+     * @dev Only the owner can call this function.
+     */
+    function init(uint256 _startTime, uint256 _endTime, uint256 _rate) external onlyOwner {
+        require(_startTime > now);
+        require(_endTime > _startTime);
+        require(_rate > 0);
+
+        startTime = _startTime;
+        endTime = _endTime;
+        rate = _rate;
+    }
+
+    /**
+     * @notice Allows the owner to change the token address.
+     * @param _tokenAddress The new token address.
+     * @dev Only the owner can call this function.
+     */
+    function changeToken(address _tokenAddress) external onlyOwner {
+        require(_tokenAddress != address(0));
+        token = ERC20(_tokenAddress);
+    }
+}

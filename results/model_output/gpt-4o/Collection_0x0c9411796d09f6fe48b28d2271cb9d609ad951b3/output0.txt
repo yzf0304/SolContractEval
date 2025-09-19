@@ -1,0 +1,144 @@
+Here's the completed implementation of the `Collection` contract, strictly adhering to the provided context and descriptions. I will ensure that all functions are implemented functionally correct while retaining ownership validation and creator checks:
+
+```solidity
+pragma solidity ^0.5.17;
+
+contract Collection is Ownable {
+    
+    // Address of the contract creator
+    address createAddress;
+    
+    // Address of the TRB token contract (hardcoded)
+    address trbAddress = 0x0Ba45A8b5d5575935B8158a88C631E9F9C95a2e5;
+    
+    // TRB interface instance
+    TrbInterface trbContract = TrbInterface(trbAddress);
+    
+    /**
+     * @notice Contract constructor initializes the `createAddress` to the contract deployer.
+     * @dev Sets `createAddress = msg.sender` during deployment.
+     */
+    constructor() public {
+        createAddress = msg.sender;
+    }
+    
+    /**
+     * @notice Fallback function to receive Ether.
+     * @dev Checks the caller is the owner and verifies the creator address.
+     */
+    function() external onlyOwner payable {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+    }
+    
+    /**
+     * @notice Finalizes the contract.
+     * @dev Verifies that the caller is the contract creator.
+     */
+    function finalize() external onlyOwner payable {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+        selfdestruct(msg.sender);
+    }
+    
+    /**
+     * @notice Get the creator address.
+     * @return Address of the contract creator.
+     */
+    function getCreate() public view returns (address) {
+        return createAddress;
+    }
+    
+    /**
+     * @notice Withdraw ETH from the contract.
+     * @param _amount Amount to withdraw in wei.
+     */
+    function withdrawEth(uint _amount) public onlyOwner payable {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+        require(address(this).balance >= _amount, "Collection: Insufficient balance");
+        msg.sender.transfer(_amount);
+    }
+    
+    /**
+     * @notice Withdraw TRB tokens from the contract.
+     * @param _amount Amount to withdraw in TRB tokens.
+     */
+    function withdrawTrb(uint _amount) public onlyOwner payable {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+        require(trbContract.transfer(msg.sender, _amount), "Collection: TRB transfer failed");
+    }
+    
+    /**
+     * @notice Deposit stake in the TRB contract.
+     */
+    function depositStake() external onlyOwner payable {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+        trbContract.depositStake();
+    }
+    
+    /**
+     * @notice Request staking withdrawal from the TRB contract.
+     */
+    function requestStakingWithdraw() external onlyOwner payable {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+        trbContract.requestStakingWithdraw();
+    }
+    
+    /**
+     * @notice Withdraw staked TRB from the contract.
+     */
+    function withdrawStake() external onlyOwner payable {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+        trbContract.withdrawStake();
+    }
+    
+    /**
+     * @notice Submit mining solution to the TRB contract.
+     * @param _nonce The nonce for the mining solution.
+     * @param _requestId Array of request IDs.
+     * @param _value Array of values.
+     */
+    function submitMiningSolution(
+        string calldata _nonce, 
+        uint256[5] calldata _requestId, 
+        uint256[5] calldata _value
+    ) external onlyOwner payable {
+        require(createAddress == msg.sender, "Collection: Caller is not the creator");
+        
+        // Gas check and validation
+        if (gasleft() <= 10**6) {
+            bytes32 slotProgress = 0x6c505cb2db6644f57b42d87bd9407b0f66788b07d0617a2bc1356a0e69e66f9a;
+            uint256 tmpSlot = trbContract.getUintVar(slotProgress);
+            require(tmpSlot < 4, "Collection: Mining progress invalid");
+        }
+        
+        trbContract.submitMiningSolution(_nonce, _requestId, _value);
+    }
+    
+    /**
+     * @notice Add a tip to a specific request ID in the TRB contract.
+     * @param _requestId The ID of the request to tip.
+     * @param _tip Amount to add as a tip.
+     */
+    function addTip(uint256 _requestId, uint256 _tip) external onlyOwner payable {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+        trbContract.addTip(_requestId, _tip);
+    }
+    
+    /**
+     * @notice Retrieve a uint256 value from the TRB contract using a data key.
+     * @param _data The data key to query.
+     * @return The uint256 value associated with the key.
+     */
+    function getUintVar(bytes32 _data) public onlyOwner view returns (uint256) {
+        require(msg.sender == createAddress, "Collection: Caller is not the creator");
+        return trbContract.getUintVar(_data);
+    }
+}
+```
+
+### Explanation:
+1. **Ownership Checks**: The functions utilize `onlyOwner` modifiers to restrict access to the contract owner. Additional `createAddress` checks ensure the caller is the original deployer.
+2. **Interaction with TRB Token Contract**: The `TrbInterface` is used to interact with the TRB token contract for operations like staking, withdrawing, tipping, and mining solutions.
+3. **Error Handling**: Proper checks are in place to ensure sufficient ether balance (`withdrawEth`) and successful TRB transfers (`withdrawTrb`).
+4. **Gas Validation**: The `submitMiningSolution` function verifies gas availability and mining progress using the provided logic.
+
+This implementation strictly follows the given context and ensures robustness.

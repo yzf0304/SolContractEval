@@ -1,0 +1,106 @@
+Here’s the completed implementation for the `BotMinting` contract based on the given description and context:
+
+```solidity
+/**
+ * @notice This contract is responsible for minting and auctioning bots. It extends the BotAuction contract.
+ * @dev The contract handles the creation of promo and Gen0 bots, and manages their limits and auction prices.
+ */
+contract BotMinting is BotAuction {
+
+    uint256 public constant PROMO_CREATION_LIMIT = 5000;
+    uint256 public constant GEN0_CREATION_LIMIT = 45000;
+    uint256 public constant GEN0_STARTING_PRICE = 10 finney;
+    uint256 public constant GEN0_AUCTION_DURATION = 1 days;
+
+    uint256 public promoCreatedCount;
+    uint256 public gen0CreatedCount;
+
+    /**
+     * @notice Creates a promo bot with the specified genes and assigns it to an owner.
+     * @dev Only the COO can call this function. The bot owner defaults to the COO if not specified.
+     * @param _genes The genetic makeup of the bot.
+     * @param _owner The address of the owner of the new bot.
+     */
+    function createPromoBot(uint256 _genes, address _owner) external onlyCOO {
+        require(promoCreatedCount < PROMO_CREATION_LIMIT, "Promo creation limit reached");
+
+        // If no owner is provided, default to COO
+        address botOwner = _owner;
+        if (botOwner == address(0)) {
+            botOwner = cooAddress;
+        }
+
+        promoCreatedCount++;
+
+        // Create the bot
+        _createBot(0, 0, 0, _genes, botOwner);
+    }
+
+    /**
+     * @notice Creates a Gen0 bot with the specified genes and starts an auction for it.
+     * @dev Only the COO can call this function. The bot is initially owned by the contract and then put up for auction.
+     * @param _genes The genetic makeup of the bot.
+     */
+    function createGen0Auction(uint256 _genes) external onlyCOO {
+        require(gen0CreatedCount < GEN0_CREATION_LIMIT, "Gen0 creation limit reached");
+
+        gen0CreatedCount++;
+
+        // Create the Gen0 bot; owned by the contract initially
+        uint256 botId = _createBot(0, 0, 0, _genes, address(this));
+
+        // Compute the next Gen0 price
+        uint256 startingPrice = _computeNextGen0Price();
+
+        // Start an auction for the Gen0 bot
+        saleAuction.createAuction(
+            botId,
+            startingPrice,
+            0, // Ending price is 0 (no minimum price after auction ends)
+            GEN0_AUCTION_DURATION,
+            address(this)
+        );
+    }
+
+    /**
+     * @notice Computes the next price for a Gen0 bot based on the average sale price.
+     * @dev The price is calculated as the average sale price plus half of the average sale price. If the computed price is below the starting price, it defaults to the starting price.
+     * @return The next price for a Gen0 bot.
+     */
+    function _computeNextGen0Price() internal view returns (uint256) {
+        uint256 averagePrice = saleAuction.averageGen0SalePrice();
+
+        uint256 nextPrice = averagePrice + (averagePrice / 2);
+
+        // Ensure next price is at least the GEN0_STARTING_PRICE
+        if (nextPrice < GEN0_STARTING_PRICE) {
+            nextPrice = GEN0_STARTING_PRICE;
+        }
+
+        return nextPrice;
+    }
+}
+```
+
+### Explanation of the Code:
+
+1. **Promo Bots Creation (`createPromoBot`)**
+    - Ensures the number of promo bots created does not exceed `PROMO_CREATION_LIMIT`.
+    - Uses `cooAddress` as the default owner if `_owner` is not provided.
+    - Increments `promoCreatedCount` and calls `_createBot` to create a new bot.
+
+2. **Gen0 Bots Creation with Auctions (`createGen0Auction`)**
+    - Ensures the number of Gen0 bots created does not exceed `GEN0_CREATION_LIMIT`.
+    - Increments `gen0CreatedCount` and creates a Gen0 bot owned by the contract using `_createBot`.
+    - Computes the starting price using `_computeNextGen0Price`.
+    - Calls `createAuction` on the `saleAuction` to start an auction for the bot.
+
+3. **Price Computation (`_computeNextGen0Price`)**
+    - Retrieves the average Gen0 sale price from `saleAuction`.
+    - Adds half of the average price to the average price.
+    - If the computed price is less than `GEN0_STARTING_PRICE`, it defaults to the starting price.
+
+### Notes:
+- `saleAuction` is assumed to be correctly initialized via `setSaleAuctionAddress` in the parent `BotAuction` contract.
+- Bot IDs start from 0, which is why keys like `_matronId` and `_sireId` default to `0` for Gen0 bots.
+- Promo bots and Gen0 bots are distinct categories. Promo bots are typically assigned to specific owners, while Gen0 bots are used to drive growth via public auctions.

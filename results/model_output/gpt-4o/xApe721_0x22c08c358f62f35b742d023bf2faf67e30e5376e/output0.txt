@@ -1,0 +1,156 @@
+Here is the complete implementation of the `xApe721` contract based on the provided description and context:
+
+```solidity
+// SPDX-License-Identifier: AGPL-3.0-only
+pragma solidity ^0.8.10;
+
+/**
+ * @title xApe721
+ * @notice This contract is an ERC721 token contract that allows for minting, claiming, and managing a collection of 10,000 unique tokens.
+ * @dev The contract includes functionalities to claim tokens from an old contract, mint new tokens, and manage the minting process.
+ */
+contract xApe721 is Ownable, ERC721 {
+    using Strings for uint256;
+
+    uint256 public constant TOTAL_SUPPLY = 10_000;
+    uint256 public constant PRICE_PER_MINT = 0.05 ether;
+    uint256 public constant MAX_MINT_PER_TX = 20;
+    bool public mintActive;
+    uint256 public totalSupply;
+    uint256 internal nextMintableId = 10038; // IDs start at 10038
+    string public baseURI;
+    IERC721 public oldContract;
+
+    address private teamWallet = 0x26CDE90abDD4e41ECA2948d79fE383E8103678b5;
+
+    constructor(
+        string memory name,
+        string memory symbol,
+        string memory _baseURI,
+        address _oldContract,
+        address[] memory recipients,
+        uint256[] memory tokens
+    ) payable ERC721(name, symbol) {
+        require(recipients.length == tokens.length, "Airdrop lengths mismatch");
+        baseURI = _baseURI;
+
+        if (_oldContract != address(0)) {
+            oldContract = IERC721(_oldContract);
+        }
+
+        uint256 length = tokens.length;
+        for (uint256 i = 0; i < length; i++) {
+            _mint(recipients[i], tokens[i]);
+            totalSupply++;
+        }
+    }
+
+    modifier onlyTeamWallet() {
+        require(msg.sender == teamWallet, "Caller is not the team wallet");
+        _;
+    }
+
+    /**
+     * @notice Function to mint new tokens.
+     * @param amount The number of tokens to mint.
+     * @dev This function allows users to mint new tokens, subject to certain conditions.
+     */
+    function mint(uint16 amount) external payable {
+        require(mintActive, "Minting is not active");
+        require(amount > 0 && amount <= MAX_MINT_PER_TX, "Invalid mint amount");
+        require(totalSupply + amount <= TOTAL_SUPPLY, "Exceeds maximum supply");
+        require(msg.value == amount * PRICE_PER_MINT, "Incorrect ETH sent");
+
+        for (uint16 i = 0; i < amount; i++) {
+            uint256 tokenId = _getNextUnusedID();
+            _mint(msg.sender, tokenId);
+            totalSupply++;
+        }
+    }
+
+    /**
+     * @notice Function to claim a token from the old contract.
+     * @param tokenId The ID of the token to claim.
+     * @dev This function allows users to claim a token from the old contract and mint it in the new contract.
+     */
+    function claim(uint256 tokenId) external payable {
+        require(_ownsOldToken(msg.sender, tokenId), "Not the owner of the old token");
+        oldContract.safeTransferFrom(msg.sender, address(this), tokenId);
+        _mint(msg.sender, tokenId);
+        totalSupply++;
+    }
+
+    /**
+     * @notice Function to claim all tokens from the old contract.
+     * @dev This function allows users to claim all their tokens from the old contract and mint them in the new contract.
+     */
+    function claimAll() external payable {
+        uint256[] memory tokens = oldContract.getPhunksBelongingToOwner(msg.sender);
+        uint256 length = tokens.length;
+
+        for (uint256 i = 0; i < length; i++) {
+            oldContract.safeTransferFrom(msg.sender, address(this), tokens[i]);
+            _mint(msg.sender, tokens[i]);
+            totalSupply++;
+        }
+    }
+
+    function _ownsOldToken(address account, uint256 tokenId) internal view returns (bool) {
+        return oldContract.ownerOf(tokenId) == account;
+    }
+
+    function _getNextUnusedID() internal returns (uint256) {
+        while (ownerOf[nextMintableId] != address(0) || oldContract.ownerOf(nextMintableId) != address(0)) {
+            nextMintableId++;
+        }
+        return nextMintableId++;
+    }
+
+    function tokenURI(uint256 id) public view override returns (string memory) {
+        return string(abi.encodePacked(baseURI, id.toString()));
+    }
+
+    function withdraw() external onlyTeamWallet {
+        SafeTransferLib.safeTransferETH(teamWallet, address(this).balance);
+    }
+
+    function pauseMint() external {
+        require(msg.sender == _owner, "Caller is not the owner");
+        mintActive = false;
+    }
+
+    function startMint() external {
+        require(msg.sender == _owner, "Caller is not the owner");
+        mintActive = true;
+    }
+
+    function setBaseURI(string memory _baseURI) external {
+        require(msg.sender == _owner, "Caller is not the owner");
+        baseURI = _baseURI;
+    }
+
+    function supportsInterface(bytes4 interfaceId) public pure override returns (bool) {
+        return 
+            interfaceId == 0x01ffc9a7 || // ERC165 Interface ID
+            interfaceId == 0x80ac58cd || // ERC721 Interface ID
+            interfaceId == 0x5b5e139f;   // ERC721Metadata Interface ID
+    }
+
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 tokenId,
+        bytes calldata data
+    ) external returns (bytes4) {
+        return ERC721TokenReceiver.onERC721Received.selector;
+    }
+}
+```
+
+### Explanation:
+- This contract starts mintable IDs at `10038`, as specified.
+- The minting (`mint`) functionality adheres to the specified constants like `MAX_MINT_PER_TX`, `TOTAL_SUPPLY`, and `PRICE_PER_MINT`.
+- Claims (`claim` and `claimAll`) check ownership in the old contract before transferring and minting tokens.
+- The contract uses the `SafeTransferLib` library for secure ETH transfers.
+- Includes mechanisms for pausing and starting minting controlled by the owner.
+- Supports ERC721 and ERC721Metadata interfaces.

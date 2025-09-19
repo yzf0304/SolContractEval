@@ -1,0 +1,175 @@
+pragma solidity 0.4.23;
+
+/**
+ * @title MESH Token Contract
+ * @notice This contract implements a custom token called MESH, which extends the StandardToken.
+ * @dev It includes proxy transfers/approvals, a nonce mechanism to prevent replay attacks,
+ *      token allocation, and a fallback that reverts on receiving ETH.
+ */
+contract MESH is StandardToken {
+
+    string public name = "MeshBox";
+    uint8  public decimals = 18;
+    string public symbol = "MESH";
+    string public version = "v0.1";
+    uint256 public allocateEndTime;
+
+    // Nonces for replay protection
+    mapping(address => uint256) nonces;
+
+    /**
+     * @notice Fallback function that reverts any direct ETH transfers.
+     */
+    function () public {
+        revert();
+    }
+
+    /**
+     * @notice Constructor sets the allocation end time to now + 1 day.
+     */
+    constructor() public {
+        allocateEndTime = now + 1 days;
+    }
+
+    /**
+     * @notice Proxy transfer of MESH tokens with a fee for the agent.
+     * @param _from   The token owner who signed the transfer.
+     * @param _to     Recipient address.
+     * @param _value  Amount of tokens to transfer.
+     * @param _feeMesh Fee in MESH to pay the agent (msg.sender).
+     * @param _v      ECDSA signature v component.
+     * @param _r      ECDSA signature r component.
+     * @param _s      ECDSA signature s component.
+     */
+    function transferProxy(
+        address _from,
+        address _to,
+        uint256 _value,
+        uint256 _feeMesh,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        public
+        transferAllowed(_from)
+        returns (bool)
+    {
+        // 1) Recreate the signed message hash
+        bytes32 raw = keccak256(
+            address(this),
+            _from,
+            _to,
+            _value,
+            _feeMesh,
+            nonces[_from]
+        );
+        bytes32 msgHash = keccak256(
+            "\x19Ethereum Signed Message:\n32",
+            raw
+        );
+
+        // 2) Recover signer and verify
+        address signer = ecrecover(msgHash, _v, _r, _s);
+        require(signer == _from);
+
+        // 3) Update nonce
+        nonces[_from]++;
+
+        // 4) Execute balances transfer + fee
+        uint256 total = _value + _feeMesh;
+        require(balances[_from] >= total);
+
+        balances[_from] -= total;
+        balances[_to]      += _value;
+        balances[msg.sender] += _feeMesh;
+
+        emit Transfer(_from, _to, _value);
+        if (_feeMesh > 0) {
+            emit Transfer(_from, msg.sender, _feeMesh);
+        }
+
+        return true;
+    }
+
+    /**
+     * @notice Proxy approve: owner signs an approval, agent (msg.sender) broadcasts it.
+     * @param _from    The token owner who signed the approval.
+     * @param _spender Address to be approved.
+     * @param _value   Amount of tokens to approve.
+     * @param _v       ECDSA signature v component.
+     * @param _r       ECDSA signature r component.
+     * @param _s       ECDSA signature s component.
+     */
+    function approveProxy(
+        address _from,
+        address _spender,
+        uint256 _value,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    )
+        public
+        returns (bool success)
+    {
+        // 1) Recreate signed message
+        bytes32 raw = keccak256(
+            address(this),
+            _from,
+            _spender,
+            _value,
+            nonces[_from]
+        );
+        bytes32 msgHash = keccak256(
+            "\x19Ethereum Signed Message:\n32",
+            raw
+        );
+
+        // 2) Recover and verify
+        address signer = ecrecover(msgHash, _v, _r, _s);
+        require(signer == _from);
+
+        // 3) Update nonce
+        nonces[_from]++;
+
+        // 4) Set allowance
+        allowed[_from][_spender] = _value;
+        emit Approval(_from, _spender, _value);
+
+        return true;
+    }
+
+    /**
+     * @notice Get the current nonce for an address.
+     * @param _addr Address to query.
+     * @return The current nonce.
+     */
+    function getNonce(address _addr) public view returns (uint256) {
+        return nonces[_addr];
+    }
+
+    /**
+     * @notice Allocate tokens to multiple addresses before allocateEndTime.
+     * @param _owners List of recipient addresses.
+     * @param _values Corresponding token amounts.
+     * @dev Only the owner can call; must be before allocateEndTime.
+     */
+    function allocateTokens(address[] _owners, uint256[] _values)
+        public
+        onlyOwner
+    {
+        require(now <= allocateEndTime);
+        require(_owners.length == _values.length);
+
+        for (uint256 i = 0; i < _owners.length; i++) {
+            address recipient = _owners[i];
+            uint256 amount   = _values[i];
+            require(recipient != address(0));
+
+            balances[recipient] += amount;
+            totalSupply        += amount;
+
+            // Emit a mint-like Transfer from zero address
+            emit Transfer(address(0), recipient, amount);
+        }
+    }
+}

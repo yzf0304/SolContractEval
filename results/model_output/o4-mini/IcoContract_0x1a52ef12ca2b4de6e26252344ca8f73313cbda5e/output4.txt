@@ -1,0 +1,117 @@
+pragma solidity ^0.4.18;
+
+contract Bonus is IcoPhase, Ownable {
+    using SafeMath for uint256;
+
+    // decimals of tokens (not used directly in this implementation)
+    uint256 constant decimals = 18;
+
+    // enable/disable bonus system
+    bool public isBonus;
+
+    // storage for bonus balances and index
+    mapping(address => uint256) public bonusAccountBalances;
+    mapping(uint256 => address) public bonusAccountIndex;
+    uint256 public bonusAccountCount;
+
+    /**
+     * @notice Initializes the contract with bonuses enabled.
+     */
+    function Bonus() public {
+        isBonus = true;
+    }
+
+    /**
+     * @notice Enables the bonus system.
+     * @dev Can only be called by the contract owner and when bonuses are currently disabled.
+     * @return success true if operation succeeded.
+     */
+    function enableBonus() public onlyOwner returns (bool success) {
+        require(!isBonus);
+        isBonus = true;
+        return true;
+    }
+
+    /**
+     * @notice Disables the bonus system.
+     * @dev Can only be called by the contract owner and when bonuses are currently enabled.
+     * @return success true if operation succeeded.
+     */
+    function disableBonus() public onlyOwner returns (bool success) {
+        require(isBonus);
+        isBonus = false;
+        return true;
+    }
+
+    /**
+     * @notice Gets the bonus percentage based on the current time.
+     * @dev Checks the current block timestamp against predefined phases.
+     * @return percentage bonus percentage (e.g., 20 means 20%).
+     */
+    function getBonusByTime() public constant returns (uint256) {
+        if (now >= phasePresale_From && now <= phasePresale_To) {
+            return 20;
+        } else if (now >= phasePublicSale1_From && now <= phasePublicSale1_To) {
+            return 15;
+        } else if (now >= phasePublicSale2_From && now <= phasePublicSale2_To) {
+            return 10;
+        } else if (now >= phasePublicSale3_From && now <= phasePublicSale3_To) {
+            return 5;
+        }
+        return 0;
+    }
+
+    /**
+     * @notice Calculates the bonus amount based on the provided token value.
+     * @dev Uses the active bonus percentage. If bonuses are disabled or no phase is active, returns 0.
+     * @param _value The token amount to which the bonus percentage will be applied.
+     * @return bonusAmount The calculated bonus amount.
+     */
+    function getBonusByETH(uint256 _value) public constant returns (uint256 bonusAmount) {
+        if (!isBonus) {
+            return 0;
+        }
+        uint256 pct = getBonusByTime();
+        if (pct == 0) {
+            return 0;
+        }
+        return _value.mul(pct).div(100);
+    }
+
+    /**
+     * @notice Returns the bonus balance of a specific account.
+     * @param _owner The address to query.
+     * @return balance The bonus balance.
+     */
+    function balanceBonusOf(address _owner) public constant returns (uint256 balance) {
+        return bonusAccountBalances[_owner];
+    }
+
+    /**
+     * @notice Pays out the accumulated bonus (in Wei) to a specified address.
+     * @dev Only the contract owner can call this. Transfers Ether equal to the stored bonus balance.
+     *      After transfer, the account balance is zeroed and the address is recorded.
+     * @param _address The recipient of the bonus payout.
+     * @return success true if the payment succeeded.
+     */
+    function payBonusToAddress(address _address) public onlyOwner returns (bool success) {
+        uint256 bonus = bonusAccountBalances[_address];
+        require(bonus > 0);
+
+        // zero out the stored balance
+        bonusAccountBalances[_address] = 0;
+
+        // index the address for record-keeping
+        bonusAccountIndex[bonusAccountCount] = _address;
+        bonusAccountCount = bonusAccountCount.add(1);
+
+        // transfer Ether
+        _address.transfer(bonus);
+        return true;
+    }
+
+    /**
+     * @notice Fallback function to receive Ether.
+     */
+    function() public payable {}
+}

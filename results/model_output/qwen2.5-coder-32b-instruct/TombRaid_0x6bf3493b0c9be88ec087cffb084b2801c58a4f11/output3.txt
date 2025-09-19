@@ -1,0 +1,125 @@
+Below is the completed `TombRaid` contract implementation based on the provided specifications. The implementation includes the necessary logic for toggling raid status, setting the raid price, adjusting the cutoff, toggling lock statuses, and handling raids. Additionally, it includes the required view functions to retrieve the number of tokens per tier and the number of locked tokens per tier.
+
+```solidity
+pragma solidity ^0.8.13;
+
+import "@openzeppelin/contracts/utils/Context.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface IBoneheadz {
+    function ownerOf(uint256 tokenId) external view returns (address);
+    function totalSupply() external view returns (uint256);
+}
+
+contract TombRaid is Ownable {
+    IBoneheadz public Boneheadz;
+
+    uint256 internal cutoff;
+
+    uint256 public immutable SEASON;
+    uint256 public immutable MAX_TIER;
+
+    uint256 public raidPrice = 0.005 ether;
+
+    mapping(uint256 => uint256) public tokenTiers;
+    mapping(uint256 => bool) public isLocked;
+
+    bool public raidActive = false;
+
+    event Locked(uint256 indexed tokenId);
+    event TierUpdated(uint256 indexed tokenId, uint256 tier);
+
+    constructor(
+        address boneheadz,
+        uint256 _cutoff,
+        uint256 maxTier,
+        uint256 season
+    ) {
+        Boneheadz = IBoneheadz(boneheadz);
+        cutoff = _cutoff;
+        MAX_TIER = maxTier;
+        SEASON = season;
+    }
+
+    // MODIFIERS
+
+    modifier onlyTokenOwner(uint256 tokenId) {
+        require(msg.sender == Boneheadz.ownerOf(tokenId), "Caller is not the token owner");
+        _;
+    }
+
+    // OWNER FUNCTIONS
+
+    function flipRaidStatus() external onlyOwner {
+        raidActive = !raidActive;
+    }
+
+    function setRaidPrice(uint256 price) external onlyOwner {
+        raidPrice = price;
+    }
+
+    function setCutoff(uint256 _cutoff) external onlyOwner {
+        cutoff = _cutoff;
+    }
+
+    function flipLockStatuses(uint256[] calldata tokenIds) public onlyOwner {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            isLocked[tokenIds[i]] = !isLocked[tokenIds[i]];
+            if (isLocked[tokenIds[i]]) {
+                emit Locked(tokenIds[i]);
+            }
+        }
+    }
+
+    function withdraw(address recipient) external onlyOwner {
+        payable(recipient).transfer(address(this).balance);
+    }
+
+    // RAID FUNCTIONS
+
+    function raid(uint256 tokenId) public payable onlyTokenOwner(tokenId) {
+        require(raidActive, "Raiding is not active");
+        require(msg.value >= raidPrice, "Insufficient payment for raid");
+
+        uint256 randomHash = _genPseudoRandomNumber(tokenId);
+        uint256 tierIncrease = randomHash % 10; // Example logic for tier increase
+
+        if (tokenTiers[tokenId] + tierIncrease <= MAX_TIER) {
+            tokenTiers[tokenId] += tierIncrease;
+            emit TierUpdated(tokenId, tokenTiers[tokenId]);
+        } else {
+            tokenTiers[tokenId] = MAX_TIER;
+            isLocked[tokenId] = true;
+            emit TierUpdated(tokenId, tokenTiers[tokenId]);
+            emit Locked(tokenId);
+        }
+    }
+
+    // VIEW FUNCTIONS
+
+    function numPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        for (uint256 i = 1; i <= Boneheadz.totalSupply(); i++) {
+            counts[tokenTiers[i]]++;
+        }
+        return counts;
+    }
+
+    function numLockedPerTier() public view returns (uint256[] memory) {
+        uint256[] memory counts = new uint256[](MAX_TIER + 1);
+        for (uint256 i = 1; i <= Boneheadz.totalSupply(); i++) {
+            if (isLocked[i]) {
+                counts[tokenTiers[i]]++;
+            }
+        }
+        return counts;
+    }
+
+    function _genPseudoRandomNumber(uint256 tokenId) private view returns (uint256) {
+        uint256 randomHash = uint256(keccak256(abi.encodePacked(block.difficulty, block.timestamp, tokenId)));
+        return randomHash % cutoff; // Using cutoff for normalization
+    }
+}
+```
+
+This contract is designed to interact with an `IBoneheadz` NFT contract and includes mechanisms for managing token tiers, locking tokens, and handling raid events. The `raid` function includes a simple mechanism for determining tier increases and locking conditions based on a pseudo-random number. Adjustments can be made to the tier increase logic as per specific requirements.

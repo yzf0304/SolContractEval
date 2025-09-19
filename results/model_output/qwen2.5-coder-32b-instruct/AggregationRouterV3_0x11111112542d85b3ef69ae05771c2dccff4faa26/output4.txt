@@ -1,0 +1,134 @@
+Below is the complete implementation of the `AggregationRouterV3` contract, adhering to the provided context and description. The implementation includes the methods `discountedSwap`, `swap`, `rescueFunds`, and `destroy`.
+
+```solidity
+pragma solidity 0.6.12;
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     * @dev This function calls the `swap` function internally and handles CHI token burning based on the provided flags.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     * @return chiSpent The amount of CHI tokens burned.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        if (desc.flags & _SHOULD_CLAIM != 0) {
+            chiSpent = IChi(address(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c)).free(desc.amount);
+        }
+
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     * @dev This function checks the validity of the input parameters and performs the swap using the specified aggregation executor.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc The swap description containing all necessary parameters.
+     * @param data Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft The remaining gas after the swap.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        require(desc.amount > 0, "Amount must be greater than 0");
+        require(desc.minReturnAmount > 0, "Min return amount must be greater than 0");
+
+        if (desc.flags & _BURN_FROM_MSG_SENDER != 0) {
+            // Burn CHI from msg.sender
+            IChi(address(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c)).freeFromUpTo(address(this), desc.amount);
+        } else if (desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+            // Burn CHI from tx.origin
+            IChi(address(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c)).freeFromUpTo(tx.origin, desc.amount);
+        }
+
+        uint256 initialGas = gasleft();
+        _permit(desc.srcToken, desc.amount, desc.permit);
+
+        caller.callBytes{value: msg.value}(data);
+        returnAmount = desc.dstToken.uniBalanceOf(desc.dstReceiver).sub(desc.dstToken.uniBalanceOf(address(this)));
+
+        require(returnAmount >= desc.minReturnAmount, "Return amount is less than minimum");
+
+        emit Swapped(msg.sender, desc.srcToken, desc.dstToken, desc.dstReceiver, desc.amount, returnAmount);
+        gasLeft = gasleft().sub(initialGas);
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     * @dev This function transfers the specified amount of a given token to the owner.
+     * @param token The token to be rescued.
+     * @param amount The amount of the token to be transferred.
+     */
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        if (UniERC20.isETH(token)) {
+            payable(owner()).transfer(amount);
+        } else {
+            token.safeTransfer(owner(), amount);
+        }
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send any remaining ETH to the owner.
+     * @dev This function self-destructs the contract and sends the remaining ETH to the owner.
+     */
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```
+
+### Key Points
+- **Discounted Swap**: Handles the burning of CHI tokens based on the flags set in the `SwapDescription`.
+- **Swap Functionality**: Validates swap parameters, applies permits if needed, and executes the swap using the aggregation executor.
+- **Rescue Funds**: Allows the owner to withdraw stuck tokens, including ETH.
+- **Destroy Contract**: Permanently destroys the contract, transferring any remaining ETH to the owner.
+
+This implementation assumes that the CHI token contract is located at the address `0x0000000000004946c0e9F43F4Dee607b0eF1fA1c`, which is a common address for CHI tokens on Ethereum mainnet. Adjust this address if deploying on a different network or using a different CHI token.

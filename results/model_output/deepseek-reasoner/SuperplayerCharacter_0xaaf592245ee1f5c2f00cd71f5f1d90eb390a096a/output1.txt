@@ -1,0 +1,84 @@
+Here is the complete implementation of the `SuperplayerCharacter` contract:
+
+```solidity
+pragma solidity ^0.5.1;
+
+contract SuperplayerCharacter is Ownable {
+  using SafeMath for uint256;
+
+  event CharacterSelect(address from, uint32 chaId);
+
+  mapping(address => uint32) public addrMapCharacterIds;
+  uint256 changeFee = 0;
+
+  struct Character {
+    uint32 id;
+    uint weight;
+  }
+
+  Character[] private characters;
+  uint256 totalNum = 0;
+  uint256 totalWeight = 0;
+
+  constructor() public {
+      _addCharacter(1, 1000000);
+      _addCharacter(2, 1000000);
+      _addCharacter(3, 1000000);
+      _addCharacter(4, 1000);
+      _addCharacter(5, 1000);
+      _addCharacter(6, 1000);
+  }
+
+  function AddCharacter(uint32 id, uint weight) public onlyOwner {
+      _addCharacter(id, weight);
+  }
+
+  function SetFee(uint256 fee) public onlyOwner {
+      changeFee = fee;
+  }
+
+  function withdraw(address payable to) public onlyOwner {
+      to.transfer(address(this).balance);
+  }
+
+  function getConfig() public view returns (uint32[] memory ids, uint256[] memory weights) {
+      uint length = characters.length;
+      ids = new uint32[](length);
+      weights = new uint256[](length);
+      for (uint i = 0; i < length; i++) {
+          Character memory ch = characters[i];
+          ids[i] = ch.id;
+          weights[i] = ch.weight;
+      }
+      return (ids, weights);
+  }
+
+  function () payable external {
+      require(msg.value >= changeFee);
+      uint sum = 0;
+      uint index = characters.length - 1;
+      uint weight = uint256(keccak256(abi.encodePacked(block.timestamp, msg.value, block.difficulty))) % totalWeight + 1;
+
+      for (uint i = 0; i < characters.length; i++) {
+          sum = sum.add(characters[i].weight);
+          if (weight <= sum) {
+              index = i;
+              break;
+          }
+      }
+      _selectCharacter(msg.sender, characters[index].id);
+      msg.sender.transfer(msg.value.sub(changeFee));
+  }
+
+  function _selectCharacter(address from, uint32 id) internal {
+      addrMapCharacterIds[from] = id;
+      emit CharacterSelect(from, id);
+  }
+
+  function _addCharacter(uint32 id, uint weight) internal {
+      characters.push(Character(id, weight));
+      totalNum = totalNum.add(1);
+      totalWeight = totalWeight.add(weight);
+  }
+}
+```

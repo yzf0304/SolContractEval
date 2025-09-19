@@ -1,0 +1,65 @@
+To solve this problem, we need to create a smart contract that allows users to claim tokens based on a Merkle proof. The contract should efficiently track which claims have been made using a bit map and verify the validity of each claim using a Merkle tree.
+
+### Approach
+The MerkleDistributor contract is designed to distribute tokens to eligible users who can provide a valid Merkle proof. The key steps involved are:
+
+1. **Initialization**: Set the token address and Merkle root during contract deployment.
+2. **Claim Verification**: Check if a user's claim is valid using a Merkle proof.
+3. **Tracking Claims**: Use a bit map to efficiently track which indices in the Merkle tree have been claimed.
+4. **Token Transfer**: Transfer the claimed tokens to the user's address after verifying the claim.
+
+### Solution Code
+```solidity
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity 0.6.11;
+
+contract MerkleDistributor is IMerkleDistributor {
+    address public immutable override token;
+    bytes32 public immutable override merkleRoot;
+
+    // Packed array of booleans to track claimed indices
+    mapping(uint256 => uint256) private claimedBitMap;
+
+    constructor(address token_, bytes32 merkleRoot_) public {
+        token = token_;
+        merkleRoot = merkleRoot_;
+    }
+
+    function isClaimed(uint256 index) public view override returns (bool) {
+        uint256 word = index / 256;
+        uint256 bit = index % 256;
+        uint256 mask = (1 << bit);
+        return (claimedBitMap[word] & mask) != 0;
+    }
+
+    function _setClaimed(uint256 index) private {
+        uint256 word = index / 256;
+        uint256 bit = index % 256;
+        claimedBitMap[word] |= (1 << bit);
+    }
+
+    function claim(uint256 index, address account, uint256 amount, bytes32[] calldata merkleProof) external override {
+        bytes32 node = keccak256(abi.encodePacked(index, account, amount));
+        require(MerkleProof.verify(merkleProof, merkleRoot, node), "MerkleDistributor: Invalid proof.");
+
+        require(!isClaimed(index), "MerkleDistributor: Drop already claimed.");
+
+        _setClaimed(index);
+
+        require(IERC20(token).transfer(account, amount), "MerkleDistributor: Transfer failed.");
+
+        emit Claimed(index, account, amount);
+    }
+}
+```
+
+### Explanation
+1. **Initialization**: The constructor sets the token address and Merkle root when the contract is deployed. These values are immutable to ensure the integrity of the distribution process.
+
+2. **Tracking Claims**: The `isClaimed` function checks if a specific index has been claimed by using a bit map. Each bit in a 256-bit word represents whether an index has been claimed. This method is highly efficient in terms of gas usage and storage.
+
+3. **Merkle Proof Verification**: The `claim` function verifies the provided Merkle proof against the stored Merkle root. The leaf node for verification is computed by hashing the index, account, and amount using `keccak256`.
+
+4. **Token Transfer**: After verifying the proof and ensuring the claim hasn't been made, the contract marks the index as claimed and transfers the specified amount of tokens to the user. If the transfer fails, the transaction reverts.
+
+This approach ensures that only valid claims are processed, efficiently tracks claims using minimal storage, and securely transfers tokens using the ERC20 standard.

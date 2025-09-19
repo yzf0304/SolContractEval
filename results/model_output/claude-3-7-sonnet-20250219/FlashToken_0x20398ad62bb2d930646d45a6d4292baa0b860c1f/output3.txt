@@ -1,0 +1,341 @@
+I'll complete the FlashToken contract based on the provided context. Here's the fully implemented contract:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.7.4;
+
+contract FlashToken is IERC20 {
+    using SafeMath for uint256;
+
+    // EIP-712 Domain Separator constants
+    bytes32 private constant EIP712DOMAIN_HASH = 0x8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f;
+    bytes32 private constant NAME_HASH = 0x345b72c36b14f1cee01efb8ac4b299dc7b8d873e28b4796034548a3d371a4d2f;
+    bytes32 private constant VERSION_HASH = 0xad7c5bef027816a800da1736444fb58a807ef4c9603b7848673f7e3a68eb14a5;
+
+    // Typehashes for EIP-712 signatures
+    bytes32 public constant PERMIT_TYPEHASH = 0x6e71edae12b1b97f4d1f60370fef10105fa2faae0126114a169c64845d6126c9;
+    bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = 0x7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267;
+
+    // Token metadata
+    string public constant name = "Flashstake";
+    string public constant symbol = "FLASH";
+    uint8 public constant decimals = 18;
+
+    // Minter addresses
+    address public constant FLASH_PROTOCOL = 0x15EB0c763581329C921C8398556EcFf85Cc48275;
+    address public constant FLASH_CLAIM = 0xf2319b6D2aB252d8D80D8CEC34DaF0079222A624;
+
+    // Total supply and balances
+    uint256 public override totalSupply;
+    mapping(address => uint256) public override balanceOf;
+    mapping(address => mapping(address => uint256)) public override allowance;
+
+    // ERC-2612, ERC-3009 state
+    mapping(address => uint256) public nonces;
+    mapping(address => mapping(bytes32 => bool)) public authorizationState;
+
+    // Events
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+
+    // Modifier to restrict functions to only minter addresses
+    modifier onlyMinter {
+        require(msg.sender == FLASH_PROTOCOL || msg.sender == FLASH_CLAIM, "FlashToken:: NOT_MINTER");
+        _;
+    }
+
+    /**
+     * @notice Initializes the contract and mints initial tokens to specified addresses.
+     */
+    constructor() {
+        // BlockZero Labs: Foundation Fund
+        _mint(0x842f8f6fB524996d0b660621DA895166E1ceA691, 1200746000000000000000000);
+        _mint(0x0945d9033147F27aDDFd3e7532ECD2100cb91032, 1000000000000000000000000);
+    }
+
+    /**
+     * @notice Validates the signed data using EIP-712.
+     * @dev Checks if the recovered signer matches the provided signer and disallows address(0).
+     * @param signer The address of the signer.
+     * @param encodeData The encoded data to be signed.
+     * @param v The v component of the signature.
+     * @param r The r component of the signature.
+     * @param s The s component of the signature.
+     */
+    function _validateSignedData(
+        address signer,
+        bytes32 encodeData,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) internal view {
+        require(signer != address(0), "FlashToken:: INVALID_SIGNER");
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                getDomainSeparator(),
+                encodeData
+            )
+        );
+        address recoveredAddress = ecrecover(digest, v, r, s);
+        require(recoveredAddress != address(0) && recoveredAddress == signer, "FlashToken:: INVALID_SIGNATURE");
+    }
+
+    /**
+     * @notice Mints new tokens to a specified address.
+     * @dev Increases the total supply and the recipient's balance.
+     * @param to The address to receive the minted tokens.
+     * @param value The amount of tokens to mint.
+     */
+    function _mint(address to, uint256 value) internal {
+        require(to != address(0), "FlashToken:: MINT_TO_ZERO_ADDRESS");
+        
+        totalSupply = totalSupply.add(value);
+        balanceOf[to] = balanceOf[to].add(value);
+        
+        emit Transfer(address(0), to, value);
+    }
+
+    /**
+     * @notice Burns tokens from a specified address.
+     * @dev Decreases the total supply and the sender's balance.
+     * @param from The address to burn tokens from.
+     * @param value The amount of tokens to burn.
+     */
+    function _burn(address from, uint256 value) internal {
+        require(from != address(0), "FlashToken:: BURN_FROM_ZERO_ADDRESS");
+        
+        balanceOf[from] = balanceOf[from].sub(value);
+        totalSupply = totalSupply.sub(value);
+        
+        emit Transfer(from, address(0), value);
+    }
+
+    /**
+     * @notice Sets the allowance for a spender.
+     * @dev Updates the allowance and emits an Approval event.
+     * @param owner The address of the token owner.
+     * @param spender The address of the spender.
+     * @param value The amount of tokens to approve.
+     */
+    function _approve(
+        address owner,
+        address spender,
+        uint256 value
+    ) private {
+        require(owner != address(0), "FlashToken:: APPROVE_FROM_ZERO_ADDRESS");
+        require(spender != address(0), "FlashToken:: APPROVE_TO_ZERO_ADDRESS");
+        
+        allowance[owner][spender] = value;
+        emit Approval(owner, spender, value);
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another.
+     * @dev Ensures the receiver is not the zero address or the contract itself, updates balances, and emits a Transfer event.
+     * @param from The address to transfer tokens from.
+     * @param to The address to transfer tokens to.
+     * @param value The amount of tokens to transfer.
+     */
+    function _transfer(
+        address from,
+        address to,
+        uint256 value
+    ) private {
+        require(from != address(0), "FlashToken:: TRANSFER_FROM_ZERO_ADDRESS");
+        require(to != address(0), "FlashToken:: TRANSFER_TO_ZERO_ADDRESS");
+        require(to != address(this), "FlashToken:: TRANSFER_TO_CONTRACT");
+        
+        balanceOf[from] = balanceOf[from].sub(value);
+        balanceOf[to] = balanceOf[to].add(value);
+        
+        emit Transfer(from, to, value);
+    }
+
+    /**
+     * @notice Returns the current chain ID.
+     * @return chainId The current chain ID.
+     */
+    function getChainId() public pure returns (uint256 chainId) {
+        assembly {
+            chainId := chainid()
+        }
+    }
+
+    /**
+     * @notice Returns the domain separator used in EIP-712 signatures.
+     * @return The domain separator.
+     */
+    function getDomainSeparator() public view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                EIP712DOMAIN_HASH,
+                NAME_HASH,
+                VERSION_HASH,
+                getChainId(),
+                address(this)
+            )
+        );
+    }
+
+    /**
+     * @notice Mints new tokens to a specified address.
+     * @dev Only callable by the minter addresses.
+     * @param to The address to receive the minted tokens.
+     * @param value The amount of tokens to mint.
+     * @return True on success.
+     */
+    function mint(address to, uint256 value) external onlyMinter returns (bool) {
+        _mint(to, value);
+        return true;
+    }
+
+    /**
+     * @notice Burns tokens from the caller's account.
+     * @param value The amount of tokens to burn.
+     * @return True on success.
+     */
+    function burn(uint256 value) external returns (bool) {
+        _burn(msg.sender, value);
+        return true;
+    }
+
+    /**
+     * @notice Approves a spender to transfer a certain amount of tokens on behalf of the caller.
+     * @param spender The address of the spender.
+     * @param value The amount of tokens to approve.
+     * @return True on success.
+     */
+    function approve(address spender, uint256 value) external override returns (bool) {
+        _approve(msg.sender, spender, value);
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens from the caller's account to another address.
+     * @param to The address to transfer tokens to.
+     * @param value The amount of tokens to transfer.
+     * @return True on success.
+     */
+    function transfer(address to, uint256 value) external override returns (bool) {
+        _transfer(msg.sender, to, value);
+        return true;
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another, using the caller's allowance.
+     * @param from The address to transfer tokens from.
+     * @param to The address to transfer tokens to.
+     * @param value The amount of tokens to transfer.
+     * @return True on success.
+     */
+    function transferFrom(
+        address from,
+        address to,
+        uint256 value
+    ) external override returns (bool) {
+        if (allowance[from][msg.sender] != uint256(-1)) {
+            allowance[from][msg.sender] = allowance[from][msg.sender].sub(value);
+        }
+        _transfer(from, to, value);
+        return true;
+    }
+
+    /**
+     * @notice Sets the allowance for a spender using a signed message.
+     * @param owner The address of the token owner.
+     * @param spender The address of the spender.
+     * @param value The amount of tokens to approve.
+     * @param deadline The deadline for the operation.
+     * @param v The v component of the signature.
+     * @param r The r component of the signature.
+     * @param s The s component of the signature.
+     */
+    function permit(
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        require(deadline >= block.timestamp, "FlashToken:: PERMIT_EXPIRED");
+        
+        bytes32 encodeData = keccak256(
+            abi.encode(
+                PERMIT_TYPEHASH,
+                owner,
+                spender,
+                value,
+                nonces[owner]++,
+                deadline
+            )
+        );
+        
+        _validateSignedData(owner, encodeData, v, r, s);
+        _approve(owner, spender, value);
+    }
+
+    /**
+     * @notice Transfers tokens with authorization using a signed message.
+     * @param from The address to transfer tokens from.
+     * @param to The address to transfer tokens to.
+     * @param value The amount of tokens to transfer.
+     * @param validAfter The timestamp after which the authorization is valid.
+     * @param validBefore The timestamp before which the authorization is valid.
+     * @param nonce The nonce for the authorization.
+     * @param v The v component of the signature.
+     * @param r The r component of the signature.
+     * @param s The s component of the signature.
+     */
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        require(block.timestamp > validAfter, "FlashToken:: AUTH_NOT_YET_VALID");
+        require(block.timestamp < validBefore, "FlashToken:: AUTH_EXPIRED");
+        require(!authorizationState[from][nonce], "FlashToken:: AUTH_ALREADY_USED");
+        
+        bytes32 encodeData = keccak256(
+            abi.encode(
+                TRANSFER_WITH_AUTHORIZATION_TYPEHASH,
+                from,
+                to,
+                value,
+                validAfter,
+                validBefore,
+                nonce
+            )
+        );
+        
+        _validateSignedData(from, encodeData, v, r, s);
+        
+        authorizationState[from][nonce] = true;
+        emit AuthorizationUsed(from, nonce);
+        
+        _transfer(from, to, value);
+    }
+}
+```
+
+This implementation includes:
+
+1. Complete ERC20 functionality
+2. Minting and burning capabilities
+3. ERC-2612 permit functionality for gasless approvals
+4. ERC-3009 transferWithAuthorization for gasless transfers
+5. Proper validation of signed messages
+6. Security checks throughout the contract
+7. Events emission for all state changes
+8. Initialization with initial token distribution as specified
+
+The contract uses the SafeMath library for arithmetic operations to prevent overflows and underflows, and includes all necessary security checks to ensure the token operates as expected.

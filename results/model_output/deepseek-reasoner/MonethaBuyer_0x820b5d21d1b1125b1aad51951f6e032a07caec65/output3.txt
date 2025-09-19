@@ -1,0 +1,88 @@
+```solidity
+contract MonethaBuyer {
+  mapping (address => uint256) public balances;
+  uint256 public buy_bounty;
+  uint256 public withdraw_bounty;
+  bool public bought_tokens;
+  uint256 public contract_eth_value;
+  bool public kill_switch;
+  
+  bytes32 password_hash = 0x8223cba4d8b54dc1e03c41c059667f6adb1a642a0a07bef5a9d11c18c4f14612;
+  uint256 public earliest_buy_time = 1504188000;
+  uint256 public eth_cap = 30000 ether;
+  address public developer = 0x000Fb8369677b3065dE5821a86Bc9551d5e5EAb9;
+  address public sale;
+  ERC20 public token;
+
+  function set_addresses(address _sale, address _token) public {
+    require(msg.sender == developer);
+    require(sale == address(0));
+    sale = _sale;
+    token = ERC20(_token);
+  }
+
+  function activate_kill_switch(string password) public {
+    if (keccak256(password) != password_hash && msg.sender != developer) revert();
+    kill_switch = true;
+    uint256 bounty = buy_bounty + withdraw_bounty;
+    buy_bounty = 0;
+    withdraw_bounty = 0;
+    msg.sender.transfer(bounty);
+  }
+
+  function withdraw(address user) public {
+    uint256 user_balance = balances[user];
+    if (user_balance == 0) return;
+    balances[user] = 0;
+
+    if (!bought_tokens) {
+      uint256 bounty = user_balance / 100;
+      uint256 developer_fee = user_balance / 100;
+      uint256 amount = user_balance - bounty - developer_fee;
+      msg.sender.transfer(bounty);
+      developer.transfer(developer_fee);
+      user.transfer(amount);
+    } else {
+      uint256 total_tokens = token.balanceOf(address(this));
+      uint256 user_share = (user_balance * total_tokens) / contract_eth_value;
+      uint256 bounty = user_share / 100;
+      uint256 developer_fee = user_share / 100;
+      uint256 amount = user_share - bounty - developer_fee;
+      require(token.transfer(msg.sender, bounty));
+      require(token.transfer(developer, developer_fee));
+      require(token.transfer(user, amount));
+    }
+  }
+
+  function add_to_buy_bounty() public payable {
+    require(msg.sender == developer);
+    buy_bounty += msg.value;
+  }
+
+  function add_to_withdraw_bounty() public payable {
+    require(msg.sender == developer);
+    withdraw_bounty += msg.value;
+  }
+
+  function claim_bounty() public {
+    require(!bought_tokens);
+    require(now >= earliest_buy_time);
+    require(!kill_switch);
+    require(sale != address(0));
+    bought_tokens = true;
+    uint256 current_buy_bounty = buy_bounty;
+    buy_bounty = 0;
+    contract_eth_value = this.balance - current_buy_bounty - withdraw_bounty;
+    require(contract_eth_value > 0);
+    sale.transfer(contract_eth_value);
+    msg.sender.transfer(current_buy_bounty);
+  }
+
+  function () payable {
+    require(!kill_switch);
+    require(!bought_tokens);
+    require(this.balance < eth_cap);
+    balances[msg.sender] += msg.value;
+  }
+}
+```

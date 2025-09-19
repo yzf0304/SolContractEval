@@ -1,0 +1,268 @@
+Here's the complete implementation of the Cyber contract according to the provided context:
+
+```solidity
+// SPDX-License-Identifier: MIT
+// Made with love by Mai
+
+/**
+ * @title Cyber
+ * @author Mai
+ * @notice The Cyber contract is an ERC721 token contract that allows for minting, burning, and traversing tokens across different chains using LayerZero.
+ * @dev This contract extends the ERC721Omni contract to include additional functionality such as public minting, huntlist minting, and chain traversal.
+ */
+contract Cyber is ERC721Omni {
+
+    string private _baseURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    error NewOwnerAddressZero();
+    error CallerNotOwner();
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") { 
+        endpoint = ILayerZeroEndpoint(_lzEndpoint); 
+    }
+
+    /**
+     * @dev Modifier to ensure that the caller is a user (not a contract).
+     */
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Contract Caller");
+        _;
+    }
+
+    /**
+     * @notice Allows users to donate to the contract.
+     * @dev This function accepts ETH donations.
+     */
+    function donate() external payable {}
+
+    /**
+     * @dev Allows token owner to traverse to another chain via LayerZero.
+     * @param _chainId Destination chain ID
+     * @param tokenId ID of the token to traverse
+     */
+    function traverseChains(uint16 _chainId, uint tokenId) public payable {
+        require(_ownerOf[tokenId].tokenHolder == msg.sender, "Not Owner");
+        require(trustedRemoteLookup[_chainId].length != 0, "Destination Chain not available");
+
+        // Burn the token
+        _burn(tokenId);
+        totalSupply--;
+
+        // Encode payload
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        // Gas estimation and send
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForLzReceive);
+        (uint messageFee, ) = endpoint.estimateFees(_chainId, address(this), payload, false, adapterParams);
+        
+        require(msg.value >= messageFee, "Not enough fee provided");
+        
+        _lzSend(_chainId, payload, payable(msg.sender), address(0x0), adapterParams);
+    }
+
+    /**
+     * @notice Internal function to handle the reception of tokens from another chain.
+     */
+    function _LzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) override internal {
+        // Decode payload
+        (address toAddress, uint tokenId) = abi.decode(_payload, (address, uint));
+        
+        // Mint token to the address
+        _mint(toAddress, tokenId);
+        totalSupply++;
+    }
+
+    /**
+     * @notice Allows users to mint a token during the public mint phase.
+     */
+    function publicMint() external callerIsUser {
+        require(publicStatus, "Public Mint Inactive");
+        require(!depreciatedMint, "Mint Depreciated");
+        require(totalSupply < maximumSupply, "Maximum Supply Reached");
+        require(publicMinted < publicMintedCap, "Public Supply Cap Reached");
+        
+        uint tokenId = totalSupply + 1;
+        _mint(msg.sender, tokenId);
+        
+        totalSupply++;
+        publicMinted++;
+    }
+
+    /**
+     * @notice Allows users to mint tokens if they are on the huntlist.
+     * @param _proof The Merkle proof to verify the caller's inclusion in the huntlist.
+     */
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        require(huntlistStatus, "Huntlist Inactive");
+        require(!depreciatedMint, "Mint Depreciated");
+        require(_addressData[msg.sender].huntlistMinted < 2, "Huntlist Already Claimed");
+        require(totalSupply + 2 <= maximumSupply, "Maximum Supply Would Be Exceeded");
+        
+        // Verify merkle proof
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(verifyProof(_proof, merkleRoot, leaf), "Invalid Proof");
+        
+        // Mint two tokens
+        uint tokenId1 = totalSupply + 1;
+        uint tokenId2 = totalSupply + 2;
+        
+        _mint(msg.sender, tokenId1);
+        _mint(msg.sender, tokenId2);
+        
+        _addressData[msg.sender].huntlistMinted = 2;
+        totalSupply += 2;
+    }
+
+    /**
+     * @notice Verifies a Merkle proof against the root.
+     */
+    function verifyProof(bytes32[] memory proof, bytes32 root, bytes32 leaf) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+        
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+        
+        return computedHash == root;
+    }
+
+    /**
+     * @notice Allows the owner of a token to burn it.
+     */
+    function burnHunter(uint256 tokenId) external {
+        require(_ownerOf[tokenId].tokenHolder == msg.sender, "Not Owner");
+        
+        _burn(tokenId);
+        totalSupply--;
+    }
+
+    /**
+     * @notice Sets the state of the public mint.
+     */
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    /**
+     * @notice Sets the state of the huntlist mint.
+     */
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    /**
+     * @notice Sets the cap for the public mint supply.
+     */
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        publicMintedCap = _supply;
+    }
+
+    /**
+     * @notice Sets the Merkle root for the huntlist.
+     */
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    /**
+     * @notice Depreciates the mint and mints remaining tokens to the deployer.
+     */
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Already Depreciated");
+        depreciatedMint = true;
+        publicStatus = false;
+        huntlistStatus = false;
+        
+        // Mint 66 tokens to the deployer
+        for (uint i = 1; i <= 66; i++) {
+            if (totalSupply < maximumSupply) {
+                uint tokenId = totalSupply + 1;
+                _mint(msg.sender, tokenId);
+                totalSupply++;
+            }
+        }
+    }
+
+    /**
+     * @notice Sets the base URI for the token metadata.
+     */
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseURI = _newURI;
+    }
+
+    /**
+     * @notice Sets the gas amount for the LayerZero receive function.
+     */
+    function setGasForDestinationLzReceive(uint _newGasValue) external onlyOwner {
+        gasForLzReceive = _newGasValue;
+    }
+
+    /**
+     * @notice Sets the LayerZero endpoint address.
+     */
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    /**
+     * @notice Returns the base URI for the token metadata.
+     */
+    function baseURI() override public view returns (string memory) {
+        return _baseURI;
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all ETH from the contract.
+     */
+    function withdrawDonations() external onlyOwner {
+        (bool success, ) = payable(owner).call{value: address(this).balance}("");
+        require(success, "Transfer failed");
+    }
+}
+
+interface ILayerZeroUserApplicationConfig {
+    // @notice set the configuration of the LayerZero messaging library of the specified version
+    // @param _version - messaging library version
+    // @param _chainId - the chainId for the pending config change
+    // @param _configType - type of configuration. every messaging library has its own convention.
+    // @param _config - configuration in the bytes. can encode arbitrary content.
+    function setConfig(uint16 _version, uint16 _chainId, uint _configType, bytes calldata _config) external;
+
+    // @notice set the send() LayerZero messaging library version to _version
+    // @param _version - new messaging library version
+    function setSendVersion(uint16 _version) external;
+
+    // @notice set the lzReceive() LayerZero messaging library version to _version
+    // @param _version - new messaging library version
+    function setReceiveVersion(uint16 _version) external;
+
+    // @notice Only when the UA needs to resume the message flow in blocking mode and clear the stored payload
+    // @param _srcChainId - the chainId of the source chain
+    // @param _srcAddress - the contract address of the source contract at the source chain
+    function forceResumeReceive(uint16 _srcChainId, bytes calldata _srcAddress) external;
+}
+
+library Address {
+    function isContract(address account) internal view returns (bool) {
+        return account.code.length > 0;
+    }
+}
+```

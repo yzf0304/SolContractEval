@@ -1,0 +1,502 @@
+pragma solidity 0.5.17;
+
+interface IEthCrossChainManager {
+    function crossChain(
+        uint64 _toChainId,
+        bytes calldata _toContract,
+        bytes calldata _method,
+        bytes calldata _txData
+    ) external returns (bool);
+}
+
+interface IEthCrossChainManagerProxy {
+    function getEthCrossChainManager() external view returns (address);
+}
+
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "SafeMath: subtraction overflow");
+        return a - b;
+    }
+}
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount)
+        external
+        returns (bool);
+    function allowance(address owner, address spender)
+        external
+        view
+        returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(
+        address indexed owner,
+        address indexed spender,
+        uint256 value
+    );
+}
+
+library Utils {
+    function isContract(address account) internal view returns (bool) {
+        // from OpenZeppelin Address.isContract
+        bytes32 codehash;
+        bytes32 accountHash =
+            0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470;
+        assembly {
+            codehash := extcodehash(account)
+        }
+        return (codehash != 0x0 && codehash != accountHash);
+    }
+    function bytesToAddress(bytes memory _bs) internal pure returns (address addr) {
+        require(_bs.length == 20, "bytes length does not match address");
+        assembly {
+            addr := mload(add(_bs, 0x14))
+        }
+    }
+}
+
+library SafeERC20 {
+    using SafeMath for uint256;
+    function safeTransfer(
+        IERC20 token,
+        address to,
+        uint256 value
+    ) internal {
+        _callOptionalReturn(
+            token,
+            abi.encodeWithSelector(token.transfer.selector, to, value)
+        );
+    }
+
+    function safeTransferFrom(
+        IERC20 token,
+        address from,
+        address to,
+        uint256 value
+    ) internal {
+        _callOptionalReturn(
+            token,
+            abi.encodeWithSelector(token.transferFrom.selector, from, to, value)
+        );
+    }
+
+    function safeApprove(
+        IERC0 token,
+        address spender,
+        uint256 value
+    ) internal {
+        // solhint-disable-next-line max-line-length
+        require(
+            (value == 0) || (token.allowance(address(this), spender) == 0),
+            "SafeERC20: approve from non-zero to non-zero allowance"
+        );
+        _callOptionalReturn(
+            token,
+            abi.encodeWithSelector(token.approve.selector, spender, value)
+        );
+    }
+
+    function _callOptionalReturn(IERC20 token, bytes memory data) private {
+        require(Utils.isContract(address(token)), "SafeERC20: call to non-contract");
+        (bool success, bytes memory returndata) = address(token).call(data);
+        require(success, "SafeERC20: low-level call failed");
+        if (returndata.length > 0) {
+            // Return data is optional
+            require(abi.decode(returndata, (bool)), "SafeERC20: operation did not succeed");
+        }
+    }
+}
+
+library ZeroCopySink {
+    function WriteVarBytes(bytes memory data)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        // length prefix
+        uint64 l = uint64(data.length);
+        bytes memory lenBs;
+        if (l < 0xFD) {
+            lenBs = WriteUint8(uint8(l));
+        } else if (l <= 0xFFFF) {
+            lenBs = abi.encodePacked(byte(0xFD), WriteUint16(uint16(l)));
+        } else if (l <= 0xFFFFFFFF) {
+            lenBs = abi.encodePacked(byte(0xFE), WriteUint32(uint32(l)));
+        } else {
+            lenBs = abi.encodePacked(byte(0xFF), WriteUint64(uint64(l)));
+        }
+        return abi.encodePacked(lenBs, data);
+    }
+    function WriteUint8(uint8 v) internal pure returns (bytes memory) {
+        bytes memory buff = new bytes(1);
+        buff[0] = byte(v);
+        return buff;
+    }
+    function WriteUint16(uint16 v) internal pure returns (bytes memory) {
+        bytes memory buff = new bytes(2);
+        buff[0] = byte(uint8(v >> 8));
+        buff[1] = byte(uint8(v));
+        return buff;
+    }
+    function WriteUint32(uint32 v) internal pure returns (bytes memory) {
+        bytes memory buff = new bytes(4);
+        buff[0] = byte(uint8(v >> 24));
+        buff[1] = byte(uint8(v >> 16));
+        buff[2] = byte(uint8(v >> 8));
+        buff[3] = byte(uint8(v));
+        return buff;
+    }
+    function WriteUint64(uint64 v) internal pure returns (bytes memory) {
+        bytes memory buff = new bytes(8);
+        for (uint i = 0; i < 8; i++) {
+            buff[7 - i] = byte(uint8(v >> (8 * i)));
+        }
+        return buff;
+    }
+    function WriteUint255(uint256 v) internal pure returns (bytes memory) {
+        require(
+            v <= 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+            "Value exceeds uint255 range"
+        );
+        bytes memory buff = new bytes(32);
+        for (uint i = 0; i < 32; i++) {
+            buff[31 - i] = byte(uint8(v >> (8 * i)));
+        }
+        return buff;
+    }
+}
+
+library ZeroCopySource {
+    function NextVarBytes(bytes memory buff, uint256 offset)
+        internal
+        pure
+        returns (bytes memory, uint256)
+    {
+        // read length
+        require(offset + 1 <= buff.length, "NextVarBytes length");
+        uint8 fb = uint8(buff[offset]);
+        uint64 l;
+        if (fb < 0xFD) {
+            l = fb;
+            offset += 1;
+        } else if (fb == 0xFD) {
+            require(offset + 3 <= buff.length, "NextVarBytes fd");
+            l = uint16(uint8(buff[offset + 1])) << 8 |
+                uint16(uint8(buff[offset + 2]));
+            require(l >= 0xFD && l <= 0xFFFF, "NextVarBytes fd range");
+            offset += 3;
+        } else if (fb == 0xFE) {
+            require(offset + 5 <= buff.length, "NextVarBytes fe");
+            l =
+                uint32(uint8(buff[offset + 1])) << 24 |
+                uint32(uint8(buff[offset + 2])) << 16 |
+                uint32(uint8(buff[offset + 3])) << 8 |
+                uint32(uint8(buff[offset + 4]));
+            require(l > 0xFFFF && l <= 0xFFFFFFFF, "NextVarBytes fe range");
+            offset += 5;
+        } else {
+            require(offset + 9 <= buff.length, "NextVarBytes ff");
+            l =
+                uint64(uint8(buff[offset + 1])) << 56 |
+                uint64(uint8(buff[offset + 2])) << 48 |
+                uint64(uint8(buff[offset + 3])) << 40 |
+                uint64(uint8(buff[offset + 4])) << 32 |
+                uint64(uint8(buff[offset + 5])) << 24 |
+                uint64(uint8(buff[offset + 6])) << 16 |
+                uint64(uint8(buff[offset + 7])) << 8 |
+                uint64(uint8(buff[offset + 8]));
+            require(l > 0xFFFFFFFF, "NextVarBytes ff range");
+            offset += 9;
+        }
+        require(offset + l <= buff.length, "NextVarBytes data");
+        bytes memory ret = new bytes(l);
+        for (uint i = 0; i < l; i++) {
+            ret[i] = buff[offset + i];
+        }
+        offset += l;
+        return (ret, offset);
+    }
+    function NextUint255(bytes memory buff, uint256 offset)
+        internal
+        pure
+        returns (uint256, uint256)
+    {
+        require(offset + 32 <= buff.length, "NextUint255");
+        uint256 v;
+        for (uint i = 0; i < 32; i++) {
+            v = (v << 8) | uint8(buff[offset + i]);
+        }
+        require(
+            v <= 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+            "Value exceeds range"
+        );
+        offset += 32;
+        return (v, offset);
+    }
+}
+
+contract Context {
+    constructor() internal {}
+    function _msgSender() internal view returns (address payable) {
+        return msg.sender;
+    }
+}
+
+contract Ownable is Context {
+    address private _owner;
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+    constructor() internal {
+        _owner = _msgSender();
+        emit OwnershipTransferred(address(0), _owner);
+    }
+    function owner() public view returns (address) {
+        return _owner;
+    }
+    modifier onlyOwner() {
+        require(isOwner(), "Ownable: caller is not the owner");
+        _;
+    }
+    function isOwner() public view returns (bool) {
+        return _msgSender() == _owner;
+    }
+    function renounceOwnership() public onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0), "Ownable: zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+contract LockProxy is Ownable {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+
+    struct TxArgs {
+        bytes toAssetHash;
+        bytes toAddress;
+        uint256 amount;
+    }
+
+    address public managerProxyContract;
+    mapping(uint64 => bytes) public proxyHashMap;
+    mapping(address => mapping(uint64 => bytes)) public assetHashMap;
+
+    event SetManagerProxyEvent(address manager);
+    event BindProxyEvent(uint64 toChainId, bytes targetProxyHash);
+    event BindAssetEvent(
+        address fromAssetHash,
+        uint64 toChainId,
+        bytes targetProxyHash,
+        uint256 initialAmount
+    );
+    event UnlockEvent(
+        address toAssetHash,
+        address toAddress,
+        uint256 amount
+    );
+    event LockEvent(
+        address fromAssetHash,
+        address fromAddress,
+        uint64 toChainId,
+        bytes toAssetHash,
+        bytes toAddress,
+        uint256 amount
+    );
+
+    modifier onlyManagerContract() {
+        IEthCrossChainManagerProxy proxy =
+            IEthCrossChainManagerProxy(managerProxyContract);
+        require(
+            _msgSender() == proxy.getEthCrossChainManager(),
+            "Caller is not EthCrossChainManager"
+        );
+        _;
+    }
+
+    function setManagerProxy(address ethCCMProxyAddr)
+        public
+        onlyOwner
+    {
+        require(ethCCMProxyAddr != address(0), "zero address");
+        managerProxyContract = ethCCMProxyAddr;
+        emit SetManagerProxyEvent(ethCCMProxyAddr);
+    }
+
+    function bindProxyHash(uint64 toChainId, bytes memory targetProxyHash)
+        public
+        onlyOwner
+        returns (bool)
+    {
+        require(targetProxyHash.length > 0, "invalid proxy hash");
+        proxyHashMap[toChainId] = targetProxyHash;
+        emit BindProxyEvent(toChainId, targetProxyHash);
+        return true;
+    }
+
+    function bindAssetHash(
+        address fromAssetHash,
+        uint64 toChainId,
+        bytes memory toAssetHash
+    ) public onlyOwner returns (bool) {
+        require(toAssetHash.length > 0, "invalid asset hash");
+        assetHashMap[fromAssetHash][toChainId] = toAssetHash;
+        uint256 bal = getBalanceFor(fromAssetHash);
+        emit BindAssetEvent(fromAssetHash, toChainId, toAssetHash, bal);
+        return true;
+    }
+
+    function lock(
+        address fromAssetHash,
+        uint64 toChainId,
+        bytes memory toAddress,
+        uint256 amount
+    ) public payable returns (bool) {
+        require(amount > 0, "amount zero");
+        // cross-chain setup
+        bytes memory proxyHash = proxyHashMap[toChainId];
+        require(proxyHash.length > 0, "proxy hash not bound");
+        bytes memory toAsset = assetHashMap[fromAssetHash][toChainId];
+        require(toAsset.length > 0, "asset hash not bound");
+        // transfer in
+        _transferToContract(fromAssetHash, amount);
+
+        // serialize args
+        TxArgs memory args = TxArgs({
+            toAssetHash: toAsset,
+            toAddress: toAddress,
+            amount: amount
+        });
+        bytes memory argsBs = _serializeTxArgs(args);
+
+        // call crossChain
+        IEthCrossChainManagerProxy proxy =
+            IEthCrossChainManagerProxy(managerProxyContract);
+        address mgr = proxy.getEthCrossChainManager();
+        require(
+            IEthCrossChainManager(mgr).crossChain(
+                toChainId,
+                proxyHash,
+                bytes(""),
+                argsBs
+            ),
+            "crossChain failed"
+        );
+
+        emit LockEvent(
+            fromAssetHash,
+            _msgSender(),
+            toChainId,
+            toAsset,
+            toAddress,
+            amount
+        );
+        return true;
+    }
+
+    function unlock(
+        bytes memory argsBs,
+        bytes memory /* fromContractAddr */,
+        uint64 /* fromChainId */
+    ) public onlyManagerContract returns (bool) {
+        TxArgs memory args = _deserializeTxArgs(argsBs);
+        address asset = Utils.bytesToAddress(args.toAssetHash);
+        address payable recipient =
+            address(uint160(Utils.bytesToAddress(args.toAddress)));
+        _transferFromContract(asset, recipient, args.amount);
+        emit UnlockEvent(asset, recipient, args.amount);
+        return true;
+    }
+
+    function getBalanceFor(address fromAssetHash)
+        public
+        view
+        returns (uint256)
+    {
+        if (fromAssetHash == address(0)) {
+            return address(this).balance;
+        } else {
+            return IERC20(fromAssetHash).balanceOf(address(this));
+        }
+    }
+
+    function _transferToContract(address fromAssetHash, uint256 amount)
+        internal
+        returns (bool)
+    {
+        if (fromAssetHash == address(0)) {
+            require(msg.value == amount, "wrong ether amount");
+            return true;
+        } else {
+            require(msg.value == 0, "ether not allowed");
+            IERC20(fromAssetHash).safeTransferFrom(
+                _msgSender(),
+                address(this),
+                amount
+            );
+            return true;
+        }
+    }
+
+    function _transferFromContract(
+        address toAssetHash,
+        address payable toAddress,
+        uint256 amount
+    ) internal returns (bool) {
+        if (toAssetHash == address(0)) {
+            require(address(this).balance >= amount, "insufficient ether");
+            toAddress.transfer(amount);
+            return true;
+        } else {
+            IERC20(toAssetHash).safeTransfer(toAddress, amount);
+            return true;
+        }
+    }
+
+    function _serializeTxArgs(TxArgs memory args)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return
+            abi.encodePacked(
+                ZeroCopySink.WriteVarBytes(args.toAssetHash),
+                ZeroCopySink.WriteVarBytes(args.toAddress),
+                ZeroCopySink.WriteUint255(args.amount)
+            );
+    }
+
+    function _deserializeTxArgs(bytes memory valueBs)
+        internal
+        pure
+        returns (TxArgs memory)
+    {
+        uint256 offset = 0;
+        bytes memory aHash;
+        bytes memory toAddr;
+        uint256 amt;
+        (aHash, offset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        (toAddr, offset) = ZeroCopySource.NextVarBytes(valueBs, offset);
+        (amt, offset) = ZeroCopySource.NextUint255(valueBs, offset);
+        return TxArgs({toAssetHash: aHash, toAddress: toAddr, amount: amt});
+    }
+}

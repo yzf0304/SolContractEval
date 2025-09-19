@@ -1,0 +1,120 @@
+Here's the complete implementation of the CZRLocker contract:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract owned {
+    address public owner;
+
+    function owned() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        owner = newOwner;
+    }
+}
+
+interface token { function transferFrom(address _from, address _to, uint256 _value) public returns (bool success); }
+
+contract CZRLocker is owned {
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+    event RemoveLock(address addr, uint index);
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    address public tokenAddr;
+    address public unlocker;
+
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length);
+        LockedCZR storage lock = lockedCZRMap[addr][index];
+        lock.startLockTime = 0;
+        lock.lockMonth = 0;
+        lock.lockedAmount = 0;
+        lock.unlockedAmount = 0;
+        emit RemoveLock(addr, index);
+    }
+
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        require(amount > 0);
+        require(lockMonth > 0);
+        if (startLockTime == 0) {
+            startLockTime = block.timestamp;
+        }
+        token t = token(tokenAddr);
+        require(t.transferFrom(addr, address(this), amount));
+        lockedCZRMap[addr].push(LockedCZR(startLockTime, lockMonth, amount, 0));
+        emit AddLock(addr, lockedCZRMap[addr].length - 1, startLockTime, lockMonth, amount);
+    }
+
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker);
+        LockedCZR[] storage locks = lockedCZRMap[addr];
+        require(locks.length > 0);
+        token t = token(tokenAddr);
+        uint processed = 0;
+        
+        for (uint i = 0; i < locks.length; i++) {
+            if (limit > 0 && processed >= limit) break;
+            LockedCZR storage lock = locks[i];
+            if (lock.lockedAmount == 0) continue;
+
+            uint elapsedTime = block.timestamp >= lock.startLockTime ? 
+                block.timestamp - lock.startLockTime : 0;
+            uint elapsedMonths = elapsedTime / 30 days;
+            
+            if (elapsedMonths > lock.lockMonth) {
+                elapsedMonths = lock.lockMonth;
+            }
+            
+            uint totalUnlocked = (lock.lockedAmount * elapsedMonths) / lock.lockMonth;
+            uint unlockable = totalUnlocked - lock.unlockedAmount;
+            
+            if (unlockable > 0) {
+                require(t.transferFrom(address(this), addr, unlockable));
+                lock.unlockedAmount += unlockable;
+                emit Unlock(addr, i, unlockable);
+                processed++;
+            }
+        }
+        require(processed > 0);
+    }
+
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        require(to != address(0));
+        require(address(this).balance >= value);
+        to.transfer(value);
+    }
+
+    function() payable public {}
+}
+```
+
+Key implementation details:
+1. `removeCZRLock`: Sets all lock fields to zero while maintaining array structure
+2. `addCZRLock`: Transfers tokens from user to contract and creates new lock record
+3. `unlockCZR`: Calculates linear monthly unlocks and transfers available tokens
+4. Time calculations use 30-day months (2,592,000 seconds)
+5. Proper access control for owner and unlocker addresses
+6. Maintains compatibility with Solidity 0.4.18 syntax and patterns
+
+The contract implements all specified functionality while maintaining compatibility with the original context and compiler version.

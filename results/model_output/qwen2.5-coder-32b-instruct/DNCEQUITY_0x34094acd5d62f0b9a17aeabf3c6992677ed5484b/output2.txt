@@ -1,0 +1,79 @@
+Below is the completed `DNCEQUITY` smart contract, implementing all the specified functionalities and adhering to the constraints provided:
+
+```solidity
+contract DNCEQUITY is ERC223BasicToken {
+    address admin;
+    string public name = "DinarCoin";
+    string public symbol = "DNC";
+    uint public decimals = 18;
+    mapping (address => bool) public mintable;
+
+    event Minted(address indexed recipient, uint256 value);
+    event Burned(address indexed user, uint256 value);
+
+    function DNCEQUITY() {
+        admin = msg.sender;
+    }
+
+    modifier onlyadmin { if (msg.sender != admin) throw; }
+
+    function changeAdmin(address _newAdminAddr) onlyadmin {
+        admin = _newAdminAddr;
+    }
+
+    function createNewMintableUser(address newAddr) onlyadmin {
+        if (balances[newAddr] == 0) {
+            mintable[newAddr] = true;
+        }
+    }
+
+    function deleteMintable(address addr) onlyadmin {
+        mintable[addr] = false;
+    }
+
+    function adminTransfer(address from, address to, uint256 value) onlyadmin {
+        require(mintable[from]);
+        require(value <= balances[from]);
+
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+        Transfer(from, to, value);
+    }
+
+    function mintNewDNC(address user, uint256 quantity) onlyadmin {
+        require(mintable[user]);
+        
+        balances[user] = balances[user].add(quantity);
+        totalSupply = totalSupply.add(quantity);
+        Minted(user, quantity);
+        Transfer(0x0, user, quantity);
+    }
+
+    function burnDNC(address user, uint256 quantity) onlyadmin {
+        require(mintable[user]);
+        require(quantity <= balances[user]);
+
+        balances[user] = balances[user].sub(quantity);
+        totalSupply = totalSupply.sub(quantity);
+        Burned(user, quantity);
+        Transfer(user, 0x0, quantity);
+    }
+}
+```
+
+### Key Implementations:
+- **Constructor**: Sets the `admin` to the contract deployer.
+- **Modifiers**: `onlyadmin` ensures that functions can only be called by the `admin`.
+- **Admin Functions**:
+  - `changeAdmin`: Changes the admin to a new address.
+  - `createNewMintableUser`: Adds a new mintable user, ensuring the user has no existing balance.
+  - `deleteMintable`: Removes the mintable status from a user.
+  - `adminTransfer`: Transfers tokens from a mintable address to another address.
+  - `mintNewDNC`: Mints new tokens to a mintable address and emits events.
+  - `burnDNC`: Burns tokens from a mintable address and emits events.
+- **Events**: Emits `Minted` and `Burned` events for tracking minting and burning actions.
+  
+### Notes:
+- The `require` statements ensure necessary conditions are met before operations proceed.
+- Events are emitted for minting and burning to track these critical actions.
+- The contract uses `SafeMath` for arithmetic operations to prevent overflows and underflows.

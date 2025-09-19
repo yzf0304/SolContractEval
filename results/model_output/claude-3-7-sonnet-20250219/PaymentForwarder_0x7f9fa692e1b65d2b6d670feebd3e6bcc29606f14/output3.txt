@@ -1,0 +1,117 @@
+I'll complete the `PaymentForwarder` contract based on the provided context. Since this is using Solidity 0.4.18, I'll implement the functions accordingly:
+
+```solidity
+/**
+ * @title PaymentForwarder
+ * @notice A contract to forward payments to a team multisig address, tracking the total amount transferred, number of customers, and individual customer and benefactor contributions.
+ * @dev This contract inherits from Haltable, allowing for emergency stops. It records payments and forwards them to a specified team multisig address.
+ */
+contract PaymentForwarder is Haltable {
+
+  /** Who will get all ETH in the end */
+  address public teamMultisig;
+
+  /** Total incoming money */
+  uint public totalTransferred;
+
+  /** How many distinct customers we have that have made a payment */
+  uint public customerCount;
+
+  /** Total incoming money per centrally tracked customer id */
+  mapping(uint128 => uint) public paymentsByCustomer;
+
+  /** Total incoming money per benefactor address */
+  mapping(address => uint) public paymentsByBenefactor;
+
+  /** A customer has made a payment. Benefactor is the address where the tokens will be ultimately issued. */
+  event PaymentForwarded(address source, uint amount, uint128 customerId, address benefactor);
+
+  /**
+   * @notice Initializes the contract with the owner and team multisig addresses.
+   * @dev Sets the `teamMultisig` and `owner` addresses.
+   * @param _owner The address of the contract owner.
+   * @param _teamMultisig The address of the team multisig wallet.
+   */
+  function PaymentForwarder(address _owner, address _teamMultisig) {
+    teamMultisig = _teamMultisig;
+    owner = _owner;
+  }
+
+  /**
+   * @notice Allows a customer to make a payment without a checksum.
+   * @dev Records the payment, updates the total transferred, and forwards the payment to the team multisig address.
+   * @param customerId The unique identifier for the customer.
+   * @param benefactor The address that will benefit from the payment.
+   */
+  function payWithoutChecksum(uint128 customerId, address benefactor) public stopInEmergency payable {
+    address source = msg.sender;
+    uint amount = msg.value;
+
+    // Record the payment
+    if(paymentsByCustomer[customerId] == 0) {
+      customerCount++;
+    }
+    
+    paymentsByCustomer[customerId] += amount;
+    paymentsByBenefactor[benefactor] += amount;
+    totalTransferred += amount;
+
+    // Forward the payment to the team multisig
+    if(!teamMultisig.send(amount)) {
+      throw;
+    }
+
+    // Emit event
+    PaymentForwarded(source, amount, customerId, benefactor);
+  }
+
+  /**
+   * @notice Allows a customer to make a payment on behalf of an address with a checksum.
+   * @dev Verifies the checksum and then calls `payWithoutChecksum` to process the payment.
+   * @param customerId The unique identifier for the customer.
+   * @param benefactor The address that will benefit from the payment.
+   * @param checksum The checksum to verify the payment.
+   */
+  function pay(uint128 customerId, address benefactor, bytes1 checksum) public stopInEmergency payable {
+    // Calculate the expected checksum
+    bytes1 calculatedChecksum = bytes1(uint8(customerId & 0xff) ^ uint8(customerId >> 8) ^ uint8(customerId >> 16) ^ uint8(customerId >> 24) ^ uint8(uint256(benefactor) & 0xff));
+    
+    // Verify the checksum
+    if(checksum != calculatedChecksum) {
+      throw;
+    }
+    
+    // Process the payment
+    payWithoutChecksum(customerId, benefactor);
+  }
+
+  /**
+   * @notice Allows a customer to make a payment on their own behalf with a checksum.
+   * @dev Verifies the checksum and then calls `payWithoutChecksum` to process the payment.
+   * @param customerId The unique identifier for the customer.
+   * @param checksum The checksum to verify the payment.
+   */
+  function payForMyselfWithChecksum(uint128 customerId, bytes1 checksum) public payable {
+    pay(customerId, msg.sender, checksum);
+  }
+
+  /**
+   * @notice Allows a customer to make a payment on their own behalf without a checksum.
+   * @dev Calls `payWithoutChecksum` to process the payment.
+   * @param customerId The unique identifier for the customer.
+   */
+  function payForMyself(uint128 customerId) public payable {
+    payWithoutChecksum(customerId, msg.sender);
+  }
+
+  /**
+   * @notice Fallback function to receive Ether.
+   * @dev Reverts if the contract receives Ether directly.
+   */
+  function() public payable {
+    throw;
+  }
+}
+```
+
+Note: In Solidity 0.4.18, there was no `receive()` function. Instead, we use a fallback function `function()` to handle direct Ether transfers to the contract. Also, at that time, `revert()` wasn't commonly used - `throw` was the standard way to revert transactions.

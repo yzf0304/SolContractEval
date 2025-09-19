@@ -1,0 +1,271 @@
+```solidity
+pragma solidity 0.5.17;
+
+contract LockProxy is Ownable {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+
+    struct TxArgs {
+        bytes toAssetHash;
+        bytes toAddress;
+        uint256 amount;
+    }
+
+    address public managerProxyContract;
+    mapping(uint64 => bytes) public proxyHashMap;
+    mapping(address => mapping(uint64 => bytes)) public assetHashMap;
+    // safeTransfer is not used in this implementation,
+    // but left here to match the original declaration.
+    mapping(address => bool) public safeTransfer;
+
+    event SetManagerProxyEvent(address manager);
+    event BindProxyEvent(uint64 toChainId, bytes targetProxyHash);
+    event BindAssetEvent(address fromAssetHash, uint64 toChainId, bytes targetAssetHash, uint256 initialAmount);
+    event UnlockEvent(address toAssetHash, address toAddress, uint256 amount);
+    event LockEvent(
+        address fromAssetHash,
+        address fromAddress,
+        uint64  toChainId,
+        bytes   toAssetHash,
+        bytes   toAddress,
+        uint256 amount
+    );
+
+    modifier onlyManagerContract() {
+        IEthCrossChainManagerProxy proxy = IEthCrossChainManagerProxy(managerProxyContract);
+        require(
+            _msgSender() == proxy.getEthCrossChainManager(),
+            "LockProxy: caller is not EthCrossChainManager"
+        );
+        _;
+    }
+
+    constructor() public {
+        // owner is set in Ownable constructor
+    }
+
+    function setManagerProxy(address ethCCMProxyAddr)
+        external
+        onlyOwner
+    {
+        require(ethCCMProxyAddr != address(0), "LockProxy: zero address");
+        managerProxyContract = ethCCMProxyAddr;
+        emit SetManagerProxyEvent(ethCCMProxyAddr);
+    }
+
+    function bindProxyHash(uint64 toChainId, bytes memory targetProxyHash)
+        external
+        onlyOwner
+        returns (bool)
+    {
+        require(targetProxyHash.length != 0, "LockProxy: empty proxy hash");
+        proxyHashMap[toChainId] = targetProxyHash;
+        emit BindProxyEvent(toChainId, targetProxyHash);
+        return true;
+    }
+
+    function bindAssetHash(address fromAssetHash, uint64 toChainId, bytes memory toAssetHash)
+        external
+        onlyOwner
+        returns (bool)
+    {
+        require(toAssetHash.length != 0, "LockProxy: empty asset hash");
+        // record initial balance
+        uint256 initial = getBalanceFor(fromAssetHash);
+        assetHashMap[fromAssetHash][toChainId] = toAssetHash;
+        emit BindAssetEvent(fromAssetHash, toChainId, toAssetHash, initial);
+        return true;
+    }
+
+    function lock(
+        address fromAssetHash,
+        uint64 toChainId,
+        bytes memory toAddress,
+        uint256 amount
+    )
+        public
+        payable
+        returns (bool)
+    {
+        bytes memory targetProxy = proxyHashMap[toChainId];
+        require(targetProxy.length != 0, "LockProxy: proxy not bound");
+
+        bytes memory targetAsset = assetHashMap[fromAssetHash][toChainId];
+        require(targetAsset.length != 0, "LockProxy: asset not bound");
+
+        // transfer in
+        _transferToContract(fromAssetHash, amount);
+
+        // build cross-chain args
+        TxArgs memory args = TxArgs({
+            toAssetHash: targetAsset,
+            toAddress:   toAddress,
+            amount:      amount
+        });
+        bytes memory txData = _serializeTxArgs(args);
+
+        // invoke crossChain
+        IEthCrossChainManagerProxy proxy = IEthCrossChainManagerProxy(managerProxyContract);
+        address manager = proxy.getEthCrossChainManager();
+        bytes memory method = abi.encodeWithSelector(this.unlock.selector);
+        require(
+            IEthCrossChainManager(manager).crossChain(
+                toChainId,
+                targetProxy,
+                method,
+                txData
+            ),
+            "LockProxy: crossChain failed"
+        );
+
+        emit LockEvent(
+            fromAssetHash,
+            _msgSender(),
+            toChainId,
+            targetAsset,
+            toAddress,
+            amount
+        );
+        return true;
+    }
+
+    function unlock(
+        bytes memory argsBs,
+        bytes memory fromContractAddr,
+        uint64 fromChainId
+    )
+        public
+        onlyManagerContract
+        returns (bool)
+    {
+        // verify proxy
+        bytes storage bound = proxyHashMap[fromChainId];
+        require(bound.length != 0, "LockProxy: source proxy not bound");
+        // compare storage to memory
+        require(
+            Utils.equalStorage(bound, fromContractAddr),
+            "LockProxy: invalid source proxy"
+        );
+
+        // deserialize
+        TxArgs memory txargs = _deserializeTxArgs(argsBs);
+
+        // determine asset
+        address asset;
+        if (txargs.toAssetHash.length == 0) {
+            asset = address(0);
+        } else {
+            asset = Utils.bytesToAddress(txargs.toAssetHash);
+        }
+        // determine recipient
+        address payable to = address(uint160(Utils.bytesToAddress(txargs.toAddress)));
+
+        // transfer out
+        _transferFromContract(asset, to, txargs.amount);
+
+        emit UnlockEvent(asset, to, txargs.amount);
+        return true;
+    }
+
+    function getBalanceFor(address fromAssetHash)
+        public
+        view
+        returns (uint256)
+    {
+        if (fromAssetHash == address(0)) {
+            return address(this).balance;
+        } else {
+            return IERC20(fromAssetHash).balanceOf(address(this));
+        }
+    }
+
+    function _transferToContract(address fromAssetHash, uint256 amount)
+        internal
+        returns (bool)
+    {
+        if (fromAssetHash == address(0)) {
+            require(msg.value == amount, "LockProxy: wrong ETH amount");
+        } else {
+            require(msg.value == 0, "LockProxy: ETH not accepted");
+            _transferERC20ToContract(fromAssetHash, _msgSender(), address(this), amount);
+        }
+        return true;
+    }
+
+    function _transferFromContract(
+        address toAssetHash,
+        address payable toAddress,
+        uint256 amount
+    )
+        internal
+        returns (bool)
+    {
+        if (toAssetHash == address(0)) {
+            require(address(this).balance >= amount, "LockProxy: insufficient ETH");
+            toAddress.transfer(amount);
+        } else {
+            _transferERC20FromContract(toAssetHash, toAddress, amount);
+        }
+        return true;
+    }
+
+    function _transferERC20ToContract(
+        address token,
+        address fromAddress,
+        address toAddress,
+        uint256 amount
+    )
+        internal
+        returns (bool)
+    {
+        IERC20(token).safeTransferFrom(fromAddress, toAddress, amount);
+        return true;
+    }
+
+    function _transferERC20FromContract(
+        address token,
+        address toAddress,
+        uint256 amount
+    )
+        internal
+        returns (bool)
+    {
+        IERC20(token).safeTransfer(toAddress, amount);
+        return true;
+    }
+
+    function _serializeTxArgs(TxArgs memory args)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encodePacked(
+            ZeroCopySink.WriteVarBytes(args.toAssetHash),
+            ZeroCopySink.WriteVarBytes(args.toAddress),
+            ZeroCopySink.WriteUint255(args.amount)
+        );
+    }
+
+    function _deserializeTxArgs(bytes memory data)
+        internal
+        pure
+        returns (TxArgs memory)
+    {
+        uint256 offset = 0;
+        bytes memory aHash;
+        (aHash, offset) = ZeroCopySource.NextVarBytes(data, offset);
+        bytes memory addrBs;
+        (addrBs, offset) = ZeroCopySource.NextVarBytes(data, offset);
+        uint256 amt;
+        (amt, offset) = ZeroCopySource.NextUint255(data, offset);
+        return TxArgs({
+            toAssetHash: aHash,
+            toAddress:   addrBs,
+            amount:      amt
+        });
+    }
+
+    // fallback to accept ETH
+    function() external payable {}
+}
+```

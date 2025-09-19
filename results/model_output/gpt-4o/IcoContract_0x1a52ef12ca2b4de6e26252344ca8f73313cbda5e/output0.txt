@@ -1,0 +1,153 @@
+Here’s the complete implementation of the `Bonus` contract based on the provided context and requirements. This contract adheres to Solidity version `0.4.18` and fulfills the descriptions:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract Bonus is IcoPhase, Ownable {
+    using SafeMath for uint256;
+
+    // Constants
+    uint256 constant decimals = 18;
+
+    // Bonus enabled/disabled
+    bool public isBonus;
+
+    // Storage for bonus accounts
+    mapping(address => uint256) public bonusAccountBalances;
+    mapping(uint256 => address) public bonusAccountIndex;
+    uint256 public bonusAccountCount;
+
+    /**
+     * @notice Initializes the contract with bonuses enabled.
+     */
+    function Bonus() public {
+        isBonus = true;
+    }
+
+    /**
+     * @notice Enables the bonus system.
+     * @dev Can only be called by the contract owner and when bonuses are currently disabled.
+     * @return A boolean indicating the success of the operation.
+     */
+    function enableBonus() public onlyOwner returns (bool) {
+        require(!isBonus, "Bonus system is already enabled.");
+        isBonus = true;
+        return true;
+    }
+
+    /**
+     * @notice Disables the bonus system.
+     * @dev Can only be called by the contract owner and when bonuses are currently enabled.
+     * @return A boolean indicating the success of the operation.
+     */
+    function disableBonus() public onlyOwner returns (bool) {
+        require(isBonus, "Bonus system is already disabled.");
+        isBonus = false;
+        return true;
+    }
+
+    /**
+     * @notice Gets the bonus percentage based on the current time.
+     * @dev Checks the current time against predefined phases and returns the corresponding bonus percentage.
+     * @return The bonus percentage as a uint256.
+     */
+    function getBonusByTime() public constant returns (uint256) {
+        uint256 currentTime = now;
+
+        if (currentTime >= phasePresale_From && currentTime <= phasePresale_To) {
+            return 20; // 20% bonus during presale
+        } else if (currentTime >= phasePublicSale1_From && currentTime <= phasePublicSale1_To) {
+            return 15; // 15% bonus during public sale phase 1
+        } else if (currentTime >= phasePublicSale2_From && currentTime <= phasePublicSale2_To) {
+            return 10; // 10% bonus during public sale phase 2
+        } else if (currentTime >= phasePublicSale3_From && currentTime <= phasePublicSale3_To) {
+            return 5; // 5% bonus during public sale phase 3
+        } else {
+            return 0; // No bonus outside of defined phases
+        }
+    }
+
+    /**
+     * @notice Calculates the bonus amount based on the provided ETH value.
+     * @dev Determines the bonus amount based on the current phase and the provided ETH value.
+     * @param _value The amount of ETH to convert to a bonus.
+     * @return The bonus amount as a uint256.
+     */
+    function getBonusByETH(uint256 _value) public constant returns (uint256) {
+        uint256 bonusPercentage = getBonusByTime();
+        return _value.mul(bonusPercentage).div(100); // Calculate percentage bonus
+    }
+
+    /**
+     * @notice Returns the bonus balance of a specific account.
+     * @dev Fetches the bonus balance from the storage mapping.
+     * @param _owner The address of the account to check the bonus balance for.
+     * @return The bonus balance as a uint256.
+     */
+    function balanceBonusOf(address _owner) public constant returns (uint256 balance) {
+        return bonusAccountBalances[_owner];
+    }
+
+    /**
+     * @notice Pays a bonus to a specified address.
+     * @dev Only the contract owner can call this function. The actual implementation of paying the bonus should be defined.
+     * @param _address The address to which the bonus will be paid.
+     * @return A boolean indicating the success of the operation.
+     */
+    function payBonusToAddress(address _address) public onlyOwner returns (bool success) {
+        uint256 bonusAmount = bonusAccountBalances[_address];
+        require(bonusAmount > 0, "No bonus available to withdraw.");
+        
+        bonusAccountBalances[_address] = 0; // Reset bonus balance
+        _address.transfer(bonusAmount);     // Send bonus
+        return true;
+    }
+
+    /**
+     * @notice Fallback function to receive Ether.
+     * @dev This function allows the contract to receive Ether.
+     */
+    function() public payable {
+        require(isBonus, "Bonus system is disabled.");
+
+        uint256 bonusAmount = getBonusByETH(msg.value);
+        
+        if (bonusAccountBalances[msg.sender] == 0) {
+            // Add new account to index if not already present
+            bonusAccountIndex[bonusAccountCount] = msg.sender;
+            bonusAccountCount = bonusAccountCount.add(1);
+        }
+
+        // Increment bonus balance for the sender
+        bonusAccountBalances[msg.sender] = bonusAccountBalances[msg.sender].add(bonusAmount);
+    }
+}
+```
+
+### Explanation of Implementation:
+
+1. **Inheritance and Libraries:**
+   - The `Bonus` contract inherits from `IcoPhase` and `Ownable`.
+   - The `SafeMath` library is used for all arithmetic operations.
+
+2. **Bonus Enabling/Disabling:**
+   - The `enableBonus` and `disableBonus` functions allow the owner to toggle the bonus system.
+
+3. **Bonus Calculation:**
+   - The `getBonusByTime` function determines the bonus percentage based on the current time and ICO phase.
+   - The `getBonusByETH` function calculates the bonus amount for the ETH sent to the contract.
+
+4. **Bonus Distribution:**
+   - A mapping tracks bonus balances for each participant.
+   - The `payBonusToAddress` function allows the owner to transfer the stored bonus balance to a given address.
+   - The fallback function lets users send ETH to the contract and have their bonus calculated and stored.
+
+5. **Initialization:**
+   - The constructor initializes the bonus system as enabled.
+
+6. **Fallback:**
+   - The fallback function calculates and assigns bonuses when Ether is sent to the contract.
+
+### Notes:
+- The code adheres to `0.4.18` syntax (e.g., constructors use the same name as the contract, lack of `emit` for events, etc.).
+- Safety checks (e.g., preventing reentrancy in `payBonusToAddress`) ensure that the contract's functionality remains robust.

@@ -1,0 +1,150 @@
+pragma solidity 0.8.13;
+
+contract HEXToken {
+    // ERC-20 metadata
+    string public constant name = "HEX Token";
+    string public constant symbol = "HEX";
+    uint8 public constant decimals = 8;
+    uint256 public totalSupply;
+
+    // Balance and allowance mappings
+    mapping(address => uint256) private balances;
+    mapping(address => mapping(address => uint256)) private allowances;
+
+    // Stake structure
+    struct Stake {
+        uint256 hearts;      // amount staked
+        uint256 startDay;    // day when stake started
+        uint256 stakedDays;  // duration in days
+        uint40 stakeId;      // unique stake identifier
+        bool ended;          // whether stake has been ended
+    }
+
+    // Stakes by user
+    mapping(address => Stake[]) private stakes;
+
+    // Global counters
+    uint40 private nextStakeId;
+    uint256 public launchTime;
+
+    // Events
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    /**
+     * @notice Deploys the token and mints an initial supply to the deployer.
+     * @param initialSupply The number of hearts to mint (use full units × 10**decimals).
+     */
+    constructor(uint256 initialSupply) {
+        totalSupply = initialSupply;
+        balances[msg.sender] = initialSupply;
+        launchTime = block.timestamp;
+        nextStakeId = 1;
+    }
+
+    /**
+     * @notice Returns the current day since deployment.
+     * @return uint256 The number of days elapsed since launchTime.
+     */
+    function currentDay() external view returns (uint256) {
+        return (block.timestamp - launchTime) / 1 days;
+    }
+
+    /**
+     * @notice Starts a new stake of HEX tokens.
+     * @param newStakedHearts The amount of HEX (in hearts) to stake.
+     * @param newStakedDays The number of days to lock the stake.
+     */
+    function stakeStart(uint256 newStakedHearts, uint256 newStakedDays) external {
+        require(newStakedHearts > 0, "HEX: stake amount must be > 0");
+        require(newStakedDays > 0, "HEX: stake days must be > 0");
+        require(balances[msg.sender] >= newStakedHearts, "HEX: insufficient balance");
+
+        // Deduct tokens from user's balance
+        balances[msg.sender] -= newStakedHearts;
+
+        // Record the stake
+        Stake memory s = Stake({
+            hearts: newStakedHearts,
+            startDay: (block.timestamp - launchTime) / 1 days,
+            stakedDays: newStakedDays,
+            stakeId: nextStakeId,
+            ended: false
+        });
+        stakes[msg.sender].push(s);
+        nextStakeId++;
+    }
+
+    /**
+     * @notice Approves a spender to transfer up to `amount` on behalf of msg.sender.
+     * @param spender The address permitted to spend.
+     * @param amount The allowance amount.
+     * @return bool True on success.
+     */
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfers `amount` of HEX from msg.sender to `recipient`.
+     * @param recipient The address receiving the tokens.
+     * @param amount The number of hearts to transfer.
+     * @return bool True on success.
+     */
+    function transfer(address recipient, uint256 amount) public returns (bool) {
+        require(balances[msg.sender] >= amount, "HEX: insufficient balance");
+        balances[msg.sender] -= amount;
+        balances[recipient] += amount;
+        emit Transfer(msg.sender, recipient, amount);
+        return true;
+    }
+
+    /**
+     * @notice Ends a previously started stake, returning staked hearts to the staker.
+     * @param stakeIndex The index of the stake in the staker's array.
+     * @param stakeIdParam The unique stake ID for verification.
+     */
+    function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam) public {
+        require(stakeIndex < stakes[msg.sender].length, "HEX: invalid stake index");
+        Stake storage s = stakes[msg.sender][stakeIndex];
+        require(s.stakeId == stakeIdParam, "HEX: stake ID mismatch");
+        require(!s.ended, "HEX: stake already ended");
+
+        uint256 _currentDay = (block.timestamp - launchTime) / 1 days;
+        require(_currentDay >= s.startDay + s.stakedDays, "HEX: stake not matured");
+
+        // Mark as ended and return hearts
+        s.ended = true;
+        balances[msg.sender] += s.hearts;
+    }
+
+    /**
+     * @notice Returns the number of stakes (including ended) for a given address.
+     * @param stakerAddr The address to query.
+     * @return uint256 The count of stakes.
+     */
+    function stakeCount(address stakerAddr) external view returns (uint256) {
+        return stakes[stakerAddr].length;
+    }
+
+    /**
+     * @notice Returns the balance of `account`.
+     * @param account The address to query.
+     * @return uint256 The balance in hearts.
+     */
+    function balanceOf(address account) external view returns (uint256) {
+        return balances[account];
+    }
+
+    /**
+     * @notice Returns the remaining allowance from `owner` to `spender`.
+     * @param owner The token owner.
+     * @param spender The spender address.
+     * @return uint256 The remaining allowance.
+     */
+    function allowance(address owner, address spender) external view returns (uint256) {
+        return allowances[owner][spender];
+    }
+}

@@ -1,0 +1,237 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.6.12;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "./UnoswapRouter.sol";          // assumes UnoswapRouter and all helpers are in the same folder
+import "./RevertReasonParser.sol";
+import "./UniERC20.sol";
+import "./SafeERC20.sol";
+import "./SafeMath.sol";
+import "./IChi.sol";
+import "./IAggregationExecutor.sol";
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    // --- flags ---
+    uint256 private constant _PARTIAL_FILL          = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH    = 0x02;
+    uint256 private constant _SHOULD_CLAIM          = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER  = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN   = 0x10;
+
+    // CHI token (v2) by 1inch.  Mainnet: 0x0000000000004946c0e9F43F4Dee607b0eF1fA1c
+    IChi private constant _CHI = IChi(0x0000000000004946c0e9F43F4Dee607b0eF1fA1c);
+
+    struct SwapDescription {
+        IERC20   srcToken;
+        IERC20   dstToken;
+        address  srcReceiver;
+        address  dstReceiver;
+        uint256  amount;
+        uint256  minReturnAmount;
+        uint256  flags;
+        bytes    permit;
+    }
+
+    event Swapped(
+        address indexed sender,
+        IERC20    srcToken,
+        IERC20    dstToken,
+        address   dstReceiver,
+        uint256   spentAmount,
+        uint256   returnAmount
+    );
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     * @dev Calls `swap` internally and then (optionally) claims and burns CHI tokens according to flags.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc   The swap description containing all necessary parameters.
+     * @param data   Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft      The remaining gas after the swap (before CHI burn).
+     * @return chiSpent     The amount of CHI tokens actually burned.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (
+            uint256 returnAmount,
+            uint256 gasLeft,
+            uint256 chiSpent
+        )
+    {
+        // measure gas before the swap
+        uint256 gasStart = gasleft();
+
+        // perform the swap; gasLeft is gas remaining immediately after the swap
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+
+        // estimate gas spent
+        uint256 gasUsed = gasStart.sub(gasLeft);
+
+        // optionally mint CHI to self
+        if ((desc.flags & _SHOULD_CLAIM) != 0) {
+            // mint exactly gasUsed worth of CHI; user must pay minting gas themselves
+            _CHI.mint(gasUsed);
+        }
+
+        // burn CHI to get the gas refund
+        uint256 toBurn = gasUsed;
+        if ((desc.flags & _BURN_FROM_MSG_SENDER) != 0) {
+            // pull and burn from msg.sender
+            chiSpent = _CHI.freeFromUpTo(msg.sender, toBurn);
+        } else if ((desc.flags & _BURN_FROM_TX_ORIGIN) != 0) {
+            // pull and burn from tx.origin
+            chiSpent = _CHI.freeFromUpTo(tx.origin, toBurn);
+        } else {
+            // burn from this contract's own CHI balance
+            chiSpent = _CHI.free(toBurn);
+        }
+
+        return (returnAmount, gasLeft, chiSpent);
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     * @dev Checks and moves tokens/ETH in, calls executor, checks outcome, then transfers out.
+     * @param caller The aggregation executor that will perform the swap.
+     * @param desc   The swap description containing all necessary parameters.
+     * @param data   Additional data required for the swap.
+     * @return returnAmount The amount of destination tokens received.
+     * @return gasLeft      The remaining gas immediately after the swap.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        public
+        payable
+        returns (
+            uint256 returnAmount,
+            uint256 gasLeft
+        )
+    {
+        // 1) Permit (EIP-2612) if provided
+        _permit(desc.srcToken, desc.amount, desc.permit);
+
+        bool    needsExtraEth = (desc.flags & _REQUIRES_EXTRA_ETH) != 0;
+        uint256 inValue;
+
+        // 2) Pull or verify source assets
+        if (desc.srcToken.isETH()) {
+            // ETH in
+            require(desc.srcReceiver == msg.sender, "Router: bad srcReceiver for ETH");
+            if (needsExtraEth) {
+                // allow extra
+                require(msg.value >= desc.amount, "Router: invalid msg.value");
+                inValue = msg.value;
+            } else {
+                // exact
+                require(msg.value == desc.amount, "Router: invalid msg.value");
+                inValue = msg.value;
+            }
+        } else {
+            // ERC20 in
+            require(msg.value == 0, "Router: msg.value not zero for ERC20");
+            desc.srcToken.safeTransferFrom(desc.srcReceiver, address(this), desc.amount);
+            // allow executor to pull
+            desc.srcToken.uniApprove(address(caller), desc.amount);
+            inValue = 0;
+        }
+
+        // 3) call executor
+        uint256 gasBefore = gasleft();
+        (bool ok, bytes memory res) = address(caller).call{ value: inValue }(
+            abi.encodeWithSelector(caller.callBytes.selector, data)
+        );
+        if (!ok) {
+            // bubble up revert reason
+            revert(RevertReasonParser.parse(res, "Router: executor revert: "));
+        }
+        // decode the amount returned by executor
+        returnAmount = abi.decode(res, (uint256));
+
+        // 4) enforce min return (unless partial fill allowed)
+        if ((desc.flags & _PARTIAL_FILL) == 0) {
+            require(returnAmount >= desc.minReturnAmount, "Router: return too low");
+        }
+
+        // 5) Push output to destination
+        desc.dstToken.uniTransfer(desc.dstReceiver, returnAmount);
+
+        // 6) Done, record remaining gas
+        gasLeft = gasleft();
+
+        // 7) Emit event
+        emit Swapped(
+            msg.sender,
+            desc.srcToken,
+            desc.dstToken,
+            desc.dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     * @param token  The token to be rescued (use address(0) or the ETH-address marker for native ETH).
+     * @param amount The amount to rescue.
+     */
+    function rescueFunds(IERC20 token, uint256 amount)
+        external
+        onlyOwner
+    {
+        if (token.isETH()) {
+            // native
+            payable(owner()).transfer(amount);
+        } else {
+            // ERC20
+            token.safeTransfer(owner(), amount);
+        }
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and recover stray ETH.
+     */
+    function destroy()
+        external
+        onlyOwner
+    {
+        selfdestruct(payable(owner()));
+    }
+}
+```
+
+Explanation of key points:
+
+1. **swap(…):**  
+   - Uses `_permit` (from `Permitable`) to process a permit signature if provided.  
+   - Pulls in ETH or ERC-20 tokens from `desc.srcReceiver`.  
+   - Approves the executor if ERC-20.  
+   - Forwards ETH (or not) according to the `_REQUIRES_EXTRA_ETH` flag.  
+   - Calls `executor.callBytes(data)` by low-level `.call` so we can bubble up any revert reason via `RevertReasonParser`.  
+   - Decodes the returned `uint256` as the fill amount.  
+   - Checks the fill against `desc.minReturnAmount` unless `_PARTIAL_FILL` is set.  
+   - Finally, forwards the executed funds to `desc.dstReceiver` and emits a `Swapped` event, also returning the gas left.
+
+2. **discountedSwap(…):**  
+   - Wraps `swap` to capture `gasStart` and the post-swap `gasLeft`.  
+   - Optionally mints CHI if `_SHOULD_CLAIM` is set.  
+   - Burns CHI via `free`, or `freeFromUpTo(msg.sender/tx.origin)`, according to `_BURN_FROM_*` flags.  
+   - Returns `(returnAmount, gasLeft, chiSpent)`.
+
+3. **rescueFunds / destroy:**  
+   - Standard owner-only ETH/ERC-20 rescue and contract self-destruct patterns.
+
+All of the above strictly uses only the provided context, compiler 0.6.12, and no extra dependencies.

@@ -1,0 +1,744 @@
+```solidity
+pragma solidity ^0.8.4;
+
+/**
+ *             __   __  __   __  _______  __   __  _______  ___ 
+ *            |  |_|  ||  | |  ||       ||  | |  ||  _    ||   |
+ *            |       ||  | |  ||  _____||  | |  || |_|   ||   |
+ *            |       ||  |_|  || |_____ |  |_|  ||       ||   |
+ *            |       ||       ||_____  ||       ||  _   | |   |
+ *            | ||_|| ||       | _____| ||       || |_|   ||   |
+ *            |_|   |_||_______||_______||_______||_______||___|
+ * MUSUBI
+ * https://t.me/musubi_token
+ * musubitoken.com
+ * twitter.com/MusubiToken
+ * 
+ * MUSUBI is a meme token with a twist!  
+ * MUSUBI has no sale limitations, which benefits whales and minnows alike, and an innovative dynamic reflection tax rate which increases proportionate to the size of the sell.
+ * 
+ * TOKENOMICS:
+ * 1,000,000,000,000 token supply
+ * FIRST TWO MINUTES: 3,000,000,000 max buy / 45-second buy cooldown (these limitations are lifted automatically two minutes post-launch)
+ * 15-second cooldown to sell after a buy, in order to limit bot behavior. NO OTHER COOLDOWNS, NO COOLDOWNS BETWEEN SELLS
+ * No buy or sell token limits. Whales are welcome!
+ * 10% total tax on buy
+ * Fee on sells is dynamic, relative to price impact, minimum of 10% fee and maximum of 40% fee, with NO SELL LIMIT.
+ * No team tokens, no presale
+ * A unique approach to resolving the huge dumps after long pumps that have plagued every NotInu fork
+ * 
+ * 
+SPDX-License-Identifier: UNLICENSED 
+*/
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+}
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        return sub(a, b, "SafeMath: subtraction overflow");
+    }
+
+    function sub(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b <= a, errorMessage);
+        uint256 c = a - b;
+        return c;
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if(a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        require(c / a == b, "SafeMath: multiplication overflow");
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        return div(a, b, "SafeMath: division by zero");
+    }
+
+    function div(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b > 0, errorMessage);
+        uint256 c = a / b;
+        return c;
+    }
+
+    function mod(uint256 a, uint256 b) internal pure returns (uint256) {
+        return mod(a, b, "SafeMath: modulo by zero");
+    }
+
+    function mod(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b != 0, errorMessage);
+        return a % b;
+    }
+}
+
+contract Ownable is Context {
+    address private _owner;
+    address private _previousOwner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor () {
+        address msgSender = _msgSender();
+        _owner = msgSender;
+        emit OwnershipTransferred(address(0), msgSender);
+    }
+
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    modifier onlyOwner() {
+        require(_owner == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+
+    function renounceOwnership() public virtual onlyOwner {
+        emit OwnershipTransferred(_owner, address(0));
+        _owner = address(0);
+    }
+
+}
+
+interface IUniswapV2Factory {
+    function createPair(address tokenA, address tokenB) external returns (address pair);
+}
+
+interface IUniswapV2Router02 {
+    function swapExactTokensForETHSupportingFeeOnTransferTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external;
+    function factory() external pure returns (address);
+    function WETH() external pure returns (address);
+    function addLiquidityETH(
+        address token,
+        uint amountTokenDesired,
+        uint amountTokenMin,
+        uint amountETHMin,
+        address to,
+        uint deadline
+    ) external payable returns (uint amountToken, uint amountETH, uint liquidity);
+}
+
+
+
+// You task is to complete the smart contract MUSUBI strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.8.4, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @notice MUSUBI is an ERC20 token with additional features such as fee management, cooldowns, and trading controls.
+ * @dev This contract includes functionality for managing fees, setting cooldown periods, and controlling trading.
+ */
+contract MUSUBI is Context, IERC20, Ownable {
+    using SafeMath for uint256;
+
+    // Mappings to store the balance, allowances, and fee exclusion status of addresses
+    mapping (address => uint256) private _rOwned;
+    mapping (address => uint256) private _tOwned;
+    mapping (address => mapping (address => uint256)) private _allowances;
+    mapping (address => bool) private _isExcludedFromFee;
+    mapping (address => User) private cooldown;
+
+    // Constants and variables for token and fee management
+    uint256 private constant MAX = ~uint256(0);
+    uint256 private constant _tTotal = 1e12 * 10**9;
+    uint256 private _rTotal = (MAX - (MAX % _tTotal));
+    uint256 private _tFeeTotal;
+    string private constant _name = unicode"Musubi";
+    string private constant _symbol = unicode"MUSUBI";
+    uint8 private constant _decimals = 9;
+    uint256 private _taxFee = 6;
+    uint256 private _teamFee = 4;
+    uint256 private _feeRate = 5;
+    uint256 private _feeMultiplier = 1000;
+    uint256 private _launchTime;
+    uint256 private _previousTaxFee = _taxFee;
+    uint256 private _previousteamFee = _teamFee;
+    uint256 private _maxBuyAmount;
+    address payable private _FeeAddress;
+    address payable private _marketingWalletAddress;
+    IUniswapV2Router02 private uniswapV2Router;
+    address private uniswapV2Pair;
+    bool private tradingOpen;
+    bool private _cooldownEnabled = true;
+    bool private inSwap = false;
+    bool private _useImpactFeeSetter = true;
+    uint256 private buyLimitEnd;
+
+    // Struct to store user-specific data
+    struct User {
+        uint256 buy;
+        uint256 sell;
+        bool exists;
+    }
+
+    // Events for logging important state changes
+    event MaxBuyAmountUpdated(uint _maxBuyAmount);
+    event CooldownEnabledUpdated(bool _cooldown);
+    event FeeMultiplierUpdated(uint _multiplier);
+    event FeeRateUpdated(uint _rate);
+
+    // Modifier to prevent reentrancy during swaps
+    modifier lockTheSwap {
+        inSwap = true;
+        _;
+        inSwap = false;
+    }
+
+    /**
+     * @notice Initializes the contract and sets the initial token distribution and fee exclusions.
+     * @param FeeAddress The address to receive a portion of the fees.
+     * @param marketingWalletAddress The address to receive the other portion of the fees.
+     */
+    constructor (address payable FeeAddress, address payable marketingWalletAddress) {
+        _FeeAddress = FeeAddress;
+        _marketingWalletAddress = marketingWalletAddress;
+        _rOwned[_msgSender()] = _rTotal;
+        _isExcludedFromFee[owner()] = true;
+        _isExcludedFromFee[address(this)] = true;
+        _isExcludedFromFee[FeeAddress] = true;
+        _isExcludedFromFee[marketingWalletAddress] = true;
+        emit Transfer(address(0), _msgSender(), _tTotal);
+    }
+
+    /**
+     * @notice Returns the name of the token.
+     * @return The name of the token.
+     */
+    function name() public pure override returns (string memory) {
+        return _name;
+    }
+
+    /**
+     * @notice Returns the symbol of the token.
+     * @return The symbol of the token.
+     */
+    function symbol() public pure override returns (string memory) {
+        return _symbol;
+    }
+
+    /**
+     * @notice Returns the number of decimals the token uses.
+     * @return The number of decimals.
+     */
+    function decimals() public pure override returns (uint8) {
+        return _decimals;
+    }
+
+    /**
+     * @notice Returns the total supply of the token.
+     * @return The total supply of the token.
+     */
+    function totalSupply() public pure override returns (uint256) {
+        return _tTotal;
+    }
+
+    /**
+     * @notice Returns the balance of the specified address.
+     * @param account The address to query the balance of.
+     * @return The balance of the specified address.
+     */
+    function balanceOf(address account) public view override returns (uint256) {
+        return tokenFromReflection(_rOwned[account]);
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from the caller to the recipient.
+     * @param recipient The address to transfer the tokens to.
+     * @param amount The amount of tokens to transfer.
+     * @return A boolean indicating whether the transfer was successful.
+     */
+    function transfer(address recipient, uint256 amount) public override returns (bool) {
+        _transfer(_msgSender(), recipient, amount);
+        return true;
+    }
+
+    /**
+     * @notice Returns the remaining allowance of the spender over the owner's tokens.
+     * @param owner The address of the token owner.
+     * @param spender The address of the spender.
+     * @return The remaining allowance.
+     */
+    function allowance(address owner, address spender) public view override returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    /**
+     * @notice Sets the allowance of the spender over the caller's tokens.
+     * @param spender The address of the spender.
+     * @param amount The amount of tokens to approve.
+     * @return A boolean indicating whether the approval was successful.
+     */
+    function approve(address spender, uint256 amount) public override returns (bool) {
+        _approve(_msgSender(), spender, amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from the sender to the recipient, and updates the allowance.
+     * @param sender The address of the token sender.
+     * @param recipient The address to transfer the tokens to.
+     * @param amount The amount of tokens to transfer.
+     * @return A boolean indicating whether the transfer was successful.
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
+        _transfer(sender, recipient, amount);
+
+        uint256 currentAllowance = _allowances[sender][_msgSender()];
+        require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
+        unchecked {
+            _approve(sender, _msgSender(), currentAllowance - amount);
+        }
+
+        return true;
+    }
+
+    /**
+     * @notice Converts a reflection amount to a token amount.
+     * @param rAmount The reflection amount to convert.
+     * @return The corresponding token amount.
+     */
+    function tokenFromReflection(uint256 rAmount) private view returns(uint256) {
+        require(rAmount <= _rTotal, "Amount must be less than total reflections");
+        uint256 currentRate =  _getRate();
+        return rAmount.div(currentRate);
+    }
+
+    /**
+     * @notice Removes all fees.
+     * @dev Removes all trading fees by setting tax and team fees to zero.
+     * This private function:
+     * 1. Checks if fees are already zero (early return to save gas)
+     * 2. Stores current fee values for potential restoration
+     * 3. Sets both tax and team fees to zero
+     */
+    function removeAllFee() private {
+        if(_taxFee == 0 && _teamFee == 0) return;
+        
+        _previousTaxFee = _taxFee;
+        _previousteamFee = _teamFee;
+        
+        _taxFee = 0;
+        _teamFee = 0;
+    }
+
+    /**
+     * @notice Restores all fees to their previous values.
+     */
+    function restoreAllFee() private {
+        _taxFee = _previousTaxFee;
+        _teamFee = _previousteamFee;
+    }
+
+    /**
+    * @dev Sets the trading fees (tax and team) based on an impact fee parameter.
+    * 
+    * This private function:
+    * 1. Validates and clamps the input impact fee between 10 and 40 (inclusive)
+    * 2. Ensures the final impact fee is an even number (increments if odd)
+    * 3. Calculates tax fee as 60% of the impact fee
+    * 4. Calculates team fee as 40% of the impact fee
+    * @param impactFee The proposed impact fee value (will be clamped and adjusted)
+    * @notice The function enforces these rules:
+    *         - Minimum impact fee: 10
+    *         - Maximum impact fee: 40
+    *         - Impact fee must be even (adjusted if odd)
+    *         - Tax fee = 60% of impact fee
+    *         - Team fee = 40% of impact fee
+    */
+    function setFee(uint256 impactFee) private {
+        impactFee = SafeMath.min(impactFee, 40);
+        impactFee = SafeMath.max(impactFee, 10);
+
+        if(impactFee % 2 != 0){
+            impactFee++;
+        }
+
+        _taxFee = impactFee * 6 / 10;
+        _teamFee = impactFee * 4 / 10;
+    }
+
+    /**
+     * @notice Approves a spender to spend a specified amount of tokens.
+     * @param owner The address of the token owner.
+     * @param spender The address of the spender.
+     * @param amount The amount of tokens to approve.
+     * Emit approval event
+     */
+    function _approve(address owner, address spender, uint256 amount) private {
+        require(owner != address(0), "ERC20: approve from the zero address");
+        require(spender != address(0), "ERC20: approve to the zero address");
+
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    /**
+     * @dev Handles token transfers with fee collection, trading restrictions, and cooldown mechanisms.
+     * This private function performs the following operations:
+     * 1. Validates transfer parameters (non-zero addresses, positive amount)
+     * 2. Applies trading restrictions and cooldowns for non-owners
+     * 3. Sets buy/sell fees for trades through the Uniswap pair
+     * 4. Implements dynamic fee adjustment based on impact fee settings
+     * 5. Executes token/ETH swaps when conditions are met
+     * 6. Handles fee exemptions for specified addresses
+     * 7. Performs the actual token transfer with fees (if applicable)
+     * 
+     * @param from The address of the token sender
+     * @param to The address of the token recipient
+     * @param amount The amount of tokens to transfer
+     * 
+     * @dev Important implementation details:
+     *      - Uses internal _tokenTransfer for actual transfer execution
+     *      - Maintains separate cooldown trackers for buyers/sellers
+     *      - Applies different fee structures for buys vs sells
+     *      - Includes protection against flash loans through swap mechanics
+     *      - Exempts certain addresses from fees via _isExcludedFromFee mapping
+     */
+    function _transfer(address from, address to, uint256 amount) private {
+        require(from != address(0), "ERC20: transfer from the zero address");
+        require(to != address(0), "ERC20: transfer to the zero address");
+        require(amount > 0, "Transfer amount must be greater than zero");
+        
+        if(!_isExcludedFromFee[from] && !_isExcludedFromFee[to]){
+            require(tradingOpen, "trading is not open");
+        }
+
+        if (from != owner() && to != owner() && to != address(0) && to != address(this) && from != uniswapV2Pair) {
+            if (_cooldownEnabled) {
+                if (cooldown[from].exists) {
+                    require(block.timestamp >= cooldown[from].sell, "Too soon to sell");
+                }
+                cooldown[from].sell = block.timestamp + 15;
+                cooldown[from].exists = true;
+            }
+        }
+
+        bool takeFee = true;
+        if(_isExcludedFromFee[from] || _isExcludedFromFee[to]){
+            takeFee = false;
+        }
+        
+        _tokenTransfer(from, to, amount, takeFee);
+    }
+
+    /**
+     * @notice Swaps tokens for ETH.
+     * @param tokenAmount The amount of tokens to swap.
+     */
+    function swapTokensForEth(uint256 tokenAmount) private lockTheSwap {
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = uniswapV2Router.WETH();
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+        uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0,
+            path,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    /**
+     * @notice Sends ETH to the fee and marketing wallets.
+     * @param amount The amount of ETH to send.
+     */
+    function sendETHToFee(uint256 amount) private {
+        _FeeAddress.transfer(amount.mul(50).div(100));
+        _marketingWalletAddress.transfer(amount.mul(50).div(100));
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another, optionally taking fees.
+     * @param sender The address to transfer the tokens from.
+     * @param recipient The address to transfer the tokens to.
+     * @param amount The amount of tokens to transfer.
+     * @param takeFee A boolean indicating whether to take fees.
+     */
+    function _tokenTransfer(address sender, address recipient, uint256 amount, bool takeFee) private {
+        if(!takeFee){
+            removeAllFee();
+        }
+
+        if(inSwap){
+            _transferStandard(sender, recipient, amount);
+        } else {
+             if (sender == uniswapV2Pair && block.timestamp <= buyLimitEnd) {
+                require(amount <= _maxBuyAmount, "Exceeds the maxTransactionAmount.");
+                if (_cooldownEnabled) {
+                    if (cooldown[recipient].exists && block.timestamp < _launchTime + 120) {
+                        require(block.timestamp >= cooldown[recipient].buy, "Too soon to buy");
+                    }
+                    cooldown[recipient].buy = block.timestamp + 45;
+                    cooldown[recipient].exists = true;
+                }
+            }
+
+            uint256 contractBalance = address(this).balance;
+            if(contractBalance > 0) {
+                swapTokensForEth(SafeMath.div(amountInPool(),100));
+            }
+
+             uint256 initialETHBalance = address(this).balance;
+
+            _transferStandard(sender, recipient, amount);
+
+            uint256 ethBalanceAfterTransfer = address(this).balance;
+
+            if (ethBalanceAfterTransfer > initialETHBalance) {
+                sendETHToFee(ethBalanceAfterTransfer - initialETHBalance);
+            }
+
+        }
+
+        if(!takeFee){
+            restoreAllFee();
+        }
+    }
+
+    /**
+     * @notice Transfers tokens from one address to another, applying standard fees.
+     * @param sender The address to transfer the tokens from.
+     * @param recipient The address to transfer the tokens to.
+     * @param tAmount The amount of tokens to transfer.
+     */
+    function _transferStandard(address sender, address recipient, uint256 tAmount) private {
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTeam) = _getValues(tAmount);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _takeTeam(tTeam);
+        _reflectFee(rFee, tFee);
+        emit Transfer(sender, recipient, tTransferAmount);
+    }
+
+    /**
+     * @notice Calculates the values needed for a token transfer.
+     * @param tAmount The amount of tokens to transfer.
+     * @return The calculated values.
+     */
+    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
+        (uint256 tTransferAmount, uint256 tFee, uint256 tTeam) = _getTValues(tAmount, _taxFee, _teamFee);
+        uint256 currentRate =  _getRate();
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tTeam, currentRate);
+        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tTeam);
+    }
+
+    /**
+     * @notice Calculates the T-values needed for a token transfer.
+     * @param tAmount The amount of tokens to transfer.
+     * @param taxFee The tax fee.
+     * @param TeamFee The team fee.
+     * @return The calculated T-values.
+     */
+    function _getTValues(uint256 tAmount, uint256 taxFee, uint256 TeamFee) private pure returns (uint256, uint256, uint256) {
+        uint256 tFee = tAmount.mul(taxFee).div(100);
+        uint256 tTeam = tAmount.mul(TeamFee).div(100);
+        uint256 tTransferAmount = tAmount.sub(tFee).sub(tTeam);
+        return (tTransferAmount, tFee, tTeam);
+    }
+
+    /**
+     * @notice Gets the current rate of token to reflection.
+     * @return The current rate.
+     */
+    function _getRate() private view returns(uint256) {
+        (uint256 rSupply, uint256 tSupply) = _getCurrentSupply();
+        return rSupply.div(tSupply);
+    }
+
+    /**
+     * @notice Gets the current supply of tokens and reflections.
+     * @return The current supply of tokens and reflections.
+     */
+    function _getCurrentSupply() private view returns(uint256, uint256) {
+        uint256 rSupply = _rTotal;
+        uint256 tSupply = _tTotal;
+        if (rSupply < _rTotal / 10**9) return (_rTotal, _tTotal);
+        return (rSupply, tSupply);
+    }
+
+    /**
+     * @notice Calculates the R-values needed for a token transfer.
+     * @param tAmount The amount of tokens to transfer.
+     * @param tFee The fee amount.
+     * @param tTeam The team fee amount.
+     * @param currentRate The current rate.
+     * @return The calculated R-values.
+     */
+    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tTeam, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
+        uint256 rAmount = tAmount.mul(currentRate);
+        uint256 rFee = tFee.mul(currentRate);
+        uint256 rTeam = tTeam.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rFee).sub(rTeam);
+        return (rAmount, rTransferAmount, rFee);
+    }
+
+    /**
+     * @notice Takes the team fee and adds it to the contract's balance.
+     * @param tTeam The team fee amount.
+     */
+    function _takeTeam(uint256 tTeam) private {
+        _tFeeTotal = _tFeeTotal.add(tTeam);
+        _rOwned[address(this)] = _rOwned[address(this)].add(tTeam.mul(_getRate()));
+    }
+
+    /**
+     * @notice Reflects the fee by updating the total reflection supply.
+     * @param rFee The reflection fee amount.
+     * @param tFee The fee amount.
+     */
+    function _reflectFee(uint256 rFee, uint256 tFee) private {
+        _rTotal = _rTotal.sub(rFee);
+        _tFeeTotal = _tFeeTotal.add(tFee);
+    }
+
+    /**
+     * @notice Fallback function to receive ETH.
+     */
+    receive() external payable {}
+
+    /**
+     * @notice Adds liquidity to the Uniswap pair.
+     * @dev Only the owner can call this function.
+     */
+    function addLiquidity() external onlyOwner() {
+        require(!tradingOpen,"trading is already open");
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+        uniswapV2Router = _uniswapV2Router;
+        _approve(address(this), address(uniswapV2Router), _tTotal);
+        uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
+        uniswapV2Router.addLiquidityETH{value: address(this).balance}(address(this),balanceOf(address(this)),0,0,owner(),block.timestamp);
+        _maxBuyAmount = 3000000000 * 10**9;
+        _launchTime = block.timestamp;
+        buyLimitEnd = block.timestamp + 120; // 2 minutes after launch
+        IERC20(uniswapV2Pair).approve(address(uniswapV2Router), type(uint).max);
+    }
+
+    /**
+     * @dev Enables trading and sets a temporary buy limit period.
+     * This function:
+     * 1. Sets the tradingOpen flag to true, allowing token trades
+     * 2. Establishes a 120-second buy limit window (temporary restriction)
+     * @notice The buy limit period (120 seconds) is intended to:
+     *         - Allow initial liquidity providers to stabilize the market
+     *         - Prevent immediate large-scale purchases after trading opens
+     * @dev Only callable by the contract owner (enforced by onlyOwner modifier).
+     *      The buyLimitEnd timestamp is set to 120 seconds after execution.
+     */
+    function openTrading() public onlyOwner {
+        tradingOpen = true;
+        buyLimitEnd = block.timestamp + 120; // Set buyLimitEnd to 2 minutes from now
+    }
+
+    /**
+     * @notice Manually swaps tokens for ETH.
+     * @dev Only the fee address can call this function.
+     */
+    function manualswap() external {
+        require(_msgSender() == _FeeAddress, "Caller is not the fee address");
+        swapTokensForEth(balanceOf(address(this)));
+    }
+
+    /**
+     * @notice Manually sends ETH to the fee and marketing wallets.
+     * @dev Only the fee address can call this function.
+     */
+    function manualsend() external {
+        require(_msgSender() == _FeeAddress, "Caller is not the fee address");
+        sendETHToFee(address(this).balance);
+    }
+
+    /**
+     * @notice Sets the fee rate.
+     * @param rate The new fee rate.
+     * @dev Only the fee address can call this function. Rate can't exceed 50%.
+     */
+    function setFeeRate(uint256 rate) external {
+        require(_msgSender() == _FeeAddress, "Caller is not the fee address");
+        require(rate <= 50, "Rate can't exceed 50%");
+        _feeRate = rate;
+        emit FeeRateUpdated(rate);
+    }
+
+    /**
+     * @notice Enables or disables the cooldown.
+     * @param onoff A boolean indicating whether to enable or disable the cooldown.
+     * @dev Only the owner can call this function.
+     */
+    function setCooldownEnabled(bool onoff) external onlyOwner() {
+        _cooldownEnabled = onoff;
+        emit CooldownEnabledUpdated(onoff);
+    }
+
+    /**
+     * @notice Returns the balance of the contract.
+     * @return The balance of the contract.
+     */
+    function thisBalance() public view returns (uint) {
+        return address(this).balance;
+    }
+
+    /**
+     * @notice Returns whether the cooldown is enabled.
+     * @return A boolean indicating whether the cooldown is enabled.
+     */
+    function cooldownEnabled() public view returns (bool) {
+        return _cooldownEnabled;
+    }
+
+    /**
+     * @notice Returns the time until the next buy is allowed for a given address.
+     * @param buyer The address to check.
+     * @return The time until the next buy is allowed.
+     */
+    function timeToBuy(address buyer) public view returns (uint) {
+        if (!cooldown[buyer].exists) return 0;
+        if (block.timestamp >= cooldown[buyer].buy) return 0;
+        return cooldown[buyer].buy - block.timestamp;
+    }
+
+    /**
+     * @notice Returns the time until the next sell is allowed for a given address.
+     * @param buyer The address to check.
+     * @return The time until the next sell is allowed.
+     */
+    function timeToSell(address buyer) public view returns (uint) {
+        if (!cooldown[buyer].exists) return 0;
+        if (block.timestamp >= cooldown[buyer].sell) return 0;
+        return cooldown[buyer].sell - block.timestamp;
+    }
+
+    /**
+     * @notice Returns the amount of tokens in the Uniswap pair.
+     * @return The amount of tokens in the Uniswap pair.
+     */
+    function amountInPool() public view returns (uint) {
+        return balanceOf(uniswapV2Pair);
+    }
+}
+```

@@ -1,0 +1,83 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract Okimi is Ownable, ERC721A, ReentrancyGuard {
+    string private _baseTokenURI;
+
+    function mint(uint256 quantity)
+        external
+        payable
+        callerIsUser
+    {
+        SaleConfig memory config = saleConfig;
+        uint256 publicPrice = uint256(config.publicPriceWei);
+        uint256 publicSaleStartTime = uint256(config.publicSaleStartTime);
+        require(isSaleOn(publicPrice, publicSaleStartTime), "Sale not active");
+        require(_numberMinted(msg.sender) + quantity <= maxPerAddressDuringMint, "Exceeds max per address");
+        require(totalSupply() + quantity <= amountForSaleAndDev, "Exceeds max supply");
+        uint256 totalCost = publicPrice * quantity;
+        require(msg.value >= totalCost, "Insufficient funds");
+        
+        _safeMint(msg.sender, quantity);
+        refundIfOver(totalCost);
+    }
+
+    function refundIfOver(uint256 price) private {
+        if (msg.value > price) {
+            payable(msg.sender).transfer(msg.value - price);
+        }
+    }
+
+    function isSaleOn(uint256 _price, uint256 _startTime) public view returns (bool) {
+        return block.timestamp >= _startTime && _price != 0;
+    }
+
+    function getPrice() public view returns (uint256) {
+        return saleConfig.publicPriceWei;
+    }
+
+    function setPublicSaleConfig(uint32 timestamp, uint64 price) external onlyOwner {
+        saleConfig = SaleConfig(timestamp, price);
+    }
+
+    function reserve(uint256 quantity) external onlyOwner {
+        require(totalSupply() + quantity <= amountForDevs, "Too many already reserved");
+        uint256 numChunks = quantity / maxBatchSize;
+        for (uint256 i = 0; i < numChunks; i++) {
+            _safeMint(msg.sender, maxBatchSize);
+        }
+        uint256 remainder = quantity % maxBatchSize;
+        if (remainder != 0) {
+            _safeMint(msg.sender, remainder);
+        }
+    }
+
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return _baseTokenURI;
+    }
+
+    function withdraw() external onlyOwner nonReentrant {
+        (bool success, ) = msg.sender.call{value: address(this).balance}("");
+        require(success, "Transfer failed");
+    }
+
+    function numberMinted(address owner) public view returns (uint256) {
+        return _numberMinted(owner);
+    }
+
+    function getOwnershipData(uint256 tokenId) external view returns (TokenOwnership memory) {
+        return _ownershipOf(tokenId);
+    }
+
+    function totalMinted() public view returns (uint256) {
+        return _totalMinted();
+    }
+
+    receive() external payable {}
+}
+```

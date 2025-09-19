@@ -1,0 +1,296 @@
+```solidity
+// SPDX-License-Identifier: MIT
+
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address payable) {
+        return payable(msg.sender);
+    }
+
+    function _msgData() internal view virtual returns (bytes memory) {
+        this; // silence state mutability warning without generating bytecode - see https://github.com/ethereum/solidity/issues/2691
+        return msg.data;
+    }
+}
+
+interface IERC20 {
+
+    function totalSupply() external view returns (uint256);
+    function decimals() external pure returns (uint8);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+library SafeMath {
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        return sub(a, b, "SafeMath: subtraction overflow");
+    }
+
+    function sub(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b <= a, errorMessage);
+        uint256 c = a - b;
+
+        return c;
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+
+        uint256 c = a * b;
+        require(c / a == b, "SafeMath: multiplication overflow");
+
+        return c;
+    }
+
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        return div(a, b, "SafeMath: division by zero");
+    }
+
+    function div(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b > 0, errorMessage);
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+
+        return c;
+    }
+
+    function mod(uint256 a, uint256 b) internal pure returns (uint256) {
+        return mod(a, b, "SafeMath: modulo by zero");
+    }
+
+    function mod(uint256 a, uint256 b, string memory errorMessage) internal pure returns (uint256) {
+        require(b != 0, errorMessage);
+        return a % b;
+    }
+}
+
+contract Ownable is Context {
+    address private _owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    constructor () {
+        address msgSender = _msgSender();
+        _owner = msgSender;
+        emit OwnershipTransferred(address(0), msgSender);
+    }
+
+    function owner() public view returns (address) {
+        return _owner;
+    }   
+
+    modifier onlyOwner() {
+        require(_owner == _msgSender(), "Ownable: caller is not the owner");
+        _;
+    }
+    
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        require(newOwner != address(0), "Ownable: new owner is the zero address");
+        emit OwnershipTransferred(_owner, newOwner);
+        _owner = newOwner;
+    }
+}
+
+interface IEverMigrate {
+    function migrateTokens(address sourceToken, address toAddress, uint256 amount) external;
+    function returnTokens(address sourceToken, address toAddress, uint256 amount) external;
+    function tokenMigrateDetails(address sourceToken) external view returns (address targetToken, uint256 ratio);
+    function allSupportedTokens() external view returns (address[] memory);
+    function allSupportedTokensLength() external view returns (uint256);
+    function supportsToken(address sourceToken) external view returns(bool);
+    
+    event TokenAdded(address fromToken, address toToken, address devAddress, uint256 ratio);
+    event TokensMigrated(address fromToken, address toToken, uint256 amountIn, uint256 amountOut);
+    event TokensReturned(address token, address toAddress, uint256 amount);
+}
+
+
+
+// You task is to complete the smart contract EverMigrate strictly according to the provided context and description. Note that the contract is deployed using compiler version 0.8.8, and do not introduce any additional contracts, dependencies, or unrelated code. Deliver only the complete and functional target contract without any extraneous implementations or examples.
+
+/**
+ * @title EverMigrate
+ * @notice A contract for migrating tokens from a source token to a target token, with support for tracking user transactions.
+ * @dev The contract allows the owner to add token pairs and migrate tokens. It also provides functions to retrieve transaction details and supported tokens.
+ */
+contract EverMigrate is IEverMigrate, Context, Ownable {
+    using SafeMath for uint256;
+
+    struct TokenDetails {
+        address sourceToken;
+        address targetToken;
+        address devAddress;
+        uint256 ratio;
+        bool isPresent;
+    }
+
+    struct Transaction {
+        uint256 amount;
+        uint256 timestamp;
+        uint32 txnId;
+    }
+
+    mapping (address => TokenDetails) private _tokenList;
+    address[] private _allTokens;
+
+    uint32 private _txnId = 0;
+    mapping (address => mapping (address => Transaction[])) private _userTxns;
+
+    constructor() {
+
+    }
+
+    /**
+     * @notice Adds a new token pair to the migration list.
+     * @param sourceToken The address of the source token.
+     * @param targetToken The address of the target token.
+     * @param devAddress The address where the source tokens will be sent.
+     * @param ratio The conversion ratio between the source and target tokens.
+     * @dev Only the contract owner can call this function.
+     */
+    function addTokenDetails(
+        address sourceToken,
+        address targetToken,
+        address devAddress,
+        uint256 ratio
+    ) external onlyOwner {
+        require(sourceToken != address(0) && targetToken != address(0) && devAddress != address(0), "Invalid address");
+        require(ratio > 0, "Ratio must be greater than 0");
+        require(!_tokenList[sourceToken].isPresent, "Token already supported");
+
+        _tokenList[sourceToken] = TokenDetails(sourceToken, targetToken, devAddress, ratio, true);
+        _allTokens.push(sourceToken);
+
+        emit TokenAdded(sourceToken, targetToken, devAddress, ratio);
+    }
+
+    /**
+     * @notice Migrates tokens from the source token to the target token.
+     * @param sourceToken The address of the source token.
+     * @param toAddress The recipient address for the target tokens.
+     * @param amount The amount of source tokens to migrate.
+     * @dev The function checks if the source token is supported, transfers the source tokens to the dev address, and sends the converted target tokens to the recipient.
+     */
+    function migrateTokens(address sourceToken, address toAddress, uint256 amount) external {
+        require(toAddress != address(0), "Invalid address");
+        require(_tokenList[sourceToken].isPresent, "Token not supported");
+        require(amount > 0, "Amount must be greater than zero");
+
+        TokenDetails storage details = _tokenList[sourceToken];
+        address targetToken = details.targetToken;
+        address devAddress = details.devAddress;
+        uint256 ratio = details.ratio;
+
+        IERC20 source = IERC20(sourceToken);
+        IERC20 target = IERC20(targetToken);
+
+        require(source.transferFrom(_msgSender(), devAddress, amount), "Transfer failed");
+
+        uint256 amountOut = amount.div(ratio);
+
+        require(target.transfer(toAddress, amountOut), "Target transfer failed");
+
+        _txnId++;
+        _userTxns[sourceToken][_msgSender()].push(Transaction(amount, block.timestamp, _txnId));
+
+        emit TokensMigrated(sourceToken, targetToken, amount, amountOut);
+    }
+
+    /**
+     * @notice Returns the number of transactions for a specific user and source token.
+     * @param sourceToken The address of the source token.
+     * @param userAddress The address of the user.
+     * @return The number of transactions.
+     * @dev This function is used to get the length of the transaction history for a user.
+     */
+    function userTransactionsLength(address sourceToken, address userAddress) external view returns (uint256) {
+        return _userTxns[sourceToken][userAddress].length;
+    }
+
+    /**
+     * @notice Returns the details of a specific transaction for a user and source token.
+     * @param sourceToken The address of the source token.
+     * @param userAddress The address of the user.
+     * @param position The index of the transaction in the user's transaction history.
+     * @return The amount, timestamp, and transaction ID of the transaction.
+     * @dev This function is used to get the details of a specific transaction.
+     */
+    function userTransaction(address sourceToken, address userAddress, uint256 position) external view returns (uint256, uint256, uint32) {
+        Transaction storage txn = _userTxns[sourceToken][userAddress][position];
+        return (txn.amount, txn.timestamp, txn.txnId);
+    }
+
+    /**
+     * @notice Returns tokens to a specified address.
+     * @param sourceToken The address of the source token.
+     * @param toAddress The recipient address for the returned tokens.
+     * @param amount The amount of tokens to return.
+     * @dev Only the contract owner can call this function. The function checks if the source token is supported and transfers the target tokens to the recipient.
+     */
+    function returnTokens(address sourceToken, address toAddress, uint256 amount) external onlyOwner {
+        require(toAddress != address(0), "Invalid address");
+        require(_tokenList[sourceToken].isPresent, "Token not supported");
+
+        IERC20 token = IERC20(sourceToken);
+
+        require(token.transfer(toAddress, amount), "Transfer failed");
+
+        emit TokensReturned(sourceToken, toAddress, amount);
+    }
+
+    /**
+     * @notice Returns the migration details for a specific source token.
+     * @param sourceToken The address of the source token.
+     * @return The target token address and the conversion ratio.
+     * @dev This function is used to get the migration details for a specific source token.
+     */
+    function tokenMigrateDetails(address sourceToken) external view returns (address, uint256) {
+        require(_tokenList[sourceToken].isPresent, "Token not supported");
+
+        return (_tokenList[sourceToken].targetToken, _tokenList[sourceToken].ratio);
+    }
+
+    /**
+     * @notice Returns an array of all supported source tokens.
+     * @return An array of supported source token addresses.
+     * @dev This function is used to get a list of all supported source tokens.
+     */
+    function allSupportedTokens() external view returns (address[] memory) {
+        return _allTokens;
+    }
+
+    /**
+     * @notice Returns the number of supported source tokens.
+     * @return The number of supported source tokens.
+     * @dev This function is used to get the count of all supported source tokens.
+     */
+    function allSupportedTokensLength() external view returns (uint256) {
+        return _allTokens.length;
+    }
+
+    /**
+     * @notice Checks if a specific source token is supported.
+     * @param sourceToken The address of the source token.
+     * @return True if the token is supported, false otherwise.
+     * @dev This function is used to check if a specific source token is supported.
+     */
+    function supportsToken(address sourceToken) public view returns (bool) {
+        return _tokenList[sourceToken].isPresent;
+    }
+}
+```

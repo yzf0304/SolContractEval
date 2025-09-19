@@ -1,0 +1,266 @@
+pragma solidity ^0.4.18;
+
+contract ERC20 {
+    uint256 public totalSupply;
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    function balanceOf(address who) public view returns (uint256);
+    function transfer(address to, uint256 value) public returns (bool);
+    function allowance(address owner, address spender) public view returns (uint256);
+    function approve(address spender, uint256 value) public returns (bool);
+    function transferFrom(address from, address to, uint256 value) public returns (bool);
+}
+
+contract Ownable {
+    address public owner;
+    event OwnerChanged(address oldOwner, address newOwner);
+
+    function Ownable() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        require(newOwner != owner && newOwner != address(0x0));
+        address oldOwner = owner;
+        owner = newOwner;
+        OwnerChanged(oldOwner, newOwner);
+    }
+}
+
+contract CrowdSale is Ownable {
+    ERC20 public token;
+    address public beneficiary;
+    address public tokenHolder;
+
+    uint public rate;
+    uint public amountGoal;
+    uint public amountRaised;
+    uint public amountTokenIssued;
+
+    uint public startTime;
+    uint public endTime;
+
+    struct Stage {
+        uint duration;
+        uint rate;
+    }
+    Stage[] public icoStages;
+    Stage[] public lockStages;
+
+    struct PurchaserInfo {
+        uint amountEtherSpent;
+        uint amountTokenTaken;
+        uint[] lockedToken;
+    }
+    mapping(address => PurchaserInfo) public purchasers;
+    address[] public purchaserList;
+
+    event TokenPurchase(address purchaser, uint value, uint buyTokens, uint bonusTokens);
+    event GoalReached(uint totalAmountRaised, uint totalTokenIssued);
+    event FundingWithdrawn(address beneficiaryAddress, uint value);
+    event UnlockToken(address purchaser, uint amountUnlockedTokens);
+
+    modifier afterEnded {
+        require(isEnded());
+        _;
+    }
+    modifier onlyOpenTime {
+        require(isStarted());
+        require(!isEnded());
+        _;
+    }
+
+    function CrowdSale(
+        address beneficiaryAddr,
+        address tokenHolderAddr,
+        address tokenAddr,
+        uint tokenRate
+    )
+        public
+    {
+        require(beneficiaryAddr != address(0));
+        require(tokenHolderAddr != address(0));
+        require(tokenAddr != address(0));
+        require(tokenRate > 0);
+
+        beneficiary = beneficiaryAddr;
+        tokenHolder = tokenHolderAddr;
+        token = ERC20(tokenAddr);
+        rate = tokenRate;
+
+        _initStages();
+    }
+
+    function _initStages() internal {
+        // Example ICO stages: 1 week @20% bonus, 1 week @10% bonus, 2 weeks @0% bonus
+        icoStages.push(Stage({duration: 1 weeks, rate: 120}));
+        icoStages.push(Stage({duration: 1 weeks, rate: 110}));
+        icoStages.push(Stage({duration: 2 weeks, rate: 100}));
+        // Example lock stages: bonus unlocking after 30, 60, 90 days
+        lockStages.push(Stage({duration: 30 days, rate: 0}));
+        lockStages.push(Stage({duration: 60 days, rate: 0}));
+        lockStages.push(Stage({duration: 90 days, rate: 0}));
+    }
+
+    function getTokenAddress() public view returns(address) {
+        return address(token);
+    }
+
+    function getLockedToken(address _purchaser, uint stageIdx) public view returns(uint) {
+        return purchasers[_purchaser].lockedToken[stageIdx];
+    }
+
+    function canTokenUnlocked(uint stageIndex) public view returns(bool) {
+        require(isEnded());
+        require(stageIndex < lockStages.length);
+        uint elapsed = now - endTime;
+        uint cum = 0;
+        for (uint i = 0; i <= stageIndex; i++) {
+            cum += lockStages[i].duration;
+        }
+        return (elapsed >= cum);
+    }
+
+    function isStarted() public view returns(bool) {
+        return (startTime != 0 && now >= startTime);
+    }
+
+    function isReachedGoal() public view returns(bool) {
+        return (amountRaised >= amountGoal && amountGoal > 0);
+    }
+
+    function isEnded() public view returns(bool) {
+        return (startTime != 0 && now >= endTime);
+    }
+
+    function getCurrentStage() public view returns(int) {
+        if (!isStarted() || now > endTime) {
+            return -1;
+        }
+        uint cum = startTime;
+        for (uint i = 0; i < icoStages.length; i++) {
+            cum += icoStages[i].duration;
+            if (now <= cum) {
+                return int(i);
+            }
+        }
+        return -1;
+    }
+
+    function getRemainingTimeInSecond() public view returns(uint) {
+        if (now >= endTime) {
+            return 0;
+        }
+        return endTime - now;
+    }
+
+    function _addPurchaser(address purchaser) internal {
+        PurchaserInfo storage info = purchasers[purchaser];
+        if (info.amountEtherSpent == 0) {
+            purchaserList.push(purchaser);
+            // initialize lockedToken array
+            info.lockedToken.length = lockStages.length;
+        }
+    }
+
+    function start(uint fundingGoalInEther) public onlyOwner {
+        require(startTime == 0);
+        require(fundingGoalInEther > 0);
+        amountGoal = fundingGoalInEther * 1 ether;
+        startTime = now;
+        // compute endTime from ICO stages
+        uint totalDur = 0;
+        for (uint i = 0; i < icoStages.length; i++) {
+            totalDur += icoStages[i].duration;
+        }
+        endTime = startTime + totalDur;
+        amountRaised = 0;
+        amountTokenIssued = 0;
+    }
+
+    function stop() public onlyOwner {
+        require(startTime != 0);
+        // end immediately
+        endTime = now;
+    }
+
+    function () payable public onlyOpenTime {
+        require(msg.value > 0);
+        _addPurchaser(msg.sender);
+
+        uint prevRaised = amountRaised;
+        amountRaised += msg.value;
+
+        (uint buyTokens, uint bonusTokens) = _getTokenCount(msg.value);
+
+        // transfer immediate tokens
+        if (buyTokens > 0) {
+            require(token.transferFrom(tokenHolder, msg.sender, buyTokens));
+            purchasers[msg.sender].amountTokenTaken += buyTokens;
+            amountTokenIssued += buyTokens;
+        }
+
+        // lock bonus tokens
+        if (bonusTokens > 0) {
+            purchasers[msg.sender].lockedToken[0] += bonusTokens;
+        }
+
+        TokenPurchase(msg.sender, msg.value, buyTokens, bonusTokens);
+
+        // emit goal reached if crossed
+        if (amountRaised >= amountGoal && prevRaised < amountGoal) {
+            GoalReached(amountRaised, amountTokenIssued);
+        }
+    }
+
+    function _getTokenCount(uint amountInWei) internal view returns(uint buyTokenCount, uint bonusTokenCount) {
+        buyTokenCount = amountInWei * rate;
+        int idx = getCurrentStage();
+        if (idx >= 0) {
+            uint stageRate = icoStages[uint(idx)].rate;
+            // stageRate is percent of base: e.g. 120 = 120% => 20% bonus
+            bonusTokenCount = buyTokenCount * stageRate / 100 - buyTokenCount;
+        } else {
+            bonusTokenCount = 0;
+        }
+    }
+
+    function safeWithdrawal() public onlyOwner {
+        uint balance = this.balance;
+        require(balance > 0);
+        beneficiary.transfer(balance);
+        FundingWithdrawn(beneficiary, balance);
+    }
+
+    function unlockBonusTokens(
+        uint stageIndex,
+        uint purchaserStartIdx,
+        uint purchaserEndIdx
+    )
+        public
+        afterEnded
+        onlyOwner
+    {
+        require(stageIndex < lockStages.length);
+        require(purchaserStartIdx < purchaserEndIdx);
+        require(purchaserEndIdx <= purchaserList.length);
+        require(canTokenUnlocked(stageIndex));
+
+        for (uint i = purchaserStartIdx; i < purchaserEndIdx; i++) {
+            address p = purchaserList[i];
+            uint bonus = purchasers[p].lockedToken[stageIndex];
+            if (bonus > 0) {
+                purchasers[p].lockedToken[stageIndex] = 0;
+                purchasers[p].amountTokenTaken += bonus;
+                amountTokenIssued += bonus;
+                require(token.transferFrom(tokenHolder, p, bonus));
+                UnlockToken(p, bonus);
+            }
+        }
+    }
+}

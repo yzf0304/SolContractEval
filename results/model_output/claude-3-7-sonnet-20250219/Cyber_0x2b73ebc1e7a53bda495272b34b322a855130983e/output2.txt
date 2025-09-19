@@ -1,0 +1,308 @@
+I'll implement the Cyber contract based on the provided context. Let me write the full implementation:
+
+```solidity
+// SPDX-License-Identifier: MIT
+// Made with love by Mai
+
+pragma solidity 0.8.14;
+
+interface ILayerZeroUserApplicationConfig {
+    function setConfig(uint16 _version, uint16 _chainId, uint _configType, bytes calldata _config) external;
+    function setSendVersion(uint16 _version) external;
+    function setReceiveVersion(uint16 _version) external;
+    function forceResumeReceive(uint16 _srcChainId, bytes calldata _srcAddress) external;
+}
+
+library Address {
+    function isContract(address account) internal view returns (bool) {
+        return account.code.length > 0;
+    }
+}
+
+error CallerNotOwner();
+error NewOwnerAddressZero();
+
+/**
+ * @title Cyber
+ * @notice The Cyber contract is an ERC721 token contract that allows for minting, burning, and traversing tokens across different chains using LayerZero.
+ * @dev This contract extends the ERC721Omni contract to include additional functionality such as public minting, huntlist minting, and chain traversal.
+ */
+contract Cyber is ERC721Omni {
+
+    string private _baseURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") { 
+        endpoint = ILayerZeroEndpoint(_lzEndpoint); 
+    }
+
+    /**
+     * @dev Modifier to ensure that the caller is a user (not a contract).
+     */
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Contract Caller");
+        _;
+    }
+
+    /**
+     * @notice Allows users to donate to the contract.
+     * @dev This function accepts ETH donations.
+     */
+    function donate() external payable {}
+
+    /**
+     * @dev Allows token owner to traverse to another chain via LayerZero.
+     * @param _chainId Destination chain ID
+     * @param tokenId ID of the token to traverse
+     */
+    function traverseChains(uint16 _chainId, uint tokenId) public payable {
+        require(msg.sender == ownerOf(tokenId), "Not token owner");
+        require(trustedRemoteLookup[_chainId].length != 0, "Destination chain not available");
+
+        // Burn token
+        _burn(tokenId);
+        totalSupply--;
+
+        // Encode the payload with sender and token ID
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+        
+        // Configure the adapter parameters with gas amount
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForLzReceive);
+        
+        // Estimate fee and validate the payment
+        (uint256 messageFee, ) = endpoint.estimateFees(_chainId, address(this), payload, false, adapterParams);
+        require(msg.value >= messageFee, "Not enough ETH for gas");
+        
+        // Send the cross-chain message
+        _lzSend(_chainId, payload, payable(msg.sender), address(0), adapterParams);
+        
+        // Return excess funds
+        uint256 refundAmount = msg.value - messageFee;
+        if (refundAmount > 0) {
+            (bool success, ) = msg.sender.call{value: refundAmount}("");
+            require(success, "Refund failed");
+        }
+    }
+
+    /**
+     * @notice Internal function to handle the reception of tokens from another chain.
+     * @dev This function is called by the LayerZero endpoint when a token is received from another chain.
+     */
+    function _LzReceive(uint16 _srcChainId, bytes memory _srcAddress, uint64 _nonce, bytes memory _payload) override internal {
+        // Decode the payload to extract recipient and token ID
+        (address toAddr, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        
+        // Mint token to recipient
+        _mint(toAddr, tokenId);
+        totalSupply++;
+    }
+
+    /**
+     * @notice Allows users to mint a token during the public mint phase.
+     * @dev This function mints a new token to the caller's address if the public mint is active and within the supply limits.
+     */
+    function publicMint() external callerIsUser {
+        require(!depreciatedMint, "Mint has been deprecated");
+        require(publicStatus, "Public mint is not active");
+        require(totalSupply < maximumSupply, "Maximum supply reached");
+        require(publicMinted < publicMintedCap, "Public mint cap reached");
+        
+        uint256 tokenId = totalSupply + 1;
+        _mint(msg.sender, tokenId);
+        totalSupply++;
+        publicMinted++;
+    }
+
+    /**
+     * @notice Allows users to mint tokens if they are on the huntlist.
+     * @dev This function mints two tokens to the caller's address if they are on the huntlist and the huntlist mint is active.
+     * @param _proof The Merkle proof to verify the caller's inclusion in the huntlist.
+     */
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        require(!depreciatedMint, "Mint has been deprecated");
+        require(huntlistStatus, "Huntlist mint is not active");
+        require(totalSupply + 2 <= maximumSupply, "Maximum supply exceeded");
+        require(_addressData[msg.sender].huntlistMinted < 2, "Already minted max huntlist tokens");
+        
+        // Verify caller is on the huntlist
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(verifyProof(_proof, merkleRoot, leaf), "Invalid merkle proof");
+        
+        // Mint two tokens
+        uint256 mintAmount = 2 - _addressData[msg.sender].huntlistMinted;
+        for (uint256 i = 0; i < mintAmount; i++) {
+            uint256 tokenId = totalSupply + 1;
+            _mint(msg.sender, tokenId);
+            totalSupply++;
+        }
+        
+        // Update the huntlist minted count
+        _addressData[msg.sender].huntlistMinted += uint128(mintAmount);
+    }
+
+    /**
+     * @notice Verifies a Merkle proof against the root.
+     * @dev This function checks if the provided proof and leaf match the Merkle root.
+     * @param proof The Merkle proof.
+     * @param root The Merkle root.
+     * @param leaf The leaf to be verified.
+     * @return A boolean indicating whether the proof is valid.
+     */
+    function verifyProof(bytes32[] memory proof, bytes32 root, bytes32 leaf) internal pure returns (bool) {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+            }
+        }
+        // Check if the computed hash matches the root
+        return computedHash == root;
+    }
+
+    /**
+     * @notice Allows the owner of a token to burn it.
+     * @dev This function burns the specified token and decreases the total supply.
+     * @param tokenId The ID of the token to be burned.
+     */
+    function burnHunter(uint256 tokenId) external {
+        require(msg.sender == ownerOf(tokenId), "Not token owner");
+        
+        _burn(tokenId);
+        totalSupply--;
+    }
+
+    /**
+     * @notice Sets the state of the public mint.
+     * @dev This function can only be called by the contract owner and sets the public mint status.
+     * @param _state The new state of the public mint.
+     */
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    /**
+     * @notice Sets the state of the huntlist mint.
+     * @dev This function can only be called by the contract owner and sets the huntlist mint status.
+     * @param _state The new state of the huntlist mint.
+     */
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    /**
+     * @notice Sets the cap for the public mint supply.
+     * @dev This function can only be called by the contract owner and sets the maximum number of tokens that can be minted during the public mint phase.
+     * @param _supply The new cap for the public mint supply.
+     */
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        publicMintedCap = _supply;
+    }
+
+    /**
+     * @notice Sets the Merkle root for the huntlist.
+     * @dev This function can only be called by the contract owner and updates the Merkle root used for verifying the huntlist.
+     * @param _newROOT The new Merkle root.
+     */
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    /**
+     * @notice Depreciates the mint and mints remaining tokens to the deployer.
+     * @dev This function can only be called by the contract owner and deprecates the mint, mints 66 tokens to the deployer, and sets the mint status.
+     */
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Mint already deprecated");
+        
+        depreciatedMint = true;
+        publicStatus = false;
+        huntlistStatus = false;
+        
+        // Mint 66 tokens to the deployer
+        uint256 mintAmount = 66;
+        if (totalSupply + mintAmount > maximumSupply) {
+            mintAmount = maximumSupply - totalSupply;
+        }
+        
+        for (uint256 i = 0; i < mintAmount; i++) {
+            uint256 tokenId = totalSupply + 1;
+            _mint(msg.sender, tokenId);
+            totalSupply++;
+        }
+    }
+
+    /**
+     * @notice Sets the base URI for the token metadata.
+     * @dev This function can only be called by the contract owner and updates the base URI used for token metadata.
+     * @param _newURI The new base URI.
+     */
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseURI = _newURI;
+    }
+
+    /**
+     * @notice Sets the gas amount for the LayerZero receive function.
+     * @dev This function can only be called by the contract owner and updates the gas amount for the LayerZero receive function.
+     * @param _newGasValue The new gas value.
+     */
+    function setGasForDestinationLzReceive(uint _newGasValue) external onlyOwner {
+        gasForLzReceive = _newGasValue;
+    }
+
+    /**
+     * @notice Sets the LayerZero endpoint address.
+     * @dev This function can only be called by the contract owner and updates the LayerZero endpoint address.
+     * @param _lzEndpoint The new LayerZero endpoint address.
+     */
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    /**
+     * @notice Returns the base URI for the token metadata.
+     * @dev This function is overridden to return the base URI for the token metadata.
+     * @return The base URI.
+     */
+    function baseURI() override public view returns (string memory) {
+        return _baseURI;
+    }
+
+    /**
+     * @notice Allows the contract owner to withdraw all ETH from the contract.
+     * @dev This function can only be called by the contract owner and transfers the contract's balance to the owner.
+     */
+    function withdrawDonations() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No balance to withdraw");
+        
+        (bool success, ) = owner.call{value: balance}("");
+        require(success, "Transfer failed");
+    }
+}
+```
+
+This implementation includes all the required functionality for the Cyber contract:
+1. Cross-chain token traversal via LayerZero
+2. Public minting functionality with supply caps
+3. Huntlist minting with merkle proof verification
+4. Token burning functionality
+5. Admin functions for controlling minting states and parameters
+6. Base URI management for token metadata
+7. Gas configuration for LayerZero operations
+8. Withdrawal functionality for donations
+
+The contract follows the ERC721 standard and extends it with omnichain capabilities through the ERC721Omni base contract.

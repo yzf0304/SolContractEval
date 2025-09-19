@@ -1,0 +1,99 @@
+To complete the smart contract OMNIDOORS according to the provided context and description, you can use the following code:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface ILayerZeroEndpoint {
+    function send(
+        uint16 _dstChainId,
+        bytes calldata _destination,
+        bytes calldata _payload,
+        address payable _refundAddress,
+        address _zroPaymentAddress,
+        bytes calldata _adapterParams
+    ) external payable;
+
+    function getOutboundNonce(uint16 _dstChainId, address _srcAddress) external view returns (uint64);
+
+    function estimateFees(
+        uint16 _dstChainId,
+        address _userApplication,
+        bytes calldata _payload,
+        bool _payInZRO,
+        bytes calldata _adapterParam
+    ) external view returns (uint256 nativeFee, uint256 zroFee);
+
+    function retryPayload(uint16 _srcChainId, bytes calldata _srcAddress, bytes calldata _payload) external;
+
+    function getChainId() external view returns (uint16);
+
+    function isSendingPayload() external view returns (bool);
+
+    function trustedRemoteLookup(uint16) external view returns (bytes calldata);
+}
+
+contract OMNIDOORS is Ownable, ERC721 {
+    address public _owner;
+    string private baseURI;
+    uint256 nextTokenId = 5900;
+    uint256 MAX_NETWORK_MINT = 9300;
+
+    uint256 gasForDestinationLzReceive = 350000;
+    ILayerZeroEndpoint endpoint;
+
+    constructor(string memory baseURI_, address _layerZeroEndpoint) ERC721("Omni Doors", "odoors") {
+        _owner = msg.sender;
+        endpoint = ILayerZeroEndpoint(_layerZeroEndpoint);
+        baseURI = baseURI_;
+        for (uint256 i = 0; i < 330; i++) {
+            _safeMint(_owner, ++nextTokenId);
+        }
+    }
+
+    function mint(uint8 numTokens) external payable {
+        require(numTokens == 1, "Can only mint one token at a time");
+        require(totalSupply() + numTokens <= MAX_NETWORK_MINT, "Exceeds maximum network mint limit");
+        _safeMint(msg.sender, ++nextTokenId);
+    }
+
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        require(ownerOf(tokenId) == msg.sender, "Caller must be the NFT owner");
+        require(bytes(endpoint.trustedRemoteLookup(_chainId)).length > 0, "Destination chain not available");
+
+        _burn(tokenId);
+
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+        bytes memory adapterParams = abi.encode(gasForDestinationLzReceive);
+
+        (uint256 nativeFee, uint256 zroFee) = endpoint.estimateFees(_chainId, address(this), payload, true, adapterParams);
+
+        require(msg.value >= nativeFee, "Insufficient payment for message delivery");
+
+        endpoint.send{value: msg.value}(uint16(_chainId), bytes(address(this)), payload, msg.sender, address(0), adapterParams);
+    }
+
+    function setBaseURI(string memory URI) external onlyOwner {
+        baseURI = URI;
+    }
+
+    function donate() external payable {}
+
+    function withdraw(uint256 amt) external onlyOwner {
+        payable(msg.sender).transfer(amt);
+    }
+
+    function setGasForDestinationLzReceive(uint256 newVal) external onlyOwner {
+        gasForDestinationLzReceive = newVal;
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+}
+```
+
+This code completes the OMNIDOORS smart contract as per the provided context and description. It includes functionalities for minting NFTs, transferring NFTs across different chains using LayerZero, setting base URI, donating, withdrawing funds, and setting gas for the destination LayerZero receive function.

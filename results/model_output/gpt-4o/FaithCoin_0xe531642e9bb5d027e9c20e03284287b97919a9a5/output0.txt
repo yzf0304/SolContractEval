@@ -1,0 +1,174 @@
+Here's the completed `FaithCoin` contract, implementing all the requested functionalities while adhering to Solidity 0.4.19 standards and the provided context and description.
+
+```solidity
+pragma solidity ^0.4.19;
+
+contract ForeignToken {
+    function balanceOf(address _owner) public constant returns (uint256);
+    function transfer(address _to, uint256 _value) public returns (bool);
+}
+
+contract ERC20Basic {
+    uint256 public totalSupply;
+    function balanceOf(address who) public constant returns (uint256);
+    function transfer(address to, uint256 value) public returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+
+contract ERC20 is ERC20Basic {
+    function allowance(address owner, address spender) public constant returns (uint256);
+    function transferFrom(address from, address to, uint256 value) public returns (bool);
+    function approve(address spender, uint256 value) public returns (bool);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+contract FaithCoin is ERC20 {
+    address public owner = msg.sender;
+    mapping (address => uint256) public balances;
+    mapping (address => mapping (address => uint256)) public allowed;
+
+    uint256 public totalSupply = 25000000 * 10**8; // 25,000,000 FAITH with 8 decimals
+    bool public distributionFinished = false;
+
+    string public constant tokenName = "FaithCoin";
+    string public constant tokenSymbol = "FAITH";
+    uint8 public constant tokenDecimals = 8;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event DistrFinished();
+
+    modifier canDistr() {
+        require(!distributionFinished);
+        _;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    modifier onlyPayloadSize(uint size) {
+        assert(msg.data.length == size + 4);
+        _;
+    }
+
+    function FaithCoin() public {
+        balances[owner] = totalSupply;
+    }
+
+    function name() public constant returns (string) {
+        return tokenName;
+    }
+
+    function symbol() public constant returns (string) {
+        return tokenSymbol;
+    }
+
+    function decimals() public constant returns (uint8) {
+        return tokenDecimals;
+    }
+
+    function balanceOf(address _owner) public constant returns (uint256) {
+        return balances[_owner];
+    }
+
+    function transfer(address _to, uint256 _amount) onlyPayloadSize(2 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(_amount <= balances[msg.sender]);
+
+        balances[msg.sender] -= _amount;
+        balances[_to] += _amount;
+        emit Transfer(msg.sender, _to, _amount);
+
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _amount) onlyPayloadSize(3 * 32) public returns (bool success) {
+        require(_to != address(0));
+        require(_amount <= balances[_from]);
+        require(_amount <= allowed[_from][msg.sender]);
+
+        balances[_from] -= _amount;
+        balances[_to] += _amount;
+        allowed[_from][msg.sender] -= _amount;
+
+        emit Transfer(_from, _to, _amount);
+
+        return true;
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value);
+
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public constant returns (uint256) {
+        return allowed[_owner][_spender];
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        require(newOwner != address(0));
+        owner = newOwner;
+    }
+
+    function getEthBalance(address _addr) constant public returns(uint) {
+        return _addr.balance;
+    }
+
+    function distributeFAITH(address[] addresses, uint256 _value, uint256 _ethbal) onlyOwner canDistr public {
+        require(_value > 0);
+        require(addresses.length > 0);
+
+        for (uint i = 0; i < addresses.length; i++) {
+            require(addresses[i] != address(0));
+            if (getEthBalance(addresses[i]) >= _ethbal) {
+                balances[owner] -= _value;
+                balances[addresses[i]] += _value;
+                emit Transfer(owner, addresses[i], _value);
+            }
+        }
+    }
+
+    function finishDistribution() onlyOwner public returns (bool) {
+        distributionFinished = true;
+        emit DistrFinished();
+        return true;
+    }
+
+    function withdrawForeignTokens(address _tokenContract) onlyOwner public returns (bool) {
+        ForeignToken token = ForeignToken(_tokenContract);
+        uint256 amount = token.balanceOf(address(this));
+        return token.transfer(owner, amount);
+    }
+}
+```
+
+### Explanation of Added Functionalities:
+
+1. **Token Information:**
+   - Token `name`, `symbol`, and `decimals` constants are defined.
+
+2. **Ownership:**
+   - The `transferOwnership` function allows the owner to transfer the contract's ownership.
+
+3. **Token Distribution:**
+   - The `distributeFAITH` function distributes tokens to eligible addresses that meet a minimum Ether balance.
+
+4. **Distribution Completion:**
+   - The `finishDistribution` function finalizes the token distribution process.
+
+5. **Foreign Token Withdrawal:**
+   - The `withdrawForeignTokens` function allows the contract owner to withdraw tokens sent mistakenly to the contract.
+
+6. **ERC20 Functions:**
+   - Core ERC20 functionality (`balanceOf`, `transfer`, `transferFrom`, `approve`, `allowance`) is implemented.
+
+7. **Short Address Attack Mitigation:**
+   - The `onlyPayloadSize` modifier ensures payload size matches expected inputs.
+
+### Notes:
+- The implementation adheres to Solidity 0.4.19 standards.
+- Functionality explicitly avoided introducing unlisted contracts or features beyond the provided requirements.

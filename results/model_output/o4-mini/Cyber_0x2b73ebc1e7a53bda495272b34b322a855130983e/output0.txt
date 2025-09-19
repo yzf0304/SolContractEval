@@ -1,0 +1,178 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.14;
+
+contract Cyber is ERC721Omni {
+    string private _baseURI = "ipfs://QmS84uLAUvGLverNnvyU8YhsHKJi6E3WnfvuD7qmRmBos2/";
+    uint256 private constant maximumSupply = 6600;
+    uint256 public publicMintedCap = 1980;
+
+    uint256 public totalSupply;
+    uint256 public publicMinted;
+    uint256 public gasForLzReceive = 350000;
+    bool public depreciatedMint;
+    bool public publicStatus;
+    bool public huntlistStatus;
+    bytes32 public merkleRoot = 0xd6fbbe52742f9b344f0cec438e6e560e182c4aec6a42bbf8e944f227632ba0b3;
+
+    constructor(address _lzEndpoint) ERC721Omni("Cyber", "Hunters") {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    modifier callerIsUser() {
+        require(tx.origin == msg.sender, "Contract Caller");
+        _;
+    }
+
+    function donate() external payable {}
+
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        require(msg.sender == ownerOf(tokenId), "Not token owner");
+        bytes memory trustedRemote = trustedRemoteLookup[_chainId];
+        require(trustedRemote.length != 0, "Chain not trusted");
+
+        // burn locally and decrement supply
+        _burn(tokenId);
+        totalSupply--;
+
+        // prepare payload
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+
+        // adapter parameters for gas
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForLzReceive);
+
+        // estimate fees
+        (uint256 nativeFee, ) = endpoint.estimateFees(
+            _chainId,
+            address(this),
+            payload,
+            false,
+            adapterParams
+        );
+        require(msg.value >= nativeFee, "Insufficient fee");
+
+        // send message
+        _lzSend(_chainId, payload, payable(msg.sender), address(0), adapterParams);
+
+        // refund excess native token
+        if (msg.value > nativeFee) {
+            payable(msg.sender).transfer(msg.value - nativeFee);
+        }
+    }
+
+    function _LzReceive(
+        uint16 _srcChainId,
+        bytes memory _srcAddress,
+        uint64,
+        bytes memory _payload
+    ) override internal {
+        (address to, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        // mint on destination chain and increase supply
+        _safeMint(to, tokenId);
+        totalSupply++;
+    }
+
+    function publicMint() external callerIsUser {
+        require(!depreciatedMint, "Mint deprecated");
+        require(publicStatus, "Public mint inactive");
+        require(publicMinted < publicMintedCap, "Public cap reached");
+        require(totalSupply < maximumSupply, "Max supply reached");
+
+        uint256 newId = totalSupply + 1;
+        publicMinted++;
+        totalSupply++;
+
+        _safeMint(msg.sender, newId);
+    }
+
+    function huntlistMint(bytes32[] calldata _proof) external callerIsUser {
+        require(!depreciatedMint, "Mint deprecated");
+        require(huntlistStatus, "Huntlist mint inactive");
+        require(_addressData[msg.sender].huntlistMinted == 0, "Already huntlist minted");
+        require(totalSupply + 2 <= maximumSupply, "Max supply exceeded");
+
+        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        require(verifyProof(_proof, merkleRoot, leaf), "Invalid Merkle proof");
+
+        // mint two tokens
+        _addressData[msg.sender].huntlistMinted = 2;
+        for (uint8 i = 0; i < 2; i++) {
+            uint256 newId = totalSupply + 1;
+            totalSupply++;
+            _safeMint(msg.sender, newId);
+        }
+    }
+
+    function verifyProof(
+        bytes32[] memory proof,
+        bytes32 root,
+        bytes32 leaf
+    ) internal pure returns (bool) {
+        bytes32 computed = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 p = proof[i];
+            if (computed <= p) {
+                computed = keccak256(abi.encodePacked(computed, p));
+            } else {
+                computed = keccak256(abi.encodePacked(p, computed));
+            }
+        }
+        return computed == root;
+    }
+
+    function burnHunter(uint256 tokenId) external {
+        require(msg.sender == ownerOf(tokenId), "Not token owner");
+        _burn(tokenId);
+        totalSupply--;
+    }
+
+    function setPublicState(bool _state) external onlyOwner {
+        publicStatus = _state;
+    }
+
+    function setHuntlistState(bool _state) external onlyOwner {
+        huntlistStatus = _state;
+    }
+
+    function setPublicMintSupply(uint256 _supply) external onlyOwner {
+        require(_supply <= maximumSupply, "Exceeds max supply");
+        publicMintedCap = _supply;
+    }
+
+    function setRoot(bytes32 _newROOT) external onlyOwner {
+        merkleRoot = _newROOT;
+    }
+
+    function depreciateMint() external onlyOwner {
+        require(!depreciatedMint, "Already deprecated");
+        depreciatedMint = true;
+        // mint 66 to owner
+        for (uint8 i = 0; i < 66; i++) {
+            require(totalSupply < maximumSupply, "Max supply reached");
+            uint256 newId = totalSupply + 1;
+            totalSupply++;
+            _safeMint(msg.sender, newId);
+        }
+    }
+
+    function setBaseURI(string memory _newURI) external onlyOwner {
+        _baseURI = _newURI;
+    }
+
+    function setGasForDestinationLzReceive(uint256 _newGasValue) external onlyOwner {
+        gasForLzReceive = _newGasValue;
+    }
+
+    function setLzEndpoint(address _lzEndpoint) external onlyOwner {
+        endpoint = ILayerZeroEndpoint(_lzEndpoint);
+    }
+
+    function baseURI() override public view returns (string memory) {
+        return _baseURI;
+    }
+
+    function withdrawDonations() external onlyOwner {
+        payable(owner).transfer(address(this).balance);
+    }
+}
+```

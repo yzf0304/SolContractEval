@@ -1,0 +1,89 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.7;
+
+contract OMNIDOORS is Ownable, ERC721, NonblockingReceiver {
+    address public _owner;
+    string private baseURI;
+    uint256 nextTokenId = 5900;
+    uint256 MAX_NETWORK_MINT = 9300;
+
+    uint256 gasForDestinationLzReceive = 350000;
+
+    constructor(string memory baseURI_, address _layerZeroEndpoint)
+        ERC721("Omni Doors", "odoors")
+    {
+        _owner = msg.sender;
+        endpoint = ILayerZeroEndpoint(_layerZeroEndpoint);
+        baseURI = baseURI_;
+        for (uint256 i = 0; i < 330; i++) {
+            _safeMint(_owner, ++nextTokenId);
+        }
+    }
+
+    function mint(uint8 numTokens) external payable {
+        require(numTokens == 1, "Only 1 token per transaction");
+        require(nextTokenId + numTokens <= MAX_NETWORK_MINT, "Exceeds max supply");
+        nextTokenId += numTokens;
+        _safeMint(msg.sender, nextTokenId);
+    }
+
+    function traverseChains(uint16 _chainId, uint256 tokenId) public payable {
+        require(ownerOf(tokenId) == msg.sender, "Not the token owner");
+        require(trustedRemoteLookup[_chainId].length != 0, "Chain not available");
+
+        _burn(tokenId);
+
+        bytes memory payload = abi.encode(msg.sender, tokenId);
+        bytes memory adapterParams = abi.encodePacked(uint16(1), gasForDestinationLzReceive);
+
+        (uint256 messageFee, ) = endpoint.estimateFees(
+            _chainId,
+            address(this),
+            payload,
+            false,
+            adapterParams
+        );
+
+        require(msg.value >= messageFee, "Insufficient message fee");
+
+        _lzSend(
+            _chainId,
+            payload,
+            payable(msg.sender),
+            address(0x0),
+            adapterParams
+        );
+    }
+
+    function setBaseURI(string memory URI) external onlyOwner {
+        baseURI = URI;
+    }
+
+    function donate() external payable {}
+
+    function withdraw(uint256 amt) external onlyOwner {
+        require(amt <= address(this).balance, "Insufficient balance");
+        payable(owner()).transfer(amt);
+    }
+
+    function setGasForDestinationLzReceive(uint256 newVal) external onlyOwner {
+        gasForDestinationLzReceive = newVal;
+    }
+
+    function _LzReceive(
+        uint16 _srcChainId,
+        bytes memory _srcAddress,
+        uint64 _nonce,
+        bytes memory _payload
+    ) internal override {
+        (address to, uint256 tokenId) = abi.decode(_payload, (address, uint256));
+        require(!_exists(tokenId), "Token already exists");
+        _safeMint(to, tokenId);
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+}
+```

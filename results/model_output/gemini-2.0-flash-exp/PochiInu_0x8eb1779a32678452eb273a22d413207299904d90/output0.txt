@@ -1,0 +1,595 @@
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.11;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+interface IDexRouter {
+    function factory() external pure returns (address);
+    function WETH() external pure returns (address);
+    
+    function swapExactTokensForETHSupportingFeeOnTransferTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external;
+
+    function addLiquidityETH(
+        address token,
+        uint256 amountTokenDesired,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        address to,
+        uint256 deadline
+    )
+        external
+        payable
+        returns (
+            uint256 amountToken,
+            uint256 amountETH,
+            uint256 liquidity
+        );
+}
+
+interface IDexFactory {
+    function createPair(address tokenA, address tokenB)
+        external
+        returns (address pair);
+}
+
+/**
+ * @title PochiInu
+ * @author [Your Name]
+ * @notice This contract implements a token with features like trading limits, fee distribution, and liquidity management.
+ * @dev Inherits from OpenZeppelin's ERC20 and Ownable contracts. Implements anti-bot and anti-whale mechanisms.
+ */
+contract PochiInu is ERC20, Ownable {
+
+    uint256 public maxBuyAmount;
+    uint256 public maxSellAmount;
+    uint256 public maxWalletAmount;
+
+    IDexRouter public immutable uniswapV2Router;
+    address public immutable uniswapV2Pair;
+
+    bool private swapping;
+    uint256 public swapTokensAtAmount;
+
+    address public operationsAddress;
+    address public yashaAddress;
+
+    uint256 public tradingActiveBlock = 0; // 0 means trading is not active
+
+    bool public limitsInEffect = true;
+    bool public tradingActive = false;
+    bool public swapEnabled = false;
+    
+    // Anti-bot and anti-whale mappings and variables
+    mapping(address => uint256) private _holderLastTransferTimestamp; // to hold last Transfers temporarily during launch
+    bool public transferDelayEnabled = true;
+
+    uint256 public buyTotalFees;
+    uint256 public buyOperationsFee;
+    uint256 public buyLiquidityFee;
+    uint256 public buyYashaFee;
+
+    uint256 public sellTotalFees;
+    uint256 public sellOperationsFee;
+    uint256 public sellLiquidityFee;
+    uint256 public sellYashaFee;
+
+    uint256 public tokensForOperations;
+    uint256 public tokensForLiquidity;
+    uint256 public tokensForYasha;
+    
+    /******************/
+
+    // exclude from fees and max transaction amount
+    mapping (address => bool) private _isExcludedFromFees;
+    mapping (address => bool) public _isExcludedMaxTransactionAmount;
+
+    // store addresses that are automatic market maker pairs. Any transfer *to* these addresses
+    // could be subject to a maximum transfer amount
+    mapping (address => bool) public automatedMarketMakerPairs;
+
+    event SetAutomatedMarketMakerPair(address indexed pair, bool indexed value);
+
+    event EnabledTrading();
+    event RemovedLimits();
+
+    event ExcludeFromFees(address indexed account, bool isExcluded);
+
+    event UpdatedMaxBuyAmount(uint256 newAmount);
+
+    event UpdatedMaxSellAmount(uint256 newAmount);
+
+    event UpdatedMaxWalletAmount(uint256 newAmount);
+
+    event UpdatedOperationsAddress(address indexed newWallet);
+
+    event UpdatedYashaAddress(address indexed newWallet);
+
+    event MaxTransactionExclusion(address _address, bool excluded);
+
+    event SwapAndLiquify(
+        uint256 tokensSwapped,
+        uint256 ethReceived,
+        uint256 tokensIntoLiquidity
+    );
+
+    event TransferForeignToken(address token, uint256 amount);
+
+    /**
+     * @notice Initializes the contract and sets up the initial supply and various parameters.
+     * @dev Sets up the Uniswap V2 router and pair, initializes fees, and mints the initial supply.
+     */
+    constructor() ERC20("Pochi Inu", "POCHI") {
+        
+        address newOwner = msg.sender; // can leave alone if owner is deployer.
+        
+        IDexRouter _uniswapV2Router = IDexRouter(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+
+        _excludeFromMaxTransaction(address(_uniswapV2Router), true);
+        uniswapV2Router = _uniswapV2Router;
+        
+        uniswapV2Pair = IDexFactory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
+        _setAutomatedMarketMakerPair(address(uniswapV2Pair), true);
+ 
+        uint256 totalSupply = 100 * 1e9 * 1e18;
+        
+        maxBuyAmount = totalSupply * 1 / 1000;
+        maxSellAmount = totalSupply * 1 / 1000;
+        maxWalletAmount = totalSupply * 3 / 1000;
+        swapTokensAtAmount = totalSupply * 25 / 100000; // 0.025% swap amount
+
+        buyOperationsFee = 8;
+        buyLiquidityFee = 3;
+        buyYashaFee = 4;
+        buyTotalFees = buyOperationsFee + buyLiquidityFee + buyYashaFee;
+
+        sellOperationsFee = 8;
+        sellLiquidityFee = 5;
+        sellYashaFee = 2;
+        sellTotalFees = sellOperationsFee + sellLiquidityFee + sellYashaFee;
+
+        _excludeFromMaxTransaction(newOwner, true);
+        _excludeFromMaxTransaction(address(this), true);
+        _excludeFromMaxTransaction(address(0xdead), true);
+
+        excludeFromFees(newOwner, true);
+        excludeFromFees(address(this), true);
+        excludeFromFees(address(0xdead), true);
+
+        operationsAddress = address(newOwner);
+        yashaAddress = address(newOwner);
+        
+        _mint(newOwner, totalSupply);
+        transferOwnership(newOwner);
+    }
+
+    receive() external payable {}
+
+    /**
+     * @notice Enables trading and sets the block number for when trading was enabled.
+     * @dev Can only be called by the owner and cannot be reenabled once trading is active.
+     */
+    function enableTrading() external onlyOwner {
+        require(!tradingActive, "trading is already active");
+        tradingActive = true;
+        swapEnabled = true;
+        tradingActiveBlock = block.number;
+        emit EnabledTrading();
+    }
+    
+    /**
+     * @notice Removes all limits after the token is stable.
+     * @dev Can only be called by the owner and cannot be reenabled once removed.
+     */
+    function removeLimits() external onlyOwner {
+        limitsInEffect = false;
+        transferDelayEnabled = false;
+        _isExcludedMaxTransactionAmount[address(this)] = true;
+        maxBuyAmount = type(uint256).max;
+        maxSellAmount = type(uint256).max;
+        maxWalletAmount = type(uint256).max;
+        emit RemovedLimits();
+    }
+    
+    /**
+     * @notice Disables the transfer delay.
+     * @dev Can only be called by the owner and cannot be reenabled once disabled.
+     */
+    function disableTransferDelay() external onlyOwner {
+        transferDelayEnabled = false;
+    }
+    
+    /**
+     * @notice Updates the maximum buy amount.
+     * @dev Can only be called by the owner and must be at least 0.1% of the total supply.
+     * @param newNum The new maximum buy amount in tokens.
+     */
+    function updateMaxBuyAmount(uint256 newNum) external onlyOwner {
+        require(newNum >= totalSupply() * 1 / 1000, "Max buy amount must be at least 0.1% of total supply");
+        maxBuyAmount = newNum;
+        emit UpdatedMaxBuyAmount(newNum);
+    }
+    
+    /**
+     * @notice Updates the maximum sell amount.
+     * @dev Can only be called by the owner and must be at least 0.1% of the total supply.
+     * @param newNum The new maximum sell amount in tokens.
+     */
+    function updateMaxSellAmount(uint256 newNum) external onlyOwner {
+        require(newNum >= totalSupply() * 1 / 1000, "Max sell amount must be at least 0.1% of total supply");
+        maxSellAmount = newNum;
+        emit UpdatedMaxSellAmount(newNum);
+    }
+
+    /**
+     * @notice Updates the maximum wallet amount.
+     * @dev Can only be called by the owner and must be at least 0.3% of the total supply.
+     * @param newNum The new maximum wallet amount in tokens.
+     */
+    function updateMaxWalletAmount(uint256 newNum) external onlyOwner {
+        require(newNum >= totalSupply() * 3 / 1000, "Max wallet amount must be at least 0.3% of total supply");
+        maxWalletAmount = newNum;
+        emit UpdatedMaxWalletAmount(newNum);
+    }
+
+    /**
+     * @notice Updates the minimum amount of tokens to sell from fees.
+     * @dev Can only be called by the owner and must be between 0.001% and 0.1% of the total supply.
+     * @param newAmount The new swap tokens at amount.
+     */
+    function updateSwapTokensAtAmount(uint256 newAmount) external onlyOwner {
+        require(newAmount >= totalSupply() * 1 / 100000 && newAmount <= totalSupply() * 1 / 1000, "Swap amount must be between 0.001% and 0.1% of total supply");
+        swapTokensAtAmount = newAmount;
+    }
+    
+    /**
+     * @notice Excludes or includes an address from the maximum transaction amount.
+     * @dev Can only be called internally.
+     * @param updAds The address to exclude or include.
+     * @param isExcluded Whether to exclude or include the address.
+     */
+    function _excludeFromMaxTransaction(address updAds, bool isExcluded) private {
+        _isExcludedMaxTransactionAmount[updAds] = isExcluded;
+        emit MaxTransactionExclusion(updAds, isExcluded);
+    }
+
+    /**
+     * @notice Airdrops tokens to multiple wallets.
+     * @dev Can only be called by the owner and is limited to 200 wallets per transaction.
+     * @param wallets The array of wallet addresses to airdrop to.
+     * @param amountsInTokens The array of token amounts to airdrop.
+     */
+    function airdropToWallets(address[] memory wallets, uint256[] memory amountsInTokens) external onlyOwner {
+        require(wallets.length == amountsInTokens.length, "Wallets and amounts arrays must be the same length");
+        require(wallets.length <= 200, "Cannot airdrop to more than 200 wallets at once");
+
+        for (uint256 i = 0; i < wallets.length; i++) {
+            _transfer(owner(), wallets[i], amountsInTokens[i]);
+        }
+    }
+    
+    /**
+     * @notice Excludes or includes an address from the maximum transaction amount.
+     * @dev Can only be called by the owner and cannot exclude the Uniswap pair.
+     * @param updAds The address to exclude or include.
+     * @param isEx Whether to exclude or include the address.
+     */
+    function excludeFromMaxTransaction(address updAds, bool isEx) external onlyOwner {
+        require(updAds != uniswapV2Pair, "Cannot exclude uniswapV2Pair from max transaction");
+        _excludeFromMaxTransaction(updAds, isEx);
+    }
+
+    /**
+     * @notice Sets an address as an automated market maker pair.
+     * @dev Can only be called by the owner and cannot remove the Uniswap pair.
+     * @param pair The address of the pair.
+     * @param value Whether to set or unset the pair.
+     */
+    function setAutomatedMarketMakerPair(address pair, bool value) external onlyOwner {
+        require(pair != uniswapV2Pair, "Cannot remove uniswapV2Pair from automatedMarketMakerPairs");
+        _setAutomatedMarketMakerPair(pair, value);
+    }
+
+    /**
+     * @notice Sets an address as an automated market maker pair.
+     * @dev Can only be called internally.
+     * @param pair The address of the pair.
+     * @param value Whether to set or unset the pair.
+     */
+    function _setAutomatedMarketMakerPair(address pair, bool value) private {
+        automatedMarketMakerPairs[pair] = value;
+        emit SetAutomatedMarketMakerPair(pair, value);
+    }
+
+    /**
+     * @notice Updates the buy fees.
+     * @dev Can only be called by the owner and must keep the total fees at 15% or less.
+     * @param _operationsFee The new operations fee.
+     * @param _liquidityFee The new liquidity fee.
+     * @param _yashaFee The new Yasha fee.
+     */
+    function updateBuyFees(uint256 _operationsFee, uint256 _liquidityFee, uint256 _yashaFee) external onlyOwner {
+        require(_operationsFee + _liquidityFee + _yashaFee <= 15, "Total buy fees must be 15% or less");
+        buyOperationsFee = _operationsFee;
+        buyLiquidityFee = _liquidityFee;
+        buyYashaFee = _yashaFee;
+        buyTotalFees = _operationsFee + _liquidityFee + _yashaFee;
+    }
+
+    /**
+     * @notice Updates the sell fees.
+     * @dev Can only be called by the owner and must keep the total fees at 20% or less.
+     * @param _operationsFee The new operations fee.
+     * @param _liquidityFee The new liquidity fee.
+     * @param _yashaFee The new Yasha fee.
+     */
+    function updateSellFees(uint256 _operationsFee, uint256 _liquidityFee, uint256 _yashaFee) external onlyOwner {
+        require(_operationsFee + _liquidityFee + _yashaFee <= 20, "Total sell fees must be 20% or less");
+        sellOperationsFee = _operationsFee;
+        sellLiquidityFee = _liquidityFee;
+        sellYashaFee = _yashaFee;
+        sellTotalFees = _operationsFee + _liquidityFee + _yashaFee;
+    }
+
+    /**
+     * @notice Excludes or includes an address from fees.
+     * @dev Can only be called by the owner.
+     * @param account The address to exclude or include.
+     * @param excluded Whether to exclude or include the address.
+     */
+    function excludeFromFees(address account, bool excluded) public onlyOwner {
+        _isExcludedFromFees[account] = excluded;
+        emit ExcludeFromFees(account, excluded);
+    }
+
+    /**
+     * @dev Internal function to handle token transfers with various restrictions and fees.
+     * 
+     * @param from Source address (must not be zero address)
+     * @param to Destination address (must not be zero address)
+     * @param amount Amount to transfer (must be greater than 0)
+     * 
+     * @notice
+     * - Enforces zero address checks
+     * - Validates positive transfer amounts
+     * - Implements trading restrictions when limits are active:
+     *   - Requires trading to be active or accounts to be excluded
+     *   - Enforces transfer delay for new accounts (if enabled)
+     *   - Limits buy/sell amounts and wallet capacity
+     * - Handles token swaps when conditions are met
+     * - Applies fees for buys/sells (with bot penalty for early trades)
+     * - Excludes certain accounts from fees
+     * 
+     * @dev
+     * - Overrides parent transfer function
+     * - Manages contract token balance for swap logic
+     * - Tracks fees and penalties separately
+     * - Uses super._transfer for actual token transfer
+     * - Updates liquidity and operations pools with collected fees
+     */
+    function _transfer(address from, address to, uint256 amount) internal override {
+        require(from != address(0), "ERC20: transfer from the zero address");
+        require(to != address(0), "ERC20: transfer to the zero address");
+        require(amount > 0, "Transfer amount must be greater than zero");
+
+        if (limitsInEffect) {
+            if (!tradingActive && !_isExcludedFromFees[from] && !_isExcludedFromFees[to]) {
+                require(false, "Trading is not active");
+            }
+
+            // Transfer delay
+            if (transferDelayEnabled && !automatedMarketMakerPairs[from] && _holderLastTransferTimestamp[from] > 0) {
+                require(_holderLastTransferTimestamp[from] + 15 seconds < block.timestamp, "Must wait before transferring again");
+            }
+
+            if (from != owner() && to != owner() && to != address(0) && to != address(0xdead)) {
+                // Buy limit
+                if (automatedMarketMakerPairs[from] && !_isExcludedMaxTransactionAmount[to]) {
+                    require(amount <= maxBuyAmount, "Buy transfer amount exceeds the maxBuyAmount.");
+                }
+                // Sell limit
+                else if (automatedMarketMakerPairs[to] && !_isExcludedMaxTransactionAmount[from]) {
+                    require(amount <= maxSellAmount, "Sell transfer amount exceeds the maxSellAmount.");
+                }
+                // Wallet limit
+                if (!_isExcludedMaxTransactionAmount[to]) {
+                    require(balanceOf(to) + amount <= maxWalletAmount, "Receiver wallet exceeds maxWalletAmount.");
+                }
+            }
+        }
+
+        uint256 contractTokenBalance = balanceOf(address(this));
+
+        bool canSwap = contractTokenBalance >= swapTokensAtAmount && swapEnabled && !swapping;
+
+        if (canSwap) {
+            swapBack();
+        }
+
+        bool takeFee = !swapping;
+
+        if (_isExcludedFromFees[from] || _isExcludedFromFees[to]) {
+            takeFee = false;
+        }
+
+        uint256 fees = 0;
+
+        // Buy fees
+        if (takeFee && automatedMarketMakerPairs[from]) {
+            fees = amount * buyTotalFees / 100;
+            tokensForLiquidity += amount * buyLiquidityFee / 100;
+            tokensForOperations += amount * buyOperationsFee / 100;
+            tokensForYasha += amount * buyYashaFee / 100;
+        }
+        // Sell fees
+        else if (takeFee && automatedMarketMakerPairs[to]) {
+            fees = amount * sellTotalFees / 100;
+            tokensForLiquidity += amount * sellLiquidityFee / 100;
+            tokensForOperations += amount * sellOperationsFee / 100;
+            tokensForYasha += amount * sellYashaFee / 100;
+        }
+
+        if (fees > 0) {
+            super._transfer(from, address(this), fees);
+        }
+
+        super._transfer(from, to, amount - fees);
+
+        if (transferDelayEnabled) {
+            _holderLastTransferTimestamp[from] = block.timestamp;
+        }
+    }
+
+    /**
+     * @notice Swaps tokens for ETH.
+     * @dev Can only be called internally.
+     * @param tokenAmount The amount of tokens to swap.
+     */
+    function swapTokensForEth(uint256 tokenAmount) private {
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = uniswapV2Router.WETH();
+
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+
+        try uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0, // accept any amount of ETH
+            path,
+            address(this),
+            block.timestamp
+        ){} catch {}
+    }
+    
+    /**
+     * @notice Adds liquidity to the Uniswap V2 pair.
+     * @dev Can only be called internally.
+     * @param tokenAmount The amount of tokens to add to liquidity.
+     * @param ethAmount The amount of ETH to add to liquidity.
+     */
+    function addLiquidity(uint256 tokenAmount, uint256 ethAmount) private {
+        _approve(address(this), address(uniswapV2Router), tokenAmount);
+
+        try uniswapV2Router.addLiquidityETH{value: ethAmount}(
+            address(this),
+            tokenAmount,
+            0, // accept any amount of tokens
+            0, // accept any amount of ETH
+            address(0xdead),
+            block.timestamp
+        ){} catch {}
+    }
+
+    /**
+     * @dev Swaps contract-held tokens for ETH and distributes them to liquidity, operations, and Yasha wallets.
+     * Process:
+     * 1. Checks if there are tokens to swap and recipients to receive funds
+     * 2. Limits swap amount to 10x the configured threshold (swapTokensAtAmount)
+     * 3. Calculates token distribution proportions:
+     *    - 50% of liquidity tokens go to liquidity pool (other 50% already accounted for)
+     *    - Remaining tokens distributed to operations and Yasha based on fee ratios
+     * 4. Swaps non-liquidity tokens for ETH
+     * 5. Calculates ETH distribution:
+     *    - Operations and Yasha receive proportional shares
+     *    - Remaining ETH goes to liquidity pool
+     * 6. Executes liquidity addition and ETH transfers
+     * @dev
+     * - Uses internal call to prevent reentrancy
+     * - Resets fee tracking variables after distribution
+     * - Handles partial transfers safely
+     * - Uses call() for direct ETH transfers
+     */
+    function swapBack() private {
+        if (tokensForLiquidity == 0 && tokensForOperations == 0 && tokensForYasha == 0) {
+            return;
+        }
+
+        swapping = true;
+
+        uint256 totalTokenToSwap = tokensForLiquidity + tokensForOperations + tokensForYasha;
+
+        if(totalTokenToSwap > swapTokensAtAmount * 10){
+            totalTokenToSwap = swapTokensAtAmount * 10;
+        }
+
+        uint256 halfLiquidity = tokensForLiquidity / 2;
+        uint256 otherHalfLiquidity = tokensForLiquidity - halfLiquidity;
+        uint256 amountToSwapForEth = totalTokenToSwap - otherHalfLiquidity;
+
+        swapTokensForEth(amountToSwapForEth);
+
+        uint256 ethBalance = address(this).balance;
+
+        uint256 ethForLiquidity = ethBalance * tokensForLiquidity / amountToSwapForEth;
+        uint256 ethForOperations = ethBalance * tokensForOperations / amountToSwapForEth;
+        uint256 ethForYasha = ethBalance * tokensForYasha / amountToSwapForEth;
+
+        addLiquidity(otherHalfLiquidity, ethForLiquidity);
+
+        (bool success,) = address(operationsAddress).call{value: ethForOperations}("");
+        success = false; // suppress warning
+        (success,) = address(yashaAddress).call{value: ethForYasha}("");
+        success = false; // suppress warning
+
+        tokensForLiquidity = 0;
+        tokensForOperations = 0;
+        tokensForYasha = 0;
+
+        swapping = false;
+    }
+
+    /**
+     * @notice Transfers a foreign token to a specified address.
+     * @dev Can only be called by the owner and cannot withdraw the native token.
+     * @param _token The address of the foreign token.
+     * @param _to The address to transfer the tokens to.
+     * @return _sent Whether the transfer was successful.
+     */
+    function transferForeignToken(address _token, address _to) external onlyOwner returns (bool _sent) {
+        require(_token != address(this), "Cannot withdraw native token");
+        IERC20 token = IERC20(_token);
+        uint256 amount = token.balanceOf(address(this));
+        _sent = token.transfer(_to, amount);
+        emit TransferForeignToken(_token, amount);
+    }
+
+    /**
+     * @notice Withdraws stuck ETH from the contract.
+     * @dev Can only be called by the owner.
+     */
+    function withdrawStuckETH() external onlyOwner {
+        (bool success,) = owner().call{value: address(this).balance}("");
+        require(success, "ETH transfer failed");
+    }
+
+    /**
+     * @notice Sets the operations address.
+     * @dev Can only be called by the owner and cannot be set to the zero address.
+     * @param _operationsAddress The new operations address.
+     */
+    function setOperationsAddress(address _operationsAddress) external onlyOwner {
+        require(_operationsAddress != address(0), "Operations address cannot be zero address");
+        operationsAddress = _operationsAddress;
+        emit UpdatedOperationsAddress(_operationsAddress);
+    }
+
+    /**
+     * @notice Sets the Yasha address.
+     * @dev Can only be called by the owner and cannot be set to the zero address.
+     * @param _yashaAddress The new Yasha address.
+     */
+    function setYashaAddress(address _yashaAddress) external onlyOwner {
+        require(_yashaAddress != address(0), "Yasha address cannot be zero address");
+        yashaAddress = _yashaAddress;
+        emit UpdatedYashaAddress(_yashaAddress);
+    }
+}
+```

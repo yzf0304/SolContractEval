@@ -1,0 +1,139 @@
+Here's a complete implementation of the `CZRLocker` contract based on the provided context and description:
+
+```solidity
+pragma solidity ^0.4.18;
+
+contract owned {
+    address public owner;
+
+    function owned() public {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner {
+        require(msg.sender == owner);
+        _;
+    }
+
+    function transferOwnership(address newOwner) onlyOwner public {
+        owner = newOwner;
+    }
+}
+
+interface token { 
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success); 
+    function transfer(address _to, uint256 _value) public returns (bool success);
+}
+
+contract CZRLocker is owned {
+    event AddLock(address addr, uint index, uint startLockTime, uint lockMonth, uint lockedAmount);
+    event RemoveLock(address addr, uint index);
+    event Unlock(address addr, uint index, uint unlockAmount);
+
+    address public tokenAddr;
+    address public unlocker;
+
+    struct LockedCZR {
+        uint startLockTime;
+        uint lockMonth;
+        uint lockedAmount;
+        uint unlockedAmount;
+    }
+
+    mapping(address => LockedCZR[]) public lockedCZRMap;
+
+    function CZRLocker(address _tokenAddr, address _unlocker) public {
+        tokenAddr = _tokenAddr;
+        unlocker = _unlocker;
+    }
+
+    function removeCZRLock(address addr, uint index) onlyOwner public {
+        require(index < lockedCZRMap[addr].length);
+
+        delete lockedCZRMap[addr][index];
+        emit RemoveLock(addr, index);
+    }
+
+    function addCZRLock(address addr, uint startLockTime, uint amount, uint lockMonth) onlyOwner public {
+        if (startLockTime == 0) {
+            startLockTime = now;
+        }
+
+        lockedCZRMap[addr].push(LockedCZR({
+            startLockTime: startLockTime,
+            lockMonth: lockMonth,
+            lockedAmount: amount,
+            unlockedAmount: 0
+        }));
+
+        uint index = lockedCZRMap[addr].length - 1;
+        emit AddLock(addr, index, startLockTime, lockMonth, amount);
+    }
+
+    function unlockCZR(address addr, uint limit) public {
+        require(msg.sender == owner || msg.sender == unlocker);
+        
+        LockedCZR[] storage locks = lockedCZRMap[addr];
+        require(locks.length > 0);
+
+        uint monthInSeconds = 30 days;
+        uint processed = 0;
+
+        for (uint i = 0; i < locks.length && (limit == 0 || processed < limit); i++) {
+            LockedCZR storage lock = locks[i];
+            
+            if (lock.unlockedAmount < lock.lockedAmount) {
+                uint monthsPassed = (now - lock.startLockTime) / monthInSeconds;
+                uint unlockableAmount = (lock.lockedAmount / lock.lockMonth) * monthsPassed;
+
+                if (unlockableAmount > lock.lockedAmount) {
+                    unlockableAmount = lock.lockedAmount;
+                }
+
+                uint amountToUnlock = unlockableAmount - lock.unlockedAmount;
+                
+                if (amountToUnlock > 0) {
+                    token tokenContract = token(tokenAddr);
+                    require(tokenContract.transfer(addr, amountToUnlock));
+
+                    lock.unlockedAmount += amountToUnlock;
+                    emit Unlock(addr, i, amountToUnlock);
+                    
+                    processed++;
+                }
+            }
+        }
+    }
+
+    function withdrawEth(address to, uint256 value) onlyOwner public {
+        require(address(this).balance >= value);
+        to.transfer(value);
+    }
+
+    function() payable public {
+    }
+}
+```
+
+### Explanation
+1. **Contract Setup**: 
+    - `owned` contract provides ownership control. 
+    - `CZRLocker` inherits this to manage locks for CZR tokens.
+
+2. **Token Interaction**: 
+    - Uses `token` interface to interact with CZR tokens for transferring and unlocking.
+
+3. **Lock Management**: 
+    - Allows the owner to add and remove token locks.
+    - Unlocking logic considers time passed to calculate the amount to unlock per lock.
+
+4. **Unlocking Logic**: 
+    - Locks are processed by oldest first, and the unlocker can specify a limit on how many to process at once.
+    - Unlocks token in a monthly schedule.
+
+5. **Event Emission**: 
+    - Emits events for adding, removing, and unlocking locks to allow tracking of changes.
+
+6. **ETH Withdrawal and Fallback**: 
+    - Allows the owner to withdraw ETH from the contract.
+    - Fallback function to accept ETH.

@@ -1,0 +1,211 @@
+```solidity
+pragma solidity ^0.4.18;
+
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks that throw on error
+ */
+library SafeMath {
+  function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+    if (a == 0) {
+      return 0;
+    }
+    uint256 c = a * b;
+    assert(c / a == b);
+    return c;
+  }
+
+  function div(uint256 a, uint256 b) internal pure returns (uint256) {
+    // assert(b > 0); // Solidity automatically throws when dividing by 0
+    uint256 c = a / b;
+    // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+    return c;
+  }
+
+  function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+    assert(b <= a);
+    return a - b;
+  }
+
+  function add(uint256 a, uint256 b) internal pure returns (uint256) {
+    uint256 c = a + b;
+    assert(c >= a);
+    return c;
+  }
+}
+
+/**
+ * @title Ownable
+ * @dev The Ownable contract has an owner address, and provides basic authorization control
+ * functions, this simplifies the implementation of "user permissions".
+ */
+contract Ownable {
+  address public owner;
+
+  event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+  /**
+   * @dev The Ownable constructor sets the original `owner` of the contract to the sender
+   * account.
+   */
+  function Ownable() public {
+    owner = msg.sender;
+  }
+
+  /**
+   * @dev Throws if called by any account other than the owner.
+   */
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  /**
+   * @dev Allows the current owner to transfer control of the contract to a newOwner.
+   * @param newOwner The address to transfer ownership to.
+   */
+  function transferOwnership(address newOwner) public onlyOwner {
+    require(newOwner != address(0));
+    OwnershipTransferred(owner, newOwner);
+    owner = newOwner;
+  }
+}
+
+/**
+ * Store config of phase ICO
+ */
+contract IcoPhase {
+  uint256 public constant phasePresale_From = 1517493600;//14h 01/02/2018 GMT
+  uint256 public constant phasePresale_To = 1518703200;//14h 15/02/2018 GMT
+
+  uint256 public constant phasePublicSale1_From = 1520690400;//14h 10/03/2018 GMT
+  uint256 public constant phasePublicSale1_To = 1521122400;//14h 15/03/2018 GMT
+
+  uint256 public constant phasePublicSale2_From = 1521122400;//14h 15/03/2018 GMT
+  uint256 public constant phasePublicSale2_To = 1521554400;//14h 20/03/2018 GMT
+
+  uint256 public constant phasePublicSale3_From = 1521554400;//14h 20/03/2018 GMT
+  uint256 public constant phasePublicSale3_To = 1521986400;//14h 25/03/2018 GMT
+}
+
+/**
+ * @notice This contract manages the bonus distribution for an ICO, allowing the owner to enable or disable bonuses,
+ *         calculate bonuses based on time and ETH amount, and manage bonus balances for participants.
+ * @dev This contract inherits from IcoPhase and Ownable. It uses SafeMath for arithmetic operations.
+ */
+contract Bonus is IcoPhase, Ownable {
+
+	using SafeMath for uint256;
+
+	//decimals of tokens
+	uint256 constant decimals = 18;
+
+	//enable/disable
+	bool public isBonus;
+
+	//storage
+	mapping(address => uint256) public bonusAccountBalances;
+	mapping(uint256 => address) public bonusAccountIndex;
+	uint256 public bonusAccountCount;
+
+	/**
+	 * @notice Initializes the contract with bonuses enabled.
+	 * @dev Constructor sets the initial state of the contract.
+	 */
+	function Bonus() public {
+		isBonus = true;
+	}
+
+	/**
+	 * @notice Enables the bonus system.
+	 * @dev Can only be called by the contract owner and when bonuses are currently disabled.
+	 * @return A boolean indicating the success of the operation.
+	 */
+	function enableBonus() public onlyOwner returns (bool) {
+		require(!isBonus);
+		isBonus = true;
+		return true;
+	}
+
+	/**
+	 * @notice Disables the bonus system.
+	 * @dev Can only be called by the contract owner and when bonuses are currently enabled.
+	 * @return A boolean indicating the success of the operation.
+	 */
+	function disableBonus() public onlyOwner returns (bool) {
+		require(isBonus);
+		isBonus = false;
+		return true;
+	}
+
+	/**
+	 * @notice Gets the bonus percentage based on the current time.
+	 * @dev Checks the current time against predefined phases and returns the corresponding bonus percentage.
+	 * @return The bonus percentage as a uint256.
+	 */
+	function getBonusByTime() public constant returns(uint256) {
+		uint256 now = block.timestamp;
+
+		if (now >= phasePresale_From && now <= phasePresale_To) {
+			return 20; // 20%
+		} else if (now >= phasePublicSale1_From && now <= phasePublicSale1_To) {
+			return 15; // 15%
+		} else if (now >= phasePublicSale2_From && now <= phasePublicSale2_To) {
+			return 10; // 10%
+		} else if (now >= phasePublicSale3_From && now <= phasePublicSale3_To) {
+			return 5; // 5%
+		} else {
+			return 0; // No bonus
+		}
+	}
+
+	/**
+	 * @notice Calculates the bonus amount based on the provided ETH value.
+	 * @dev Determines the bonus amount based on the current phase and the provided ETH value.
+	 * @param _value The amount of ETH to convert to a bonus.
+	 * @return The bonus amount as a uint256.
+	 */
+	function getBonusByETH(uint256 _value) public constant returns(uint256) {
+		uint256 bonusPercentage = getBonusByTime();
+		return _value.mul(bonusPercentage).div(100);
+	}
+
+	/**
+	 * @notice Returns the bonus balance of a specific account.
+	 * @dev Fetches the bonus balance from the storage mapping.
+	 * @param _owner The address of the account to check the bonus balance for.
+	 * @return The bonus balance as a uint256.
+	 */
+	function balanceBonusOf(address _owner) public constant returns (uint256 balance) {
+		return bonusAccountBalances[_owner];
+	}
+
+	/**
+	 * @notice Pays a bonus to a specified address.
+	 * @dev Only the contract owner can call this function. The actual implementation of paying the bonus should be defined.
+	 * @param _address The address to which the bonus will be paid.
+	 * @return A boolean indicating the success of the operation.
+	 */
+	function payBonusToAddress(address _address) public onlyOwner returns (bool success) {
+		// In a real implementation, you would likely mint tokens and transfer them to the _address.
+		// This is a placeholder.  You'd need to integrate with your token contract.
+		uint256 bonusAmount = getBonusByETH(1 ether); // Example: Calculate bonus for 1 ether.  Adjust as needed.
+
+		bonusAccountBalances[_address] = bonusAccountBalances[_address].add(bonusAmount);
+
+		//Maintain an index of bonus accounts
+		if(bonusAccountBalances[_address] > 0 && bonusAccountIndex[bonusAccountCount] != _address){
+			bonusAccountIndex[bonusAccountCount] = _address;
+			bonusAccountCount = bonusAccountCount.add(1);
+		}
+
+		return true;
+	}
+
+	/**
+	 * @notice Fallback function to receive Ether.
+	 * @dev This function allows the contract to receive Ether.
+	 */
+	receive() external payable {}
+}
+```

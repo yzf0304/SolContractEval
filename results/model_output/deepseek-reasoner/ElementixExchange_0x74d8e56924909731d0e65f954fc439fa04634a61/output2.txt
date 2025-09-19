@@ -1,0 +1,73 @@
+Here is the completed code for the ProxyRegistry contract:
+
+```solidity
+contract ProxyRegistry is Ownable {
+
+    address public delegateProxyImplementation;
+
+    mapping(address => OwnableDelegateProxy) public proxies;
+    mapping(address => uint256) public pending;
+    mapping(address => bool) public contracts;
+
+    uint256 public DELAY_PERIOD = 7 days;
+
+    event RegisterProxy(address indexed sender, address proxyAddr);
+    event AuthenticationOperation(address indexed addr, bool opt);
+
+    function startGrantAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        pending[addr] = block.timestamp;
+    }
+
+    function endGrantAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        require(pending[addr] != 0, "ProxyRegistry: No pending access");
+        require(block.timestamp >= pending[addr] + DELAY_PERIOD, "ProxyRegistry: Delay period not passed");
+        contracts[addr] = true;
+        delete pending[addr];
+        emit AuthenticationOperation(addr, true);
+    }
+
+    function revokeAuthentication(address addr)
+        public
+        onlyOwner
+    {
+        contracts[addr] = false;
+        delete pending[addr];
+        emit AuthenticationOperation(addr, false);
+    }
+
+    function registerProxy()
+        public
+        returns (OwnableDelegateProxy proxy)
+    {
+        proxy = proxies[msg.sender];
+        if (address(proxy) == address(0)) {
+            require(delegateProxyImplementation != address(0), "ProxyRegistry: Implementation not set");
+            proxy = new OwnableDelegateProxy(msg.sender, delegateProxyImplementation, "");
+            proxies[msg.sender] = proxy;
+            emit RegisterProxy(msg.sender, address(proxy));
+        }
+        return proxy;
+    }
+}
+```
+
+**Explanation:**
+
+1. **Access Control Functions:**
+   - `startGrantAuthentication`: Sets the start timestamp for granting access to a contract address after the delay period.
+   - `endGrantAuthentication`: Completes the access grant after verifying the delay period has elapsed.
+   - `revokeAuthentication`: Immediately revokes access from a contract address and clears any pending grant.
+
+2. **Proxy Management:**
+   - `registerProxy`: Allows users to create their own proxy contract instance if none exists, using the predefined implementation. Reverts if the implementation isn't set.
+
+3. **Security Measures:**
+   - Uses a 7-day delay period to prevent rapid privilege escalation attacks.
+   - Maintains clear mappings for pending grants and authorized contracts.
+   - Inherits OpenZeppelin's Ownable for straightforward ownership management.

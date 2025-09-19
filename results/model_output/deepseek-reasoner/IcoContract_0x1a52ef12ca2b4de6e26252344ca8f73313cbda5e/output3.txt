@@ -1,0 +1,166 @@
+To solve this problem, we need to create a smart contract that manages the bonus distribution for an ICO based on predefined phases and the amount of ETH contributed. The contract should allow the owner to enable or disable the bonus system, calculate bonuses based on the current phase and ETH amount, and manage bonus balances for participants.
+
+### Approach
+1. **Enable/Disable Bonuses**: The contract owner can enable or disable the bonus system using specific functions.
+2. **Time-Based Bonuses**: Bonuses are determined based on the current phase of the ICO. Each phase has a predefined start and end time with a specific bonus percentage.
+3. **ETH-Based Bonuses**: Additional bonuses are calculated based on the amount of ETH contributed, with higher contributions yielding higher bonuses.
+4. **Bonus Balance Management**: The contract tracks the bonus balance for each participant and allows the owner to distribute these bonuses.
+
+### Solution Code
+```solidity
+pragma solidity ^0.4.18;
+
+/**
+ * @title SafeMath
+ * @dev Math operations with safety checks that throw on error
+ */
+library SafeMath {
+  function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+    if (a == 0) {
+      return 0;
+    }
+    uint256 c = a * b;
+    assert(c / a == b);
+    return c;
+  }
+
+  function div(uint256 a, uint256 b) internal pure returns (uint256) {
+    // assert(b > 0); // Solidity automatically throws when dividing by 0
+    uint256 c = a / b;
+    // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+    return c;
+  }
+
+  function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+    assert(b <= a);
+    return a - b;
+  }
+
+  function add(uint256 a, uint256 b) internal pure returns (uint256) {
+    uint256 c = a + b;
+    assert(c >= a);
+    return c;
+  }
+}
+
+/**
+ * @title Ownable
+ * @dev The Ownable contract has an owner address, and provides basic authorization control
+ * functions, this simplifies the implementation of "user permissions".
+ */
+contract Ownable {
+  address public owner;
+
+  event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+  function Ownable() public {
+    owner = msg.sender;
+  }
+
+  modifier onlyOwner() {
+    require(msg.sender == owner);
+    _;
+  }
+
+  function transferOwnership(address newOwner) public onlyOwner {
+    require(newOwner != address(0));
+    OwnershipTransferred(owner, newOwner);
+    owner = newOwner;
+  }
+}
+
+/**
+ * Store config of phase ICO
+ */
+contract IcoPhase {
+  uint256 public constant phasePresale_From = 1517493600; //14h 01/02/2018 GMT
+  uint256 public constant phasePresale_To = 1518703200; //14h 15/02/2018 GMT
+
+  uint256 public constant phasePublicSale1_From = 1520690400; //14h 10/03/2018 GMT
+  uint256 public constant phasePublicSale1_To = 1521122400; //14h 15/03/2018 GMT
+
+  uint256 public constant phasePublicSale2_From = 1521122400; //14h 15/03/2018 GMT
+  uint256 public constant phasePublicSale2_To = 1521554400; //14h 20/03/2018 GMT
+
+  uint256 public constant phasePublicSale3_From = 1521554400; //14h 20/03/2018 GMT
+  uint256 public constant phasePublicSale3_To = 1521986400; //14h 25/03/2018 GMT
+}
+
+/**
+ * @title Bonus
+ * @dev This contract manages bonuses for an ICO, combining time-based and ETH amount-based bonuses.
+ */
+contract Bonus is IcoPhase, Ownable {
+    using SafeMath for uint256;
+
+    uint256 constant decimals = 18;
+    bool public isBonus;
+
+    mapping(address => uint256) public bonusAccountBalances;
+    mapping(uint256 => address) public bonusAccountIndex;
+    uint256 public bonusAccountCount;
+
+    function Bonus() public {
+        isBonus = true;
+    }
+
+    function enableBonus() public onlyOwner returns (bool) {
+        require(!isBonus);
+        isBonus = true;
+        return true;
+    }
+
+    function disableBonus() public onlyOwner returns (bool) {
+        require(isBonus);
+        isBonus = false;
+        return true;
+    }
+
+    function getBonusByTime() public view returns (uint256) {
+        if (block.timestamp >= phasePresale_From && block.timestamp <= phasePresale_To) {
+            return 50;
+        } else if (block.timestamp >= phasePublicSale1_From && block.timestamp <= phasePublicSale1_To) {
+            return 30;
+        } else if (block.timestamp >= phasePublicSale2_From && block.timestamp <= phasePublicSale2_To) {
+            return 20;
+        } else if (block.timestamp >= phasePublicSale3_From && block.timestamp <= phasePublicSale3_To) {
+            return 10;
+        } else {
+            return 0;
+        }
+    }
+
+    function getBonusByETH(uint256 _value) public view returns (uint256) {
+        uint256 ethInEther = _value.div(1 ether);
+        uint256 ethBonus = ethInEther.mul(1); // 1% per 1 ETH
+        if (ethBonus > 10) {
+            ethBonus = 10;
+        }
+        return ethBonus;
+    }
+
+    function balanceBonusOf(address _owner) public view returns (uint256 balance) {
+        return bonusAccountBalances[_owner];
+    }
+
+    function payBonusToAddress(address _address) public onlyOwner returns (bool success) {
+        uint256 bonus = bonusAccountBalances[_address];
+        require(bonus > 0);
+        bonusAccountBalances[_address] = 0;
+        return true;
+    }
+
+    // Fallback function to accept ETH
+    function() public payable {
+        // Optionally handle incoming ETH here, but logic not specified
+    }
+}
+```
+
+### Explanation
+1. **Enable/Disable Bonuses**: The `enableBonus` and `disableBonus` functions allow the owner to toggle the bonus system on and off.
+2. **Time-Based Bonuses**: The `getBonusByTime` function checks the current block timestamp against predefined phases and returns the corresponding bonus percentage.
+3. **ETH-Based Bonuses**: The `getBonusByETH` function calculates an additional bonus based on the amount of ETH contributed, offering 1% per 1 ETH, capped at 10%.
+4. **Bonus Management**: The `balanceBonusOf` function retrieves the bonus balance for an address, and `payBonusToAddress` allows the owner to reset the bonus balance for a specific address, simulating the distribution of bonuses.
+
+This approach ensures that bonuses are dynamically calculated based on both time and contribution amount, providing flexibility and transparency in the ICO bonus distribution process.

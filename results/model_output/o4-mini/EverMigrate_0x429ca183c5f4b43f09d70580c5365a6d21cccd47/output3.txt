@@ -1,0 +1,134 @@
+pragma solidity 0.8.8;
+
+contract EverMigrate is IEverMigrate, Context, Ownable {
+    using SafeMath for uint256;
+
+    struct TokenDetails {
+        address sourceToken;
+        address targetToken;
+        address devAddress;
+        uint256 ratio;
+        bool isPresent;
+    }
+
+    struct Transaction {
+        uint256 amount;
+        uint256 timestamp;
+        uint32 txnId;
+    }
+
+    // sourceToken => details
+    mapping(address => TokenDetails) private _tokenList;
+    // list of all supported source tokens
+    address[] private _allTokens;
+
+    // global transaction id counter
+    uint32 private _txnId = 0;
+    // sourceToken => user => list of transactions
+    mapping(address => mapping(address => Transaction[])) private _userTxns;
+
+    constructor() {
+        // nothing to initialize beyond Ownable
+    }
+
+    function addTokenDetails(
+        address sourceToken,
+        address targetToken,
+        address devAddress,
+        uint256 ratio
+    ) external onlyOwner {
+        require(sourceToken != address(0), "EverMigrate: zero source token");
+        require(targetToken != address(0), "EverMigrate: zero target token");
+        require(devAddress != address(0), "EverMigrate: zero dev address");
+        require(ratio > 0, "EverMigrate: ratio must be > 0");
+        require(!_tokenList[sourceToken].isPresent, "EverMigrate: token already added");
+
+        _tokenList[sourceToken] = TokenDetails({
+            sourceToken: sourceToken,
+            targetToken: targetToken,
+            devAddress: devAddress,
+            ratio: ratio,
+            isPresent: true
+        });
+        _allTokens.push(sourceToken);
+
+        emit TokenAdded(sourceToken, targetToken, ratio);
+    }
+
+    function migrateTokens(address sourceToken, address toAddress, uint256 amount) external override {
+        require(supportsToken(sourceToken), "EverMigrate: unsupported token");
+        require(amount > 0, "EverMigrate: amount must be > 0");
+        require(toAddress != address(0), "EverMigrate: zero recipient");
+
+        TokenDetails storage td = _tokenList[sourceToken];
+
+        // transfer source tokens from user to devAddress
+        bool sentIn = IERC20(sourceToken).transferFrom(_msgSender(), td.devAddress, amount);
+        require(sentIn, "EverMigrate: source token transfer failed");
+
+        // calculate output amount
+        uint256 amountOut = amount.mul(td.ratio);
+
+        // transfer target tokens from this contract to recipient
+        bool sentOut = IERC20(td.targetToken).transfer(toAddress, amountOut);
+        require(sentOut, "EverMigrate: target token transfer failed");
+
+        // record transaction
+        _txnId += 1;
+        Transaction memory txDetail = Transaction({
+            amount: amount,
+            timestamp: block.timestamp,
+            txnId: _txnId
+        });
+        _userTxns[sourceToken][_msgSender()].push(txDetail);
+
+        emit TokensMigrated(sourceToken, td.targetToken, amount, amountOut);
+    }
+
+    function userTransactionsLength(address sourceToken, address userAddress) external view returns (uint256) {
+        return _userTxns[sourceToken][userAddress].length;
+    }
+
+    function userTransaction(address sourceToken, address userAddress, uint256 position) 
+        external view returns (uint256, uint256, uint32) 
+    {
+        Transaction storage txDetail = _userTxns[sourceToken][userAddress][position];
+        return (txDetail.amount, txDetail.timestamp, txDetail.txnId);
+    }
+
+    function returnTokens(address sourceToken, address toAddress, uint256 amount) 
+        external override onlyOwner 
+    {
+        require(supportsToken(sourceToken), "EverMigrate: unsupported token");
+        require(toAddress != address(0), "EverMigrate: zero recipient");
+        require(amount > 0, "EverMigrate: amount must be > 0");
+
+        TokenDetails storage td = _tokenList[sourceToken];
+
+        // return target tokens from this contract to specified address
+        bool sent = IERC20(td.targetToken).transfer(toAddress, amount);
+        require(sent, "EverMigrate: return transfer failed");
+
+        emit TokensReturned(sourceToken, toAddress, amount);
+    }
+
+    function tokenMigrateDetails(address sourceToken) 
+        external view override returns (address, uint256) 
+    {
+        require(supportsToken(sourceToken), "EverMigrate: unsupported token");
+        TokenDetails storage td = _tokenList[sourceToken];
+        return (td.targetToken, td.ratio);
+    }
+
+    function allSupportedTokens() external view override returns (address[] memory) {
+        return _allTokens;
+    }
+
+    function allSupportedTokensLength() external view override returns (uint256) {
+        return _allTokens.length;
+    }
+
+    function supportsToken(address sourceToken) public view override returns (bool) {
+        return _tokenList[sourceToken].isPresent;
+    }
+}

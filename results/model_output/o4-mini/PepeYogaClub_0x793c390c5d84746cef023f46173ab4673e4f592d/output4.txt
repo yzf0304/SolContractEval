@@ -1,0 +1,115 @@
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.15;
+
+contract PepeYogaClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string public baseURI  = "ipfs://QmTLWN9WPq5L9eS9EKcTn2rqUCzr9QK5sd8DYVkkL7yguL/";
+    string public contractURI = "ipfs://QmUvB8sKL4XFTxbMkL9FykiqLgrXeBV1mUkdzWMWhachvD";
+
+    uint256 public MAX_PER_WALLET = 11;
+    uint256 public constant MAX_SUPPLY = 2069;
+    uint256 public price = 0.0069 ether;
+
+    bool public paused = true;
+
+    constructor() ERC721A("PepeYogaClub", "PYC") {}
+
+    /**
+     * @notice Mint `_amount` tokens to the caller.
+     */
+    function mint(uint256 _amount) external payable {
+        require(!paused, "Minting is paused");
+        require(_amount > 0, "Must mint at least one");
+        require(totalSupply() + _amount <= MAX_SUPPLY, "Exceeds max supply");
+        require(_numberMinted(msg.sender) + _amount <= MAX_PER_WALLET, "Exceeds max per wallet");
+        require(msg.value >= price * _amount, "Insufficient ETH");
+
+        _safeMint(msg.sender, _amount);
+    }
+
+    /**
+     * @dev Start token IDs at 1 instead of 0.
+     */
+    function _startTokenId() internal pure override returns (uint256) {
+        return 1;
+    }
+
+    /**
+     * @notice Number of tokens minted by `_owner`.
+     */
+    function minted(address _owner) public view returns (uint256) {
+        return _numberMinted(_owner);
+    }
+
+    /**
+     * @notice Withdraw all ETH to owner.
+     */
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "Nothing to withdraw");
+        (bool success, ) = payable(owner()).call{value: balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    /**
+     * @notice Owner can mint to multiple addresses in bulk.
+     */
+    function teamMint(address[] memory _to, uint256[] memory _amount) external onlyOwner {
+        require(_to.length == _amount.length, "Array length mismatch");
+        uint256 total = 0;
+        for (uint256 i = 0; i < _amount.length; i++) {
+            total += _amount[i];
+        }
+        require(totalSupply() + total <= MAX_SUPPLY, "Exceeds max supply");
+        for (uint256 i = 0; i < _to.length; i++) {
+            _safeMint(_to[i], _amount[i]);
+        }
+    }
+
+    /**
+     * @notice Update max per-wallet.
+     */
+    function setMaxPerWallet(uint256 _max) external onlyOwner {
+        require(_max > 0, "Max per wallet must be > 0");
+        MAX_PER_WALLET = _max;
+    }
+
+    /**
+     * @notice Update mint price.
+     */
+    function setPrice(uint256 _price) external onlyOwner {
+        price = _price;
+    }
+
+    /**
+     * @notice Toggle pause state.
+     */
+    function toggleMint() external onlyOwner {
+        paused = !paused;
+    }
+
+    /**
+     * @notice Update the base URI for token metadata.
+     */
+    function setBaseURI(string memory baseURI_) external onlyOwner {
+        baseURI = baseURI_;
+    }
+
+    /**
+     * @notice Update the contract-level metadata URI.
+     */
+    function setContractURI(string memory _contractURI) external onlyOwner {
+        contractURI = _contractURI;
+    }
+
+    /**
+     * @notice Return the metadata URI for `_tokenId`.
+     */
+    function tokenURI(uint256 _tokenId) public view override returns (string memory) {
+        require(_exists(_tokenId), "ERC721Metadata: URI query for nonexistent token");
+        return string(abi.encodePacked(baseURI, _tokenId.toString()));
+    }
+}
+```

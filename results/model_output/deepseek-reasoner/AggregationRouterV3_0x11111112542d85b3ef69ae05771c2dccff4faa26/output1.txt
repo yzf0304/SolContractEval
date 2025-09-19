@@ -1,0 +1,174 @@
+To solve this problem, we need to create a smart contract that facilitates token swaps and aggregations while allowing users to burn CHI tokens for gas discounts. The contract should handle both ETH and ERC20 tokens, manage permissions, and enable the owner to rescue funds or destroy the contract.
+
+### Approach
+The AggregationRouterV3 contract is designed to perform token swaps using an aggregation executor, handle gas discounts through CHI token burning, and allow administrative functions for fund rescue and contract destruction. The key steps involved are:
+
+1. **Swap Execution**: The `swap` function handles transferring the source token to the receiver, executing the swap via an aggregation executor, and ensuring the received amount meets the minimum return requirement.
+2. **Gas Discounts**: The `discountedSwap` function measures gas usage, calculates the CHI tokens to burn based on gas spent, and burns them from the appropriate address (user or transaction origin).
+3. **Fund Management**: The owner can rescue any ERC20 tokens or ETH from the contract and destroy the contract, sending remaining ETH to the owner.
+
+### Solution Code
+```solidity
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.6.12;
+pragma experimental ABIEncoderV2;
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    address private constant CHI = 0x0000000000004946c0e9F43F4Dee607b0eF1fA1c;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 initialGas = gasleft();
+
+        (returnAmount, gasLeft) = swap(caller, desc, data);
+
+        uint256 gasSpent = initialGas - gasLeft;
+        (address gasAccount, address gasToken, uint256 discount) = caller.gasDiscount();
+
+        if (gasToken == CHI && discount > 0) {
+            IChi chi = IChi(gasToken);
+            uint256 chiAmount = (gasSpent + 14154) / 41947 * discount;
+            if (chiAmount > 0) {
+                if (desc.flags & _BURN_FROM_MSG_SENDER != 0) {
+                    chi.freeFromUpTo(msg.sender, chiAmount);
+                } else if (desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+                    chi.freeFromUpTo(tx.origin, chiAmount);
+                } else {
+                    chi.free(chiAmount);
+                }
+                chiSpent = chiAmount;
+            }
+        }
+
+        return (returnAmount, gasLeft, chiSpent);
+    }
+
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        require(desc.minReturnAmount > 0, "Min return must be > 0");
+        require(desc.dstReceiver != address(0), "Invalid dstReceiver");
+
+        IERC20 srcToken = desc.srcToken;
+        IERC20 dstToken = desc.dstToken;
+
+        if (srcToken.isETH()) {
+            if (desc.flags & _REQUIRES_EXTRA_ETH != 0) {
+                require(msg.value >= desc.amount, "Insufficient ETH");
+            } else {
+                require(msg.value == desc.amount, "ETH amount mismatch");
+            }
+        } else {
+            require(msg.value == 0, "ETH not required");
+        }
+
+        _permit(srcToken, desc.amount, desc.permit);
+
+        if (srcToken.isETH()) {
+            (bool success, ) = desc.srcReceiver.call{value: desc.amount}("");
+            require(success, "ETH transfer failed");
+            uint256 remainingEth = msg.value - desc.amount;
+            caller.callBytes{value: remainingEth}(data);
+        } else {
+            if (desc.flags & _SHOULD_CLAIM != 0) {
+                srcToken.safeTransferFrom(msg.sender, desc.srcReceiver, desc.amount);
+            } else {
+                srcToken.safeTransfer(desc.srcReceiver, desc.amount);
+            }
+            caller.callBytes{value: 0}(data);
+        }
+
+        returnAmount = dstToken.uniBalanceOf(address(this));
+        require(
+            returnAmount >= desc.minReturnAmount || (desc.flags & _PARTIAL_FILL) != 0,
+            "Return amount not enough"
+        );
+
+        address dstReceiver = desc.dstReceiver;
+        dstToken.uniTransfer(dstReceiver, returnAmount);
+
+        emit Swapped(
+            msg.sender,
+            srcToken,
+            dstToken,
+            dstReceiver,
+            desc.amount,
+            returnAmount
+        );
+
+        gasLeft = gasleft();
+    }
+
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        token.uniTransfer(msg.sender, amount);
+    }
+
+    function destroy() external onlyOwner {
+        selfdestruct(payable(owner()));
+    }
+}
+```
+
+### Explanation
+1. **Swap Function**:
+   - Validates input parameters, ensuring the minimum return amount is positive and the destination receiver is valid.
+   - Checks ETH value based on flags, either requiring exact amount or allowing extra.
+   - Uses permit for token approval if provided.
+   - Transfers source tokens to the receiver, either via direct transfer or using `transferFrom` if required.
+   - Executes the swap via the aggregation executor, passing any remaining ETH.
+   - Ensures the received amount meets the minimum requirement and transfers the destination tokens to the receiver.
+
+2. **DiscountedSwap Function**:
+   - Measures gas usage during the swap.
+   - Retrieves gas discount parameters from the executor.
+   - Burns CHI tokens based on gas spent and flags, allowing gas cost reduction.
+
+3. **Rescue and Destroy Functions**:
+   - Allows the owner to rescue any ERC20 tokens or ETH stuck in the contract.
+   - Destroys the contract, sending remaining ETH to the owner.
+
+This approach ensures efficient token swaps, gas optimization through CHI burning, and secure fund management.

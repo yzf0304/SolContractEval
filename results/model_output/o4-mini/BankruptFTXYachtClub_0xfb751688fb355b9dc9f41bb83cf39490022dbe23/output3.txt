@@ -1,0 +1,121 @@
+pragma solidity ^0.8.7;
+
+contract BankruptFTXYachtClub is ERC721A, Ownable {
+    using Strings for uint256;
+
+    string private uriPrefix;
+    string private uriSuffix = ".json";
+    string public hiddenURL;
+
+    uint256 public cost = 0.0025 ether;
+
+    uint16 public maxSupply = 6969;
+    uint8 public maxMintAmountPerTx = 21;
+    uint8 public maxFreeMintAmountPerWallet = 1;
+
+    bool public paused = true;
+    bool public reveal = false;
+
+    // Tracks how many free mints each address has used
+    mapping(address => uint8) public NFTPerPublicAddress;
+
+    constructor() ERC721A("Bankrupt FTX Yacht Club", "BFTX") {}
+
+    function mint(uint8 _mintAmount) external payable {
+        require(!paused, "Contract is paused");
+        require(_mintAmount > 0, "Must mint at least 1");
+        require(_mintAmount <= maxMintAmountPerTx, "Exceeds max per transaction");
+        require(totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+
+        // Determine how many free mints the sender can still use
+        uint8 usedFree = NFTPerPublicAddress[msg.sender];
+        uint8 freeLeft = 0;
+        if (usedFree < maxFreeMintAmountPerWallet) {
+            freeLeft = maxFreeMintAmountPerWallet - usedFree;
+        }
+        // The number of free mints in this transaction
+        uint8 freeToUse = _mintAmount;
+        if (freeToUse > freeLeft) {
+            freeToUse = freeLeft;
+        }
+        // Calculate required payment
+        uint256 payableAmount = (_mintAmount - freeToUse) * cost;
+        require(msg.value >= payableAmount, "Insufficient funds");
+
+        // Update free-mint usage
+        if (freeToUse > 0) {
+            NFTPerPublicAddress[msg.sender] = usedFree + freeToUse;
+        }
+
+        _safeMint(msg.sender, _mintAmount);
+    }
+
+    function Reserve(uint16 _mintAmount, address _receiver) external onlyOwner {
+        require(_mintAmount > 0, "Must mint at least 1");
+        require(totalSupply() + _mintAmount <= maxSupply, "Exceeds max supply");
+        _safeMint(_receiver, _mintAmount);
+    }
+
+    function Airdrop(uint8 _amountPerAddress, address[] calldata addresses) external onlyOwner {
+        uint256 total = uint256(_amountPerAddress) * addresses.length;
+        require(total > 0, "Nothing to airdrop");
+        require(totalSupply() + total <= maxSupply, "Exceeds max supply");
+        for (uint256 i = 0; i < addresses.length; i++) {
+            _safeMint(addresses[i], _amountPerAddress);
+        }
+    }
+
+    function setMaxSupply(uint16 _maxSupply) external onlyOwner {
+        require(_maxSupply >= totalSupply(), "New max below totalSupply");
+        maxSupply = _maxSupply;
+    }
+
+    function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
+        require(_exists(_tokenId), "URI query for nonexistent token");
+        if (!reveal) {
+            return hiddenURL;
+        }
+        return string(abi.encodePacked(uriPrefix, _tokenId.toString(), uriSuffix));
+    }
+
+    function setFreeMaxLimitPerAddress(uint8 _limit) external onlyOwner {
+        maxFreeMintAmountPerWallet = _limit;
+    }
+
+    function setUriPrefix(string memory _uriPrefix) external onlyOwner {
+        uriPrefix = _uriPrefix;
+    }
+
+    function setHiddenUri(string memory _uriPrefix) external onlyOwner {
+        hiddenURL = _uriPrefix;
+    }
+
+    function setPaused() external onlyOwner {
+        paused = !paused;
+    }
+
+    function setCost(uint256 _cost) external onlyOwner {
+        cost = _cost;
+    }
+
+    function setRevealed() external onlyOwner {
+        reveal = !reveal;
+    }
+
+    function setMaxMintAmountPerTx(uint8 _maxtx) external onlyOwner {
+        maxMintAmountPerTx = _maxtx;
+    }
+
+    function withdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No funds");
+        (bool success, ) = payable(owner()).call{value: balance}("");
+        require(success, "Withdraw failed");
+    }
+
+    function _baseURI() internal view virtual override returns (string memory) {
+        return uriPrefix;
+    }
+
+    receive() external payable {}
+}

@@ -1,0 +1,160 @@
+Below is the completed implementation of the `UniqlyPresale4` contract based on the provided context and description. 
+
+```solidity
+// SPDX-License-Identifier: Unlicense
+pragma solidity ^0.8.2;
+
+contract UniqlyPresale4 {
+    uint256 public immutable presaleLimit;
+    uint256 public immutable minPerUser;
+    uint256 public immutable maxPerUser;
+    uint256 public immutable presaleEnd;
+    uint256 constant failSafeTime = 2 weeks;
+    address public owner;
+    address public newOwner;
+
+    bool public presaleEnded;
+    bool public presaleFailed;
+    bool public presaleStarted;
+
+    mapping(address => uint256) private balances;
+
+    constructor(
+        uint256 _presaleLimit, 
+        uint256 _minPerUser, 
+        uint256 _maxPerUser, 
+        uint256 _presaleEnd, 
+        address _owner
+    ) {
+        require(_owner != address(0), "Owner cannot be zero address");
+        require(_presaleEnd > block.timestamp, "Presale end must be in future");
+        require(_minPerUser <= _maxPerUser, "Min pay-in must be <= max pay-in");
+
+        presaleLimit = _presaleLimit;
+        minPerUser = _minPerUser;
+        maxPerUser = _maxPerUser;
+        presaleEnd = _presaleEnd;
+        owner = _owner;
+    }
+
+    receive() external payable {
+        require(presaleStarted, "Presale not started");
+        require(!presaleEnded, "Presale ended");
+        require(block.timestamp < presaleEnd, "Presale time's up");
+
+        uint256 newBalance = msg.value + balances[msg.sender];
+        require(newBalance >= minPerUser, "Below minimum per user");
+        require(newBalance <= maxPerUser, "Exceeds maximum per user");
+
+        balances[msg.sender] = newBalance;
+
+        if (collected() >= presaleLimit) {
+            presaleEnded = true;
+        }
+    }
+
+    function start() external {
+        require(msg.sender == owner, "Only owner can start presale");
+        require(!presaleStarted, "Presale already started");
+
+        presaleStarted = true;
+    }
+
+    function balanceOf(address user) external view returns (uint256) {
+        return balances[user];
+    }
+
+    function balanceOf() external view returns (uint256) {
+        return balances[msg.sender];
+    }
+
+    function collected() public view returns (uint256) {
+        return address(this).balance;
+    }
+
+    function withdraw() external returns (bool) {
+        // If presale hasn't ended and fail-safe time has passed, mark as failed
+        if (!presaleEnded && block.timestamp >= presaleEnd + failSafeTime) {
+            presaleFailed = true;
+        }
+
+        // Presale ongoing
+        if (!presaleEnded && !presaleFailed) {
+            return false;
+        }
+
+        // Presale succeeded (Ended and not failed)
+        if (presaleEnded && !presaleFailed) {
+            require(msg.sender == owner, "Only owner can withdraw");
+            uint256 contractBalance = address(this).balance;
+
+            if (send(owner, contractBalance)) {
+                return true;
+            }
+
+            return false;
+        }
+
+        // Presale failed
+        if (presaleFailed) {
+            uint256 userBalance = balances[msg.sender];
+            require(userBalance > 0, "No funds to withdraw");
+
+            balances[msg.sender] = 0;
+
+            if (send(msg.sender, userBalance)) {
+                return true;
+            }
+
+            balances[msg.sender] = userBalance; // Restore balance on failure
+            return false;
+        }
+
+        return false; // Default return
+    }
+
+    function send(address user, uint256 amount) private returns (bool) {
+        (bool success, ) = user.call{value: amount}("");
+        return success;
+    }
+
+    function withdrawAnyERC20(IERC20 token) external {
+        require(msg.sender == owner, "Only owner can withdraw ERC20 tokens");
+
+        uint256 tokenBalance = token.balanceOf(address(this));
+        token.transfer(owner, tokenBalance);
+    }
+
+    function giveOwnership(address _newOwner) external {
+        require(msg.sender == owner, "Only current owner can give ownership");
+        require(_newOwner != address(0), "New owner cannot be zero address");
+
+        newOwner = _newOwner;
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == newOwner, "Only new owner can accept ownership");
+        owner = newOwner;
+        newOwner = address(0);
+    }
+}
+```
+
+### Explanation:
+
+1. **Presale Start (`start`)**: The `owner` can start the presale. This prevents unintended deposits before the presale begins.
+
+2. **ETH Handling (`receive`)**: Handles contributions, enforces limits per user, and automatically ends presale on reaching the target.
+
+3. **Balance Tracking (`balanceOf`)**: Allows users to check their contributions.
+
+4. **Withdraw Logic (`withdraw`)**:
+   - Handles different presale states (ongoing, succeeded, or failed).
+   - Uses the `send` function for withdrawal to allow reentrancy-safe ETH transfers.
+
+5. **ERC20 Recovery (`withdrawAnyERC20`)**: Allows the owner to recover accidentally sent ERC20 tokens.
+
+6. **Ownership Management (`giveOwnership`, `acceptOwnership`)**:
+   - Uses a two-step process to ensure ownership transfer is deliberate.
+
+The contract strictly adheres to the given requirements and deployment constraints.

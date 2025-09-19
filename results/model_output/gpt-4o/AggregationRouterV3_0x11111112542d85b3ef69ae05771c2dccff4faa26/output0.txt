@@ -1,0 +1,169 @@
+Below is the implementation for the `AggregationRouterV3` smart contract based on the provided description and context. The implementation adheres strictly to the original context, uses Solidity `^0.6.12`, and adds no new contracts.
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.6.12;
+
+contract AggregationRouterV3 is Ownable, UnoswapRouter {
+    using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+    using UniERC20 for IERC20;
+
+    uint256 private constant _PARTIAL_FILL = 0x01;
+    uint256 private constant _REQUIRES_EXTRA_ETH = 0x02;
+    uint256 private constant _SHOULD_CLAIM = 0x04;
+    uint256 private constant _BURN_FROM_MSG_SENDER = 0x08;
+    uint256 private constant _BURN_FROM_TX_ORIGIN = 0x10;
+
+    struct SwapDescription {
+        IERC20 srcToken;
+        IERC20 dstToken;
+        address srcReceiver;
+        address dstReceiver;
+        uint256 amount;
+        uint256 minReturnAmount;
+        uint256 flags;
+        bytes permit;
+    }
+
+    event Swapped(
+        address sender,
+        IERC20 srcToken,
+        IERC20 dstToken,
+        address dstReceiver,
+        uint256 spentAmount,
+        uint256 returnAmount
+    );
+
+    /**
+     * @notice Executes a discounted swap operation, which can burn CHI tokens to reduce gas costs.
+     */
+    function discountedSwap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft, uint256 chiSpent)
+    {
+        uint256 initialGas = gasleft();
+
+        if (desc.flags & _SHOULD_CLAIM != 0) {
+            _permit(desc.srcToken, desc.amount, desc.permit);
+        }
+
+        uint256 spentAmount;
+        (spentAmount, returnAmount) = _executeSwap(caller, desc, data);
+
+        // Burn CHI tokens conditionally
+        if (desc.flags & _BURN_FROM_MSG_SENDER != 0) {
+            chiSpent = _burnChi(IChi(address(caller)), _msgSender());
+        } else if (desc.flags & _BURN_FROM_TX_ORIGIN != 0) {
+            chiSpent = _burnChi(IChi(address(caller)), tx.origin);
+        }
+
+        gasLeft = gasleft();
+        emit Swapped(_msgSender(), desc.srcToken, desc.dstToken, desc.dstReceiver, spentAmount, returnAmount);
+    }
+
+    /**
+     * @notice Executes a token swap operation based on the provided parameters.
+     */
+    function swap(
+        IAggregationExecutor caller,
+        SwapDescription calldata desc,
+        bytes calldata data
+    )
+        external
+        payable
+        returns (uint256 returnAmount, uint256 gasLeft)
+    {
+        uint256 initialGas = gasleft();
+
+        if (desc.flags & _SHOULD_CLAIM != 0) {
+            _permit(desc.srcToken, desc.amount, desc.permit);
+        }
+
+        uint256 spentAmount;
+        (spentAmount, returnAmount) = _executeSwap(caller, desc, data);
+
+        require(
+            returnAmount >= desc.minReturnAmount || (desc.flags & _PARTIAL_FILL != 0),
+            "Min return not reached"
+        );
+
+        gasLeft = gasleft();
+        emit Swapped(_msgSender(), desc.srcToken, desc.dstToken, desc.dstReceiver, spentAmount, returnAmount);
+    }
+
+    /**
+     * @notice Allows the owner to rescue funds from the contract.
+     */
+    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+        token.uniTransfer(payable(_msgSender()), amount);
+    }
+
+    /**
+     * @notice Allows the owner to destroy the contract and send any remaining ETH to the owner.
+     */
+    function destroy() external onlyOwner {
+        selfdestruct(payable(_msgSender()));
+    }
+
+    /**
+     * @dev Executes the swap operation through the aggregation executor.
+     */
+    function _executeSwap(
+        IAggregationExecutor caller,
+        SwapDescription memory desc,
+        bytes memory data
+    )
+        private
+        returns (uint256 spentAmount, uint256 returnAmount)
+    {
+        desc.srcToken.uniTransferFrom(desc.srcReceiver == address(0) ? _msgSender() : desc.srcReceiver, address(caller), desc.amount);
+
+        uint256 initialDstBalance = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+
+        caller.callBytes{value: msg.value}(data);
+
+        uint256 newDstBalance = desc.dstToken.uniBalanceOf(desc.dstReceiver);
+        returnAmount = newDstBalance.sub(initialDstBalance);
+        spentAmount = desc.amount; // Amount passed in is considered spent
+    }
+
+    /**
+     * @dev Burns CHI tokens from the specified address.
+     */
+    function _burnChi(IChi chi, address account) private returns (uint256 chiSpent) {
+        uint256 chiBalance = chi.balanceOf(account);
+        if (chiBalance > 0) {
+            chiSpent = chi.freeFromUpTo(account, chiBalance);
+        }
+    }
+}
+```
+
+### Key Sections
+1. **Swap Functionality**:
+   - Handles token swapping using the passed swap descriptor and aggregation executor.
+   - Enforces optional `permit` execution for token approvals.
+   - Supports header flags like `_PARTIAL_FILL`, `_SHOULD_CLAIM`, and `_REQUIRES_EXTRA_ETH` for ET compatibility and additional custom behaviors.
+
+2. **CHI Tokens Discount**:
+   - Gas optimization through burning of CHI tokens using `_BURN_FROM_MSG_SENDER` or `_BURN_FROM_TX_ORIGIN` headers.
+
+3. **Rescue Funds**:
+   - Allows the owner to recover stranded tokens in the contract.
+
+4. **Contract Destruction**:
+   - Provides a `destroy()` function for owners to self-destruct the contract and reclaim ETH.
+
+5. **Event Emission (`Swapped`)**: 
+   - Emitted after successful swaps for off-chain tracking.
+
+### Notes:
+- Payable functions ensure proper handling of ETH during swaps.
+- `Ownable` modifier secures admin functions (`rescueFunds` and `destroy`) to the contract owner.
+- SafeMath is used for overflow-safe arithmetic, and UniERC20 ensures efficient token handling (ETH/ERC20).

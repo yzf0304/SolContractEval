@@ -1,0 +1,364 @@
+```solidity
+pragma solidity 0.5.17;
+
+/**
+ * @dev OpenZeppelin's SafeMath library for uint256 arithmetic with overflow checks.
+ */
+library SafeMath {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "SafeMath: addition overflow");
+        return c;
+    }
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "SafeMath: subtraction underflow");
+        return a - b;
+    }
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) { return 0; }
+        uint256 c = a * b;
+        require(c / a == b, "SafeMath: multiplication overflow");
+        return c;
+    }
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "SafeMath: division by zero");
+        return a / b;
+    }
+}
+
+/**
+ * @title PSP Token Contract
+ * @notice EIP-20 token with minting, delegation, and voting (like Compound's COMP).
+ */
+contract PSP {
+    using SafeMath for uint256;
+
+    string  public constant name     = "ParaSwap";
+    string  public constant symbol   = "PSP";
+    uint8   public constant decimals = 18;
+
+    uint256 public totalSupply = 2_000_000_000e18;
+    address public minter;
+    uint256 public mintingAllowedAfter;
+    uint32  public constant minimumTimeBetweenMints = 365 days;
+    uint8   public constant mintCap = 2;
+
+    mapping(address => mapping(address => uint96)) internal allowances;
+    mapping(address => uint96)                 internal balances;
+
+    mapping(address => address) public delegates;
+    struct Checkpoint { uint32 fromBlock; uint96 votes; }
+    mapping(address => mapping(uint32 => Checkpoint)) public checkpoints;
+    mapping(address => uint32)                     public numCheckpoints;
+
+    bytes32 public constant DOMAIN_TYPEHASH     = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
+    bytes32 public constant DELEGATION_TYPEHASH = keccak256("Delegation(address delegatee,uint256 nonce,uint256 expiry)");
+    bytes32 public constant PERMIT_TYPEHASH     = keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+
+    mapping(address => uint) public nonces;
+
+    event MinterChanged(address indexed oldMinter, address indexed newMinter);
+    event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
+    event DelegateVotesChanged(address indexed delegate, uint previousBalance, uint newBalance);
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+
+    constructor(address account, address minter_, uint256 mintingAllowedAfter_) public {
+        require(mintingAllowedAfter_ >= block.timestamp, "PSP::constructor: minting can only begin after deployment");
+        balances[account] = uint96(totalSupply);
+        emit Transfer(address(0), account, totalSupply);
+        minter = minter_;
+        emit MinterChanged(address(0), minter_);
+        mintingAllowedAfter = mintingAllowedAfter_;
+    }
+
+    /**
+     * @notice Change the minter address (only current minter can call).
+     */
+    function setMinter(address minter_) external {
+        require(msg.sender == minter, "PSP::setMinter: only current minter");
+        emit MinterChanged(minter, minter_);
+        minter = minter_;
+    }
+
+    /**
+     * @notice Mint new tokens, respecting cap and cooldown.
+     */
+    function mint(address dst, uint256 rawAmount) external {
+        require(msg.sender == minter, "PSP::mint: only minter");
+        require(block.timestamp >= mintingAllowedAfter, "PSP::mint: minting not allowed yet");
+        require(dst != address(0), "PSP::mint: cannot mint to zero address");
+
+        // record next allowed mint time
+        mintingAllowedAfter = block.timestamp.add(minimumTimeBetweenMints);
+
+        // cap rawAmount to mintCap% of totalSupply
+        uint256 mintCapAmount = totalSupply.mul(mintCap).div(100);
+        require(rawAmount <= mintCapAmount, "PSP::mint: exceeded mint cap");
+
+        // increase totalSupply and balance
+        totalSupply = totalSupply.add(rawAmount);
+        uint96 amount = safe96(rawAmount, "PSP::mint: amount exceeds 96 bits");
+        balances[dst] = add96(balances[dst], amount, "PSP::mint: balance overflow");
+
+        emit Transfer(address(0), dst, rawAmount);
+
+        // move delegated votes
+        _moveDelegates(address(0), delegates[dst], amount);
+    }
+
+    /**
+     * @notice Get allowance from account to spender.
+     */
+    function allowance(address account, address spender) external view returns (uint256) {
+        return allowances[account][spender];
+    }
+
+    /**
+     * @notice Approve spender to spend rawAmount.
+     */
+    function approve(address spender, uint256 rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP::approve: amount exceeds 96 bits");
+        allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, rawAmount);
+        return true;
+    }
+
+    /**
+     * @notice Permit (EIP-2612) for gasless approvals.
+     */
+    function permit(address owner, address spender, uint256 rawAmount, uint256 deadline,
+                    uint8 v, bytes32 r, bytes32 s) external {
+        require(now <= deadline, "PSP::permit: signature expired");
+        bytes32 domainSeparator = keccak256(
+            abi.encode(DOMAIN_TYPEHASH,
+                       keccak256(bytes(name)),
+                       getChainId(),
+                       address(this))
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(PERMIT_TYPEHASH,
+                       owner,
+                       spender,
+                       rawAmount,
+                       nonces[owner],
+                       deadline)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", domainSeparator, structHash)
+        );
+        address recovered = ecrecover(digest, v, r, s);
+        require(recovered == owner && recovered != address(0), "PSP::permit: invalid signature");
+        nonces[owner] = nonces[owner].add(1);
+
+        uint96 amount = safe96(rawAmount, "PSP::permit: amount exceeds 96 bits");
+        allowances[owner][spender] = amount;
+        emit Approval(owner, spender, rawAmount);
+    }
+
+    /**
+     * @notice Get balance of account.
+     */
+    function balanceOf(address account) external view returns (uint256) {
+        return balances[account];
+    }
+
+    /**
+     * @notice Transfer tokens to dst.
+     */
+    function transfer(address dst, uint256 rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP::transfer: amount exceeds 96 bits");
+        _transferTokens(msg.sender, dst, amount);
+        return true;
+    }
+
+    /**
+     * @notice Transfer tokens from src to dst.
+     */
+    function transferFrom(address src, address dst, uint256 rawAmount) external returns (bool) {
+        uint96 amount = safe96(rawAmount, "PSP::transferFrom: amount exceeds 96 bits");
+        uint96 currentAllowance = allowances[src][msg.sender];
+        if (currentAllowance != uint96(-1)) {
+            uint96 newAllowance = sub96(currentAllowance, amount, "PSP::transferFrom: exceeds allowance");
+            allowances[src][msg.sender] = newAllowance;
+            emit Approval(src, msg.sender, newAllowance);
+        }
+        _transferTokens(src, dst, amount);
+        return true;
+    }
+
+    /**
+     * @notice Delegate votes to delegatee.
+     */
+    function delegate(address delegatee) public {
+        _delegate(msg.sender, delegatee);
+    }
+
+    /**
+     * @notice Delegate by signature (EIP-712).
+     */
+    function delegateBySig(address delegatee, uint256 nonce, uint256 expiry,
+                           uint8 v, bytes32 r, bytes32 s) public {
+        require(now <= expiry, "PSP::delegateBySig: signature expired");
+
+        bytes32 domainSeparator = keccak256(
+            abi.encode(DOMAIN_TYPEHASH,
+                       keccak256(bytes(name)),
+                       getChainId(),
+                       address(this))
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(DELEGATION_TYPEHASH,
+                       delegatee,
+                       nonce,
+                       expiry)
+        );
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", domainSeparator, structHash)
+        );
+        address signatory = ecrecover(digest, v, r, s);
+        require(signatory != address(0), "PSP::delegateBySig: invalid signature");
+        require(nonce == nonces[signatory], "PSP::delegateBySig: invalid nonce");
+        nonces[signatory] = nonces[signatory].add(1);
+        _delegate(signatory, delegatee);
+    }
+
+    /**
+     * @notice Get current votes balance.
+     */
+    function getCurrentVotes(address account) external view returns (uint96) {
+        uint32 nCheckpoints = numCheckpoints[account];
+        return nCheckpoints > 0
+            ? checkpoints[account][nCheckpoints - 1].votes
+            : 0;
+    }
+
+    /**
+     * @notice Get prior votes as of blockNumber.
+     */
+    function getPriorVotes(address account, uint256 blockNumber) public view returns (uint96) {
+        require(blockNumber < block.number, "PSP::getPriorVotes: not yet determined");
+
+        uint32 nCheckpoints = numCheckpoints[account];
+        if (nCheckpoints == 0) { return 0; }
+
+        // most recent
+        if (checkpoints[account][nCheckpoints - 1].fromBlock <= blockNumber) {
+            return checkpoints[account][nCheckpoints - 1].votes;
+        }
+        // before first
+        if (checkpoints[account][0].fromBlock > blockNumber) {
+            return 0;
+        }
+
+        // binary search
+        uint32 lower = 0;
+        uint32 upper = nCheckpoints - 1;
+        while (upper > lower) {
+            uint32 center = safe32((upper + lower + 1) / 2, "PSP::getPriorVotes: overflow");
+            Checkpoint memory cp = checkpoints[account][center];
+            if (cp.fromBlock == blockNumber) {
+                return cp.votes;
+            } else if (cp.fromBlock < blockNumber) {
+                lower = center;
+            } else {
+                upper = center - 1;
+            }
+        }
+        return checkpoints[account][lower].votes;
+    }
+
+    /**
+     * @dev Internal: delegate from delegator to delegatee.
+     */
+    function _delegate(address delegator, address delegatee) internal {
+        address current = delegates[delegator];
+        uint96 delegatorBalance = balances[delegator];
+        delegates[delegator] = delegatee;
+        emit DelegateChanged(delegator, current, delegatee);
+        _moveDelegates(current, delegatee, delegatorBalance);
+    }
+
+    /**
+     * @dev Internal: transfer tokens and move delegates.
+     */
+    function _transferTokens(address src, address dst, uint96 amount) internal {
+        require(src != address(0), "PSP::_transferTokens: src zero");
+        require(dst != address(0), "PSP::_transferTokens: dst zero");
+
+        balances[src] = sub96(balances[src], amount, "PSP::_transferTokens: exceeds balance");
+        balances[dst] = add96(balances[dst], amount, "PSP::_transferTokens: balance overflow");
+        emit Transfer(src, dst, uint256(amount));
+
+        _moveDelegates(delegates[src], delegates[dst], amount);
+    }
+
+    /**
+     * @dev Internal: move delegated vote counts.
+     */
+    function _moveDelegates(address srcRep, address dstRep, uint96 amount) internal {
+        if (srcRep != dstRep && amount > 0) {
+            if (srcRep != address(0)) {
+                uint32 srcN = numCheckpoints[srcRep];
+                uint96 srcOld = srcN > 0 ? checkpoints[srcRep][srcN - 1].votes : 0;
+                uint96 srcNew = sub96(srcOld, amount, "PSP::_moveDelegates: vote underflow");
+                _writeCheckpoint(srcRep, srcN, srcOld, srcNew);
+            }
+            if (dstRep != address(0)) {
+                uint32 dstN = numCheckpoints[dstRep];
+                uint96 dstOld = dstN > 0 ? checkpoints[dstRep][dstN - 1].votes : 0;
+                uint96 dstNew = add96(dstOld, amount, "PSP::_moveDelegates: vote overflow");
+                _writeCheckpoint(dstRep, dstN, dstOld, dstNew);
+            }
+        }
+    }
+
+    /**
+     * @dev Internal: write a delegate checkpoint.
+     */
+    function _writeCheckpoint(address delegatee, uint32 nCheckpoints,
+                              uint96 oldVotes, uint96 newVotes) internal {
+        uint32 blockNumber = safe32(block.number, "PSP::_writeCheckpoint: block exceeds 32 bits");
+
+        if (nCheckpoints > 0 && checkpoints[delegatee][nCheckpoints - 1].fromBlock == blockNumber) {
+            checkpoints[delegatee][nCheckpoints - 1].votes = newVotes;
+        } else {
+            checkpoints[delegatee][nCheckpoints] = Checkpoint(blockNumber, newVotes);
+            numCheckpoints[delegatee] = nCheckpoints + 1;
+        }
+        emit DelegateVotesChanged(delegatee, uint256(oldVotes), uint256(newVotes));
+    }
+
+    /**
+     * @dev Safe casts and arithmetic for small ints.
+     */
+    function safe32(uint n, string memory errorMessage) internal pure returns (uint32) {
+        require(n < 2**32, errorMessage);
+        return uint32(n);
+    }
+    function safe96(uint n, string memory errorMessage) internal pure returns (uint96) {
+        require(n < 2**96, errorMessage);
+        return uint96(n);
+    }
+    function add96(uint96 a, uint96 b, string memory errorMessage) internal pure returns (uint96) {
+        uint96 c = a + b;
+        require(c >= a, errorMessage);
+        return c;
+    }
+    function sub96(uint96 a, uint96 b, string memory errorMessage) internal pure returns (uint96) {
+        require(b <= a, errorMessage);
+        return a - b;
+    }
+
+    /**
+     * @dev Returns the current chain id.
+     */
+    function getChainId() internal pure returns (uint) {
+        uint256 cid;
+        /* solhint-disable no-inline-assembly */
+        assembly { cid := chainid() }
+        /* solhint-enable no-inline-assembly */
+        return cid;
+    }
+}
+```

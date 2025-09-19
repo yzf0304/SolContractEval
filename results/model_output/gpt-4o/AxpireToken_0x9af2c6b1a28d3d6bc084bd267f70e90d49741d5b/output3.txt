@@ -1,0 +1,130 @@
+Here's the completed `AxpireToken` contract that adheres strictly to the provided context and description, based on Solidity compiler version `0.4.20`. It implements both ERC20 and ERC223 standards, incorporating the required functionality without introducing any unrelated code or dependencies:
+
+```solidity
+/**
+ * @notice The AxpireToken contract is an implementation of the ERC20 and ERC223 standards, designed to create a token with the specified initial supply, name, symbol, and decimals.
+ * @dev This contract extends the functionality of ERC20 and ERC223 by adding additional transfer methods and handling for contract recipients.
+ */
+contract AxpireToken is ERC223, ERC20 {
+    uint256 initialSupply = 350000000 * 10**8;
+    string tokenName = "aXpire Token";
+    string tokenSymbol = "AXP";
+    uint8 decimalUnits = 8;
+
+    // Constructor
+    function AxpireToken() public
+        ERC20(initialSupply, tokenName, decimalUnits, tokenSymbol)
+    {
+        owner = 0x2e1977127F682723C778bBcac576A4aF2c0e790d;
+        // Assigning total number of tokens
+        balances[owner] = initialSupply;
+        totalSupply = initialSupply;
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens to a recipient address, including additional data.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transfer(address to, uint256 value, bytes data) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, false, "");
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens to a recipient address, including additional data and a custom fallback function.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @param customFallback The custom fallback function to use if the recipient is a contract.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transfer(address to, uint256 value, bytes data, string customFallback) public returns (bool success) {
+        return transferInternal(msg.sender, to, value, data, true, customFallback);
+    }
+
+    /**
+     * @notice Transfers a specified amount of tokens from one address to another, using the allowance mechanism.
+     * @param _from The address from which the tokens will be transferred.
+     * @param _to The address to which the tokens will be transferred.
+     * @param _value The amount of tokens to transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(allowed[_from][msg.sender] >= _value);
+        bool status = transferInternal(_from, _to, _value);
+        if (status) {
+            allowed[_from][msg.sender] = allowed[_from][msg.sender].sub(_value);
+        }
+        return status;
+    }
+
+    /**
+     * @dev Internal function to handle the transfer of tokens, including additional data.
+     * @param from The address from which the tokens will be transferred.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferInternal(address from, address to, uint256 value, bytes data) internal returns (bool success) {
+        return transferInternal(from, to, value, data, false, "");
+    }
+
+    /**
+     * @dev Internal function to handle the transfer of tokens, including additional data and a custom fallback function.
+     * @param from The address from which the tokens will be transferred.
+     * @param to The address to which the tokens will be transferred.
+     * @param value The amount of tokens to transfer.
+     * @param data Additional data to send along with the transfer.
+     * @param useCustomFallback A boolean indicating whether to use a custom fallback function.
+     * @param customFallback The custom fallback function to use if the recipient is a contract.
+     * @return success A boolean indicating whether the transfer was successful.
+     */
+    function transferInternal(
+        address from,
+        address to,
+        uint256 value,
+        bytes data,
+        bool useCustomFallback,
+        string customFallback
+    ) internal returns (bool success) {
+        require(balances[from] >= value);
+
+        balances[from] = balances[from].sub(value);
+        balances[to] = balances[to].add(value);
+
+        if (isContract(to)) {
+            if (useCustomFallback) {
+                require(to.call.value(0)(bytes4(keccak256(customFallback)), from, value, data));
+            } else {
+                ContractReceiver receiver = ContractReceiver(to);
+                receiver.tokenFallback(from, value, data);
+            }
+        }
+
+        Transfer(from, to, value, data);
+        return true;
+    }
+
+    /**
+     * @dev Checks if the given address is a contract by checking the code size.
+     * @param _addr The address to check.
+     * @return A boolean indicating whether the address is a contract.
+     */
+    function isContract(address _addr) private returns (bool) {
+        uint256 length;
+        assembly {
+            length := extcodesize(_addr)
+        }
+        return (length > 0);
+    }
+}
+```
+
+This contract:
+1. Implements both ERC20 and ERC223 transfer mechanisms.
+2. Uses `isContract` to identify recipient contracts and invoke the appropriate fallback methods.
+3. Preserves the inheritance from `ERC20` while extending with `ERC223` functionality.
+4. Adheres to the provided constraints without introducing extraneous logic or dependencies.
